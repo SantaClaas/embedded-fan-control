@@ -44,13 +44,15 @@ Slave address | function code | Register address High byte | Register address Lo
 
 Slave address | Response function code | Number of bytes | Register 1 data High byte | Register 1 data Low byte | Register N data High byte | Register N data Low byte | CRC High byte | CRC Low byte，
 
-### MODBUS command frame The host reads the temperature command frame (0x04):
+### MODBUS command frame
+
+#### The host reads the temperature command frame (0x04):
 
 | Slave address | function code | Register address High byte | Register address Low byte | Number of registers High byte | Number of registers Low byte | CRC High byte | CRC Low byte |
 | ------------- | ------------- | -------------------------- | ------------------------- | ----------------------------- | ---------------------------- | ------------- | ------------ |
 | 0x01          | 0x04          | 0x00                       | 0x01                      | 0x00                          | 0x01                         | 0x60          | 0x0a         |
 
-### The slave responds to the data frame:
+#### The slave responds to the data frame:
 
 | Slave address | function code | Number of bytes | temperature High byte | temperature Low byte | CRC High byte | CRC Low byte |
 | ------------- | ------------- | --------------- | --------------------- | -------------------- | ------------- | ------------ |
@@ -60,13 +62,13 @@ Temperature value = 0x131, converted to decimal 305, actual temperature value = 
 
 > Note: The temperature is a signed hexadecimal number, temperature value=0xFF33, converted to decimal -205, actual temperature = -20.5℃;
 
-### The host reads the humidity command frame (0x04):
+#### The host reads the humidity command frame (0x04):
 
 | Slave address | function code | Register address High byte | Register address Low byte | Number of registers High byte | Number of registers Low byte | CRC High byte | CRC Low byte |
 | ------------- | ------------- | -------------------------- | ------------------------- | ----------------------------- | ---------------------------- | ------------- | ------------ |
 | 0x01          | 0x04          | 0x00                       | 0x02                      | 0x00                          | 0x01                         | 0xC1          | 0xCA         |
 
-### The slave responds to the data frame:
+#### The slave responds to the data frame:
 
 | Slave address | function code | Number of bytes | humidity High byte | humidity Low byte | CRC High byte | CRC Low byte |
 | ------------- | ------------- | --------------- | ------------------ | ----------------- | ------------- | ------------ |
@@ -74,13 +76,13 @@ Temperature value = 0x131, converted to decimal 305, actual temperature value = 
 
 Humidity value=0x222, converted to decimal 546, actual humidity value=546 / 10 = 54.6%;
 
-### Continuously read the temperature and humidity command frame (0x04):
+#### Continuously read the temperature and humidity command frame (0x04):
 
 | Slave address | function code | Register address High byte | Register address Low byte | Number of registers High byte | Number of registers Low byte | CRC High byte | CRC Low byte |
 | ------------- | ------------- | -------------------------- | ------------------------- | ----------------------------- | ---------------------------- | ------------- | ------------ |
 | 0x01          | 0x04          | 0x00                       | 0x01                      | 0x00                          | 0x02                         | 0x20          | 0x0B         |
 
-### The slave responds to the data frame:
+#### The slave responds to the data frame:
 
 | Slave address | function code | Number of bytes | temperature High byte | temperature Low byte | humidity High byte | humidity Low byte | CRC High byte | CRC Low byte |
 | ------------- | ------------- | --------------- | --------------------- | -------------------- | ------------------ | ----------------- | ------------- | ------------ |
