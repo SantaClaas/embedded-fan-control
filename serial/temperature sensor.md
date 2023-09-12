@@ -16,7 +16,9 @@ Device address: 1-247 can be set, the default is 1
 Baud rate: default 9600 (users can set by themselves), 8 data, 1 stop, no parity
 Size: 60 _ 30 _ 18
 
-## MODBUS protocol Function code used by the product:
+## MODBUS protocol
+
+### Function code used by the product:
 
 |       |                                  |
 | ----- | -------------------------------- |
@@ -25,30 +27,32 @@ Size: 60 _ 30 _ 18
 | 0x06: | Write a single holding register  |
 | 0x10: | write multiple holding registers |
 
-| Register type                                 | Register address | Data content |
-| --------------------------------------------- | ---------------- | ------------ |
-| Number of bytes Input register                |                  | 0x0001       |
-| Temperature value                             | 2                | 0x0002       |
-| Humidity value                                | 2                |              |
-| Holding register                              |                  | 0x0101       |
-| Device address (1~247)                        | 2                | 0x0102       |
-| Baud rate 0:9600 1:14400 2:19200              | 2                | 0x0103       |
-| Temperature correction value (/10) -10.0~10.0 | 2                | 0x0104       |
-| Humidity correction value (/10) -10.0~10.0    | 2                |              |
+| Register type    | Register address | Data content                                  | Number of bytes |
+| ---------------- | ---------------- | --------------------------------------------- | --------------- |
+| Input register   | 0x0001           | Temperature value                             | 2               |
+|                  | 0x0002           | Humidity value                                | 2               |
+| Holding register | 0x0101           | Device address (1~247)                        | 2               |
+|                  | 0x0102           | Baud rate 0:9600 1:14400 2:19200              | 2               |
+|                  | 0x0103           | Temperature correction value (/10) -10.0~10.0 | 2               |
+|                  | 0x0104           | Humidity correction value (/10) -10.0~10.0    | 2               |
 
 ### Modbus communication format:
 
 #### Host sends data frame:
 
-Slave address | function code | Register address High byte | Register address Low byte | Number of registers High byte | Number of registers Low byte | CRC High byte | CRC Low byte
+|               |               |                            |                           |                               |                              |               |              |
+| ------------- | ------------- | -------------------------- | ------------------------- | ----------------------------- | ---------------------------- | ------------- | ------------ |
+| Slave address | function code | Register address High byte | Register address Low byte | Number of registers High byte | Number of registers Low byte | CRC High byte | CRC Low byte |
 
 ### The slave responds to the data frame:
 
-Slave address | Response function code | Number of bytes | Register 1 data High byte | Register 1 data Low byte | Register N data High byte | Register N data Low byte | CRC High byte | CRC Low byte，
+|               |                        |                 |                           |                          |                           |                          |               |              |
+| ------------- | ---------------------- | --------------- | ------------------------- | ------------------------ | ------------------------- | ------------------------ | ------------- | ------------ |
+| Slave address | Response function code | Number of bytes | Register 1 data High byte | Register 1 data Low byte | Register N data High byte | Register N data Low byte | CRC High byte | CRC Low byte |
 
 ### MODBUS command frame
 
-#### The host reads the temperature command frame (0x04):
+### The host reads the temperature command frame (0x04):
 
 | Slave address | function code | Register address High byte | Register address Low byte | Number of registers High byte | Number of registers Low byte | CRC High byte | CRC Low byte |
 | ------------- | ------------- | -------------------------- | ------------------------- | ----------------------------- | ---------------------------- | ------------- | ------------ |
@@ -79,7 +83,7 @@ Temperature value = 0x131, converted to decimal 305, actual temperature value = 
 
 Humidity value=0x222, converted to decimal 546, actual humidity value=546 / 10 = 54.6%;
 
-#### Continuously read the temperature and humidity command frame (0x04):
+### Continuously read the temperature and humidity command frame (0x04):
 
 | Slave address | function code | Register address High byte | Register address Low byte | Number of registers High byte | Number of registers Low byte | CRC High byte | CRC Low byte |
 | ------------- | ------------- | -------------------------- | ------------------------- | ----------------------------- | ---------------------------- | ------------- | ------------ |
@@ -114,29 +118,34 @@ Humidity value=0x222, converted to decimal 546, actual humidity value=546 / 10 =
 | 0x01          | 0x06          | 0x01                       | 0x01                      | 0x00                     | 0x08                    | 0xD4          | 0x0F         |
 
 Modify slave address: 0x08 = 8
-Slave response frame (same as sending):
-Slave address | function code | Register address High byte | Register address Low byte | Register value High byte | Register value Low byte | CRC High byte | CRC Low byte |
-| ----------- | ------------- | -------------------------- | ------------------------- | ------------------------ | ----------------------- | ------------- | ------------ |
-| 0x01 | 0x06 | 0x01 | 0x01 | 0x00 | 0x08 | 0xD4 | 0x0F |
 
-Continuously modify the holding register (0x10):
+#### Slave response frame (same as sending):
+
+| Slave address | function code | Register address High byte | Register address Low byte | Register value High byte | Register value Low byte | CRC High byte | CRC Low byte |
+| ------------- | ------------- | -------------------------- | ------------------------- | ------------------------ | ----------------------- | ------------- | ------------ |
+| 0x01          | 0x06          | 0x01                       | 0x01                      | 0x00                     | 0x08                    | 0xD4          | 0x0F         |
+
+### Continuously modify the holding register (0x10):
 
 | Slave address | function code | initial address High byte | initial address Low byte | Number of registers High byte | Number of registers Low byte | Number of bytes | Register 1 high byte | Register 1 low byte | Register 2 high byte | Register 2 low byte | CRC High byte | CRC Low byte |
 | ------------- | ------------- | ------------------------- | ------------------------ | ----------------------------- | ---------------------------- | --------------- | -------------------- | ------------------- | -------------------- | ------------------- | ------------- | ------------ |
 | 0x01          | 0x06          | 0x01                      | 0x01                     | 0x00                          | 0x02                         | 0x04            | 0x00                 | 0x20                | 0x25                 | 0x80                | 0x25          | 0x09         |
 
-Modify slave address: 0x20 = 32，Baud rate: 0x2580 = 9600
-Slave response frame:
+Modify slave address: 0x20 = 32
+Baud rate: 0x2580 = 9600
+
+#### Slave response frame:
 
 | Slave address | function code | Register address High byte | Register address Low byte | Number of registers High byte | Number of registers Low byte | CRC High byte | CRC Low byte |
 | ------------- | ------------- | -------------------------- | ------------------------- | ----------------------------- | ---------------------------- | ------------- | ------------ |
 | 0x01          | 0x06          | 0x00                       | 0x11                      | 0x00                          | 0x04                         | 0xD4          | 0x0F         |
 
-Normal version agreement
+## Normal version agreement
+
 The default baud rate is 9600 (users can set by themselves),
 8 bits of data,
 1 bit of stop,
-no parity RS485 communication，
+no parity RS485 communication
 
 Serial command
 | Description READ
