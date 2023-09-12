@@ -30,9 +30,10 @@
   });
 
   function connect() {
-    navigator.serial
-      .requestPort()
-      .then((event) => console.log("port requested"));
+    navigator.serial.requestPort().then((port) => {
+      availablePorts.set(port, port.getInfo());
+      quickUpdateHack();
+    });
   }
 
   function quickUpdateHack() {
