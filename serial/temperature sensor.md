@@ -18,10 +18,12 @@ Size: 60 _ 30 _ 18
 
 ## MODBUS protocol Function code used by the product:
 
-0x03: Read holding register
-0x04: Read input register
-0x06: Write a single holding register
-0x10: write multiple holding registers
+|       |                                  |
+| ----- | -------------------------------- |
+| 0x03: | Read holding register            |
+| 0x04: | Read input register              |
+| 0x06: | Write a single holding register  |
+| 0x10: | write multiple holding registers |
 
 | Register type                                 | Register address | Data content |
 | --------------------------------------------- | ---------------- | ------------ |
@@ -60,7 +62,8 @@ Slave address | Response function code | Number of bytes | Register 1 data High 
 
 Temperature value = 0x131, converted to decimal 305, actual temperature value = 305/10 = 30.5℃
 
-> Note: The temperature is a signed hexadecimal number, temperature value=0xFF33, converted to decimal -205, actual temperature = -20.5℃;
+> [!NOTE]
+> The temperature is a signed hexadecimal number, temperature value=0xFF33, converted to decimal -205, actual temperature = -20.5℃;
 
 #### The host reads the humidity command frame (0x04):
 
