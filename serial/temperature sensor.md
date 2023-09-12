@@ -1,4 +1,5 @@
-This is an attempt at formatting what we found as documentation for the temparature sensor
+> [!NOTE]
+> This is an attempt at formatting what we found as documentation for the temparature sensor
 
 ## Product parameters:
 
@@ -84,6 +85,9 @@ Temperature value = 0x131, converted to decimal 305, actual temperature value = 
 Humidity value=0x222, converted to decimal 546, actual humidity value=546 / 10 = 54.6%;
 
 ### Continuously read the temperature and humidity command frame (0x04):
+
+> [!NOTE]
+> I believe the original author meant continuously as in "multiple" and not continuously as in "over time"
 
 | Slave address | function code | Register address High byte | Register address Low byte | Number of registers High byte | Number of registers Low byte | CRC High byte | CRC Low byte |
 | ------------- | ------------- | -------------------------- | ------------------------- | ----------------------------- | ---------------------------- | ------------- | ------------ |
