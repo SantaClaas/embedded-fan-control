@@ -67,6 +67,67 @@
       console.log("Wrote to port");
     };
   }
+
+  function readTemperature(port: SerialPort) {
+    return async () => {
+      const writer = port.writable.getWriter();
+
+      const slaveAddress = 0x01,
+        functionCode = 0x04,
+        registerAddressHighByte = 0x00,
+        registerAddressLowByte = 0x01,
+        numberOfRegistersHighByte = 0x00,
+        numberOfRegistersLowByte = 0x01,
+        crcHighByte = 0x60,
+        crcLowByte = 0x0a;
+
+      const command = new Uint8Array([
+        slaveAddress,
+        functionCode,
+        registerAddressHighByte,
+        registerAddressLowByte,
+        numberOfRegistersHighByte,
+        numberOfRegistersLowByte,
+        crcHighByte,
+        crcLowByte,
+      ]);
+
+      await writer.write(command);
+      writer.releaseLock();
+
+      if (!port.readable) return;
+
+      const reader = port.readable.getReader();
+
+      try {
+        const { value, done } = await reader.read();
+
+        if (done) {
+          reader.releaseLock();
+          console.log("Done reading");
+          return;
+        }
+
+        if (!value) return;
+        console.log("Read value: ", value);
+
+        if (!(value instanceof Uint8Array)) return;
+
+        // Interpret the binary data
+        const view = new DataView(value.buffer);
+
+        const temperatureValue = view.getInt16(3);
+        // e.g. 305 = 30.5 ℃
+        const temperature = temperatureValue / 10;
+        console.log(`Temperature read: ${temperature}℃`);
+
+        reader.releaseLock();
+      } catch (error) {
+        console.warn("Non-fatal read error:", error);
+        reader.releaseLock();
+      }
+    };
+  }
 </script>
 
 <main>
@@ -74,12 +135,16 @@
   <ul>
     {#each availablePorts as [port, info]}
       <li>
-        <p>USB Product Id: {info.usbProductId}</p>
+        <p>Product Id: {info.usbProductId}</p>
         <p>Vendor Id: {info.usbVendorId}</p>
 
         {#if port.writable || port.readable}
           {#if port.writable}
             <button on:click={write(port)}>Write</button>
+          {/if}
+
+          {#if port.writable && port.readable}
+            <button on:click={readTemperature(port)}>Read Temperature</button>
           {/if}
           <button on:click={close(port)}>Close</button>
         {:else}
