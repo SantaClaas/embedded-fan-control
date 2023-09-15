@@ -32,11 +32,17 @@
 
   // Known working usb devices
   const portFilter = [{ usbVendorId: 6790, usbProductId: 29987 }];
-  function connect() {
-    navigator.serial.requestPort({ filters: portFilter }).then((port) => {
-      availablePorts.set(port, port.getInfo());
-      quickUpdateHack();
-    });
+  async function connect() {
+    let port;
+    try {
+      port = await navigator.serial.requestPort({ filters: portFilter });
+    } catch (error) {
+      console.warn("User cancelled port selection", error);
+      return;
+    }
+
+    availablePorts.set(port, port.getInfo());
+    quickUpdateHack();
   }
 
   function quickUpdateHack() {
