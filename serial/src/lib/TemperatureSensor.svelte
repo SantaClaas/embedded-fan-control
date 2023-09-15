@@ -88,6 +88,7 @@
   async function writeBaudRate() {
     if (isBlocked || !sensor.isValidBaudRate(baudRate)) return;
 
+    isBlocked = true;
     baudRate = (await sensor.writeBaudRate(
       port,
       sensorAddress,
@@ -96,7 +97,7 @@
     ))
       ? baudRate
       : "error writing";
-    isBlocked = true;
+    isBlocked = false;
   }
 
   async function readTemperatureCorrection() {
@@ -117,6 +118,7 @@
     if (!sensor.isValidCorrectionValue(temperatureCorrection) || isBlocked)
       return;
 
+    isBlocked = true;
     temperatureCorrection = (await sensor.writeTemperatureCorrection(
       port,
       sensorAddress,
@@ -125,6 +127,8 @@
     ))
       ? temperatureCorrection
       : "error writing";
+
+    isBlocked = false;
   }
 
   async function readHumidityCorrection() {
@@ -176,8 +180,14 @@
 </fieldset>
 
 <fieldset class="holding-registers" disabled={isBlocked}>
+  <span>
+    Note: The active device address and baud rate is read from holding register
+    to input register on power up. Therefore after wrting to the holding
+    register the input address does not change until the device is turned off
+    and on again.
+  </span>
   <legend>Holding Registers</legend>
-  <label for="device-address-register">Address</label>
+  <label for="device-address-register">Address </label>
   <input
     id="device-address-register"
     type="number"
@@ -241,5 +251,10 @@
 
   fieldset.holding-registers {
     grid-template-columns: repeat(4, auto);
+
+    & span {
+      grid-column: 1 / 5;
+      /* margin-block: 0; */
+    }
   }
 </style>
