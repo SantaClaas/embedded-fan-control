@@ -8,26 +8,31 @@
 
   let availablePorts: Map<SerialPort, Partial<SerialPortInfo>> = new Map();
 
+  function addPort(event: Event) {
+    if (!isSerialPort(event.target)) return;
+
+    availablePorts.set(event.target, event.target.getInfo());
+  }
+
+  function removePort(event: Event) {
+    if (!isSerialPort(event.target)) return;
+
+    availablePorts.delete(event.target);
+  }
+
   onMount(() => {
-    navigator.serial.addEventListener("connect", (event) => {
-      if (!isSerialPort(event.target)) return;
+    navigator.serial.addEventListener("connect", addPort);
 
-      console.log("connected", event.target, typeof event.target);
-      availablePorts.set(event.target, event.target.getInfo());
-    });
+    navigator.serial.addEventListener("disconnect", removePort);
 
-    navigator.serial.addEventListener("disconnect", (event) => {
-      if (!isSerialPort(event.target)) return;
-
-      console.log("disconnected", event.target);
-      availablePorts.delete(event.target);
-    });
-    console.log("Event listener added");
+    return () => {
+      navigator.serial.removeEventListener("connect", addPort);
+      navigator.serial.removeEventListener("disconnect", removePort);
+    };
   });
 
   navigator.serial.getPorts().then((ports) => {
     availablePorts = new Map(ports.map((port) => [port, port.getInfo()]));
-    ports.forEach((port) => console.info("Port:", port.getInfo()));
   });
 
   // Known working usb devices
