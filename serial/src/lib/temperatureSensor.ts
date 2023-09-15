@@ -544,7 +544,7 @@ export async function writeAddress(
   // Function
   view.setUint8(1, FunctionCode.WriteSingleHoldingRegister);
   // Register address
-  view.setUint16(2, HoldingRegisterAddress.HumidityCorrectionValue);
+  view.setUint16(2, HoldingRegisterAddress.DeviceAddress);
   // Register value
   view.setUint16(4, newAddress);
   // CRC
@@ -591,7 +591,7 @@ export async function writeBaudRate(
   // Function
   view.setUint8(1, FunctionCode.WriteSingleHoldingRegister);
   // Register address
-  view.setUint16(2, HoldingRegisterAddress.HumidityCorrectionValue);
+  view.setUint16(2, HoldingRegisterAddress.BaudRate);
   // Register value
   view.setUint16(4, baudRate);
   // CRC
