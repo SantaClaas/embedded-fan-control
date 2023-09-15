@@ -43,28 +43,6 @@
     // TODO remove this hack to force rerender
     availablePorts = availablePorts;
   }
-
-  function open(port: SerialPort) {
-    return async () => {
-      console.log("Opening port", port);
-      await port.open({ baudRate: 9600 });
-      quickUpdateHack();
-      console.log("Port opened", port.getInfo());
-    };
-  }
-
-  function close(port: SerialPort) {
-    return async () => {
-      await port.close();
-      quickUpdateHack();
-    };
-  }
-
-  function openPort(port: SerialPort) {
-    return async (event: SubmitEvent) => {
-      event.preventDefault();
-    };
-  }
 </script>
 
 <main>
