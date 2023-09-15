@@ -19,7 +19,11 @@
   async function closePort() {
     if (!isOpen) return;
 
-    await port.close();
+    try {
+      await port.close();
+    } catch (error) {
+      console.error("Could not close port:", error);
+    }
 
     isOpen = !!port.writable && !!port.readable;
   }
