@@ -1,9 +1,9 @@
 <script>
-  import SerialPorts from "./lib/SerialPorts.svelte";
+  import SerialPortsList from "./lib/SerialPortsList.svelte";
 </script>
 
 {#if "serial" in navigator}
-  <SerialPorts />
+  <SerialPortsList />
 {:else}
   <p>Your Browser is not supported</p>
   <p>
