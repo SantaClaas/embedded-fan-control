@@ -182,12 +182,11 @@
 <fieldset class="holding-registers" disabled={isBlocked}>
   <span>
     Note: The active device address and baud rate is read from holding register
-    to input register on power up. Therefore after wrting to the holding
-    register the input address does not change until the device is turned off
-    and on again.
+    register after device is powered on. Therefore changing these values does
+    not apply until after next power cycle.
   </span>
   <legend>Holding Registers</legend>
-  <label for="device-address-register">Address </label>
+  <label for="device-address-register">Address</label>
   <input
     id="device-address-register"
     type="number"
