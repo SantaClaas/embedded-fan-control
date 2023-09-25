@@ -1,5 +1,6 @@
 import { crc16 } from "./crc";
 import { read, write } from "./serial";
+import * as serial from "./serial";
 
 export enum FunctionCode {
   ReadHoldingRegister = 0x03,
@@ -55,159 +56,310 @@ function isWriteResponseValid(frame: Uint8Array, response: Uint8Array) {
   return true;
 }
 
-type Register = {
+type SerializeFunction<T> = (value: T) => number;
+type DeserializeFunction<T> = (view: DataView) => T;
+
+type RegisterDefinition<T> = {
   /**
    * A valid register address is a unsigned 16 bit number
    */
   address: number;
+
   /**
    * The length in bytes of the data contained in the register
    */
   length: number;
+
+  /**
+   * A deserializing function that allows customization how the value is read and allows interpretation of the binary
+   */
+  deserialize: DeserializeFunction<T>;
 };
 
-async function readRegister(
-  port: SerialPort,
-  deviceAddress: number,
-  register: Register,
-  registerType:
-    | FunctionCode.ReadInputRegister
-    | FunctionCode.ReadHoldingRegister,
-  signal: AbortSignal
-) {
-  if (
-    signal.aborted ||
-    !isValidAddress(deviceAddress) ||
-    !port.writable ||
-    !port.readable
-  )
-    return;
+type InputRegisterDefinition<T> = RegisterDefinition<T>;
 
-  const length = 8;
-  const crcOffset = length - 2;
-  const frame = new ArrayBuffer(length);
+type HoldingRegisterDefinition<T> = RegisterDefinition<T> & {
+  serialize: SerializeFunction<T>;
+};
 
-  const view = new DataView(frame);
-  // Address
-  view.setUint8(0, deviceAddress);
-  // Function
-  view.setUint8(1, registerType);
-  // Register address
-  view.setUint16(2, register.address);
-  // Number of registers
-  view.setUint16(4, 1);
-  // CRC
-  const crc = crc16(new Uint8Array(frame.slice(0, crcOffset)));
-  view.setUint16(crcOffset, crc);
+class InputRegister<T> {
+  #device: Device;
+  #length: number;
+  #address: number;
+  #deserialize: DeserializeFunction<T>;
 
-  try {
-    await write(port, frame, signal);
-  } catch (error: unknown) {
-    console.warn("Non-fatal write error:", error);
-    return;
+  constructor(
+    device: Device,
+    address: number,
+    length: number,
+    deserialize: DeserializeFunction<T>
+  ) {
+    this.#device = device;
+    this.#length = length;
+    this.#address = address;
+    this.#deserialize = deserialize;
   }
 
-  let value;
-  try {
-    value = await read(port, signal);
-  } catch (error: unknown) {
-    console.warn("Non-fatal read error:", error);
-    return;
+  async read(signal?: AbortSignal): Promise<T | undefined> {
+    if (signal?.aborted) return;
+
+    const length = 8;
+    const crcOffset = length - 2;
+    const frame = new ArrayBuffer(length);
+
+    const view = new DataView(frame);
+    // Address
+    view.setUint8(0, this.#device.address);
+    // Function
+    view.setUint8(1, FunctionCode.ReadInputRegister);
+    // Register address
+    view.setUint16(2, this.#address);
+    // Number of registers
+    view.setUint16(4, 1);
+    // CRC
+    const crc = crc16(new Uint8Array(frame.slice(0, crcOffset)));
+    view.setUint16(crcOffset, crc);
+
+    try {
+      await this.#device.write(frame, signal);
+    } catch (error: unknown) {
+      console.warn("Non-fatal write error:", error);
+      return;
+    }
+
+    let value;
+    try {
+      value = await this.#device.read(signal);
+    } catch (error: unknown) {
+      console.warn("Non-fatal read error:", error);
+      return;
+    }
+
+    if (!value) return;
+
+    const response = { view: new DataView(value.buffer), frame: value };
+    if (
+      !isReadResponseValid(
+        response,
+        this.#device.address,
+        FunctionCode.ReadInputRegister,
+        this.#length
+      )
+    )
+      return;
+
+    const deserializationView = new DataView(value.buffer, 3, this.#length);
+    return this.#deserialize(deserializationView);
   }
-
-  if (!value) return;
-
-  const response = { view: new DataView(value.buffer), frame: value };
-  if (
-    !isReadResponseValid(response, deviceAddress, registerType, register.length)
-  )
-    return;
-
-  // Length is already validated at this point
-  // Interpretation of data is left to caller
-  return new DataView(response.frame.buffer, 3, register.length);
 }
 
-export function readInputRegister(
-  port: SerialPort,
-  deviceAddress: number,
-  register: Register,
-  signal: AbortSignal
-) {
-  return readRegister(
-    port,
-    deviceAddress,
-    register,
-    FunctionCode.ReadInputRegister,
-    signal
-  );
-}
+class HoldingRegister<T> {
+  #device: Device;
+  #length: number;
+  #address: number;
+  #deserialize: DeserializeFunction<T>;
+  #serialize: SerializeFunction<T>;
 
-export function readHoldingRegister(
-  port: SerialPort,
-  deviceAddress: number,
-  register: Register,
-  signal: AbortSignal
-) {
-  return readRegister(
-    port,
-    deviceAddress,
-    register,
-    FunctionCode.ReadHoldingRegister,
-    signal
-  );
-}
-
-/**
- *
- * @param port The serial port used to write to write the holding register on the modbus device
- * @param deviceAddress the 8 bit modbus device address
- * @param register the object describing the holding register
- * @param value the value to write to the holding register. Only 16 bit signed integers are currently supported.
- * @param signal the abort signal to cancel the writing
- * @returns true if the value was written successfully, else false
- */
-export async function writeHoldingRegister(
-  port: SerialPort,
-  deviceAddress: number,
-  register: Register,
-  value: number,
-  signal: AbortSignal
-) {
-  if (signal.aborted || !isValidAddress(deviceAddress)) return false;
-
-  const length = 8;
-  const crcOffset = length - 2;
-  const frame = new Uint8Array(length);
-  const view = new DataView(frame.buffer);
-  // Address
-  view.setUint8(0, deviceAddress);
-  // Function
-  view.setUint8(1, FunctionCode.WriteSingleHoldingRegister);
-  // Register address
-  view.setUint16(2, register.address);
-  // Register value
-  view.setInt16(4, value);
-  // CRC
-  const crc = crc16(new Uint8Array(frame.slice(0, crcOffset)));
-  view.setUint16(crcOffset, crc);
-
-  try {
-    await write(port, frame, signal);
-  } catch (error: unknown) {
-    console.warn("Non-fatal write error:", error);
-    return false;
+  constructor(
+    device: Device,
+    address: number,
+    length: number,
+    deserialize: DeserializeFunction<T>,
+    serialize: SerializeFunction<T>
+  ) {
+    this.#device = device;
+    this.#length = length;
+    this.#address = address;
+    this.#deserialize = deserialize;
+    this.#serialize = serialize;
   }
 
-  let responseFrame;
-  try {
-    responseFrame = await read(port, signal);
-  } catch (error: unknown) {
-    console.warn("Non-fatal read error:", error);
-    return false;
+  async read(signal?: AbortSignal): Promise<T | undefined> {
+    if (signal?.aborted) return;
+    const length = 8;
+    const crcOffset = length - 2;
+    const frame = new ArrayBuffer(length);
+
+    const view = new DataView(frame);
+    // Address
+    view.setUint8(0, this.#device.address);
+    // Function
+    view.setUint8(1, FunctionCode.ReadHoldingRegister);
+    // Register address
+    view.setUint16(2, this.#address);
+    // Number of registers
+    view.setUint16(4, 1);
+    // CRC
+    const crc = crc16(new Uint8Array(frame.slice(0, crcOffset)));
+    view.setUint16(crcOffset, crc);
+
+    try {
+      await this.#device.write(frame, signal);
+    } catch (error: unknown) {
+      console.warn("Non-fatal write error:", error);
+      return;
+    }
+
+    let value;
+    try {
+      value = await this.#device.read(signal);
+    } catch (error: unknown) {
+      console.warn("Non-fatal read error:", error);
+      return;
+    }
+
+    if (!value) return;
+
+    const response = { view: new DataView(value.buffer), frame: value };
+    if (
+      !isReadResponseValid(
+        response,
+        this.#device.address,
+        FunctionCode.ReadHoldingRegister,
+        this.#length
+      )
+    )
+      return;
+
+    const deserializationView = new DataView(value.buffer, 3, this.#length);
+
+    return this.#deserialize(deserializationView);
   }
 
-  if (!responseFrame) return false;
+  async write(value: T, signal?: AbortSignal) {
+    if (signal?.aborted) return false;
 
-  return isWriteResponseValid(frame, responseFrame);
+    const length = 8;
+    const crcOffset = length - 2;
+    const frame = new Uint8Array(length);
+    const view = new DataView(frame.buffer);
+    // Address
+    view.setUint8(0, this.#device.address);
+    // Function
+    view.setUint8(1, FunctionCode.WriteSingleHoldingRegister);
+    // Register address
+    view.setUint16(2, this.#address);
+    // Register value
+    view.setInt16(4, this.#serialize(value));
+    // CRC
+    const crc = crc16(new Uint8Array(frame.slice(0, crcOffset)));
+    view.setUint16(crcOffset, crc);
+
+    try {
+      await this.#device.write(frame, signal);
+    } catch (error: unknown) {
+      console.warn("Non-fatal write error:", error);
+      return false;
+    }
+
+    let responseFrame;
+    try {
+      responseFrame = await this.#device.read(signal);
+    } catch (error: unknown) {
+      console.warn("Non-fatal read error:", error);
+      return false;
+    }
+
+    if (!responseFrame) return false;
+
+    return isWriteResponseValid(frame, responseFrame);
+  }
+}
+
+export abstract class Device {
+  address: number;
+  #port: SerialPort;
+  abstract inputRegisters: { readonly [name: string]: InputRegister<any> };
+  abstract holdingRegisters: {
+    readonly [name: string]: HoldingRegister<any>;
+  };
+
+  /**
+   *
+   * @param port The serial port used to write to write the holding register on the modbus device
+   * @param address the 8 bit modbus device address
+   */
+  constructor(port: SerialPort, address: number) {
+    this.address = address;
+    this.#port = port;
+  }
+
+  /**
+   *
+   * @param definition the object describing the register
+   */
+  protected createInputRegister<T>(
+    definition: InputRegisterDefinition<T>
+  ): InputRegister<T> {
+    return new InputRegister<T>(
+      this,
+      definition.address,
+      definition.length,
+      definition.deserialize
+    );
+  }
+
+  /**
+   *
+   * @param definition the object describing the register
+   */
+  protected createHoldingRegister<T>(definition: HoldingRegisterDefinition<T>) {
+    return new HoldingRegister<T>(
+      this,
+      definition.address,
+      definition.length,
+      definition.deserialize,
+      definition.serialize
+    );
+  }
+
+  async write(frame: Uint8Array | ArrayBuffer, signal?: AbortSignal) {
+    const writer = this.#port.writable.getWriter();
+    function cancel() {
+      writer.abort(signal?.reason);
+    }
+
+    signal?.addEventListener("abort", cancel, { once: true });
+
+    try {
+      await writer.write(frame);
+    } finally {
+      signal?.removeEventListener("abort", cancel);
+      writer.releaseLock();
+    }
+  }
+
+  async read(signal?: AbortSignal): Promise<Uint8Array | undefined> {
+    if (signal?.aborted) return;
+
+    const reader = this.#port.readable.getReader();
+    function cancel() {
+      reader.cancel(signal?.reason);
+    }
+
+    signal?.addEventListener("abort", cancel, { once: true });
+
+    try {
+      const { value, done } = await reader.read();
+
+      if (done) {
+        console.log("Done reading");
+        return;
+      }
+
+      if (!value) {
+        console.log("No value");
+        return;
+      }
+
+      if (!(value instanceof Uint8Array))
+        throw new Error("Expected value read to be binary");
+
+      console.log("Read value: ", value);
+      return value;
+    } finally {
+      signal?.removeEventListener("abort", cancel);
+      reader.releaseLock();
+    }
+  }
 }

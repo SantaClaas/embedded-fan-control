@@ -1,8 +1,11 @@
 <script lang="ts">
   import * as sensor from "./temperatureSensor";
+  import { TemperatureSensor } from "./temperatureSensor";
 
   export let port: SerialPort;
   export let sensorAddress: number;
+
+  const sensor2 = new TemperatureSensor(port, sensorAddress);
 
   type Result<T> = "error reading" | "error writing" | T;
   let temperature: null | Result<number> = null;
@@ -15,17 +18,17 @@
 
   // Don't allow multiple operations at the same time
   let isBlocked = false;
+  function timeout() {
+    return AbortSignal.timeout(5_000);
+  }
 
   async function readTemperature() {
     if (isBlocked) return;
 
     isBlocked = true;
-    temperature =
-      (await sensor.readTemperature(
-        port,
-        sensorAddress,
-        AbortSignal.timeout(5_000)
-      )) ?? "error reading";
+
+    const result = await sensor2.inputRegisters.temperature.read(timeout());
+    temperature = result ?? "error reading";
     isBlocked = false;
   }
 
@@ -33,13 +36,8 @@
     if (isBlocked) return;
 
     isBlocked = true;
-    humidity =
-      (await sensor.readHumidity(
-        port,
-        sensorAddress,
-        AbortSignal.timeout(5_000)
-      )) ?? "error reading";
-
+    const result = await sensor2.inputRegisters.humidity.read(timeout());
+    humidity = result ?? "error reading";
     isBlocked = false;
   }
 
@@ -47,13 +45,9 @@
     if (isBlocked) return;
 
     isBlocked = true;
-    address =
-      (await sensor.readAddress(
-        port,
-        sensorAddress,
-        AbortSignal.timeout(5_000)
-      )) ?? "error reading";
 
+    const result = await sensor2.holdingRegisters.deviceAddress.read(timeout());
+    address = result ?? "error reading";
     isBlocked = false;
   }
 
@@ -61,14 +55,11 @@
     if (!sensor.isValidAddress(address) || isBlocked) return;
 
     isBlocked = true;
-    address = (await sensor.writeAddress(
-      port,
-      sensorAddress,
+    const isSuccess = await sensor2.holdingRegisters.deviceAddress.write(
       address,
-      AbortSignal.timeout(5_000)
-    ))
-      ? address
-      : "error writing";
+      timeout()
+    );
+    address = isSuccess ? address : "error writing";
     isBlocked = false;
   }
 
@@ -76,12 +67,10 @@
     if (isBlocked) return;
 
     isBlocked = true;
-    baudRate =
-      (await sensor.readBaudRate(
-        port,
-        sensorAddress,
-        AbortSignal.timeout(5_000)
-      )) ?? "error reading";
+
+    const result = await sensor2.holdingRegisters.baudRate.read(timeout());
+    baudRate = result ?? "error reading";
+
     isBlocked = false;
   }
 
@@ -89,14 +78,11 @@
     if (isBlocked || !sensor.isValidBaudRate(baudRate)) return;
 
     isBlocked = true;
-    baudRate = (await sensor.writeBaudRate(
-      port,
-      sensorAddress,
+    const isSuccess = await sensor2.holdingRegisters.baudRate.write(
       baudRate,
-      AbortSignal.timeout(5_000)
-    ))
-      ? baudRate
-      : "error writing";
+      timeout()
+    );
+    baudRate = isSuccess ? baudRate : "error writing";
     isBlocked = false;
   }
 
@@ -104,13 +90,10 @@
     if (isBlocked) return;
 
     isBlocked = true;
-    temperatureCorrection =
-      (await sensor.readTemperatureCorrection(
-        port,
-        sensorAddress,
-        AbortSignal.timeout(5_000)
-      )) ?? "error reading";
-
+    const result = await sensor2.holdingRegisters.temperatureCorrection.read(
+      timeout()
+    );
+    temperatureCorrection = result ?? "error reading";
     isBlocked = false;
   }
 
@@ -119,15 +102,12 @@
       return;
 
     isBlocked = true;
-    temperatureCorrection = (await sensor.writeTemperatureCorrection(
-      port,
-      sensorAddress,
-      temperatureCorrection,
-      AbortSignal.timeout(5_000)
-    ))
-      ? temperatureCorrection
-      : "error writing";
-
+    const isSuccess =
+      await sensor2.holdingRegisters.temperatureCorrection.write(
+        temperatureCorrection,
+        timeout()
+      );
+    temperatureCorrection = isSuccess ? temperatureCorrection : "error writing";
     isBlocked = false;
   }
 
@@ -135,13 +115,10 @@
     if (isBlocked) return;
 
     isBlocked = true;
-    humidityCorrection =
-      (await sensor.readHumidityCorrection(
-        port,
-        sensorAddress,
-        AbortSignal.timeout(5_000)
-      )) ?? "error reading";
-
+    const result = await sensor2.holdingRegisters.humidityCorrection.read(
+      timeout()
+    );
+    humidityCorrection = result ?? "error reading";
     isBlocked = false;
   }
 
@@ -149,15 +126,11 @@
     if (!sensor.isValidCorrectionValue(humidityCorrection) || isBlocked) return;
 
     isBlocked = true;
-    humidityCorrection = (await sensor.writeHumidityCorrection(
-      port,
-      sensorAddress,
+    const isSuccess = await sensor2.holdingRegisters.humidityCorrection.write(
       humidityCorrection,
-      AbortSignal.timeout(5_000)
-    ))
-      ? humidityCorrection
-      : "error writing";
-
+      timeout()
+    );
+    humidityCorrection = isSuccess ? humidityCorrection : "error writing";
     isBlocked = false;
   }
 </script>
