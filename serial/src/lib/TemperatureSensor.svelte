@@ -177,7 +177,7 @@
     {#if !baudRate}
       <option value={null} />
     {/if}
-    {#each sensor.supportedBaudRates as value}
+    {#each Object.entries(sensor.supportedBaudRates) as [value]}
       <option {value}>{value} Bits/sec</option>
     {/each}
   </select>

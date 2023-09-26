@@ -23,16 +23,18 @@ enum HoldingRegisterAddress {
   HumidityCorrectionValue = 0x0104,
 }
 
-export const supportedBaudRates = [9600, 14400, 19200] as const;
+export const supportedBaudRates = {
+  9600: "9600 Bit/s",
+  14400: "14400 Bit/s",
+  19200: "19200 Bit/s",
+} as const;
 
-type TemperatureSensorBaudRate = (typeof supportedBaudRates)[number];
+type TemperatureSensorBaudRate = keyof typeof supportedBaudRates;
 
 export function isValidBaudRate(
   baudRate: any
 ): baudRate is TemperatureSensorBaudRate {
-  return (
-    supportedBaudRates.indexOf(baudRate as TemperatureSensorBaudRate) !== -1
-  );
+  return baudRate in supportedBaudRates;
 }
 
 export function isValidCorrectionValue(value: any): value is number {
@@ -61,12 +63,14 @@ function identity<T>(value: T) {
 export class TemperatureSensor extends Device {
   inputRegisters = {
     temperature: this.createInputRegister({
+      label: "Temperature (℃)",
       address: InputRegisterAddress.Temperature,
       length: 2,
       deserialize: toTemperature,
     }),
 
     humidity: this.createInputRegister({
+      label: "Humidity (%)",
       address: InputRegisterAddress.Humidity,
       length: 2,
       deserialize: toTemperature,
@@ -75,31 +79,57 @@ export class TemperatureSensor extends Device {
 
   holdingRegisters = {
     deviceAddress: this.createHoldingRegister({
+      label: "Address",
       address: HoldingRegisterAddress.DeviceAddress,
       length: 2,
       deserialize: toUint16,
       serialize: identity,
+      isValid: isValidAddress,
+      input: {
+        min: 1,
+        max: 247,
+        step: 1,
+      },
     }),
 
     baudRate: this.createHoldingRegister({
+      label: "Baud Rate",
       address: HoldingRegisterAddress.BaudRate,
       length: 2,
       deserialize: toBaudRate,
       serialize: identity<TemperatureSensorBaudRate>,
+      isValid: isValidBaudRate,
+      input: {
+        options: supportedBaudRates,
+      },
     }),
 
     temperatureCorrection: this.createHoldingRegister({
+      label: "Temperature Correction Value",
       address: HoldingRegisterAddress.TemperatureCorrectionValue,
       length: 2,
       deserialize: toTemperature,
       serialize: fromTemperature,
+      isValid: isValidCorrectionValue,
+      input: {
+        min: -10,
+        max: 10,
+        step: 0.1,
+      },
     }),
 
     humidityCorrection: this.createHoldingRegister({
+      label: "Humidity Correction Value",
       address: HoldingRegisterAddress.HumidityCorrectionValue,
       length: 2,
       deserialize: toTemperature,
       serialize: fromTemperature,
+      isValid: isValidCorrectionValue,
+      input: {
+        min: -10,
+        max: 10,
+        step: 0.1,
+      },
     }),
   };
 }

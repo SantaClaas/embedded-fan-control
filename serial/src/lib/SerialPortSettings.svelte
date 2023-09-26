@@ -48,7 +48,11 @@
     disabled
   />
 
-  <BaudRateSelect bind:value={selectedRate} disabled={isOpen} />
+  <BaudRateSelect
+    bind:value={selectedRate}
+    disabled={isOpen}
+    id="baud-rate-port"
+  />
 
   <div>
     <button disabled={!isOpen} on:click={closePort}>Close</button>

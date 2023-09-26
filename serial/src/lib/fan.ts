@@ -1,3 +1,5 @@
+import { Device } from "./modbus";
+
 enum InputRegisterAddress {
   Identification = 0xd000,
   MaxCountBytes = 0xd001,
@@ -332,4 +334,17 @@ enum HoldingRegisterAddress {
   MirroredInputRegister16OriginalAddress = 0xd40f,
 
   MassFlowHeightAboveSeaLevel = 0xd602,
+}
+
+export class Fan extends Device {
+  inputRegisters = {
+    heartbeat: this.createInputRegister({
+      address: InputRegisterAddress.Heartbeat,
+      length: 2,
+      deserialize(view) {
+        return view.getUint16(0);
+      },
+    }),
+  };
+  holdingRegisters = {};
 }

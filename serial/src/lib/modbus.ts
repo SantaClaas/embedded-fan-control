@@ -1,6 +1,4 @@
 import { crc16 } from "./crc";
-import { read, write } from "./serial";
-import * as serial from "./serial";
 
 export enum FunctionCode {
   ReadHoldingRegister = 0x03,
@@ -40,6 +38,7 @@ function isReadResponseValid(
   if (functionCode !== expectedFunctionCode) return false;
 
   const dataLength = response.view.getUint8(2);
+
   return dataLength === expectedDataLength && 2 + dataLength < crcStartIndex;
 }
 
@@ -61,6 +60,11 @@ type DeserializeFunction<T> = (view: DataView) => T;
 
 type RegisterDefinition<T> = {
   /**
+   * An optional human readable label or name for the register
+   */
+  label?: string;
+
+  /**
    * A valid register address is a unsigned 16 bit number
    */
   address: number;
@@ -78,26 +82,33 @@ type RegisterDefinition<T> = {
 
 type InputRegisterDefinition<T> = RegisterDefinition<T>;
 
+/**
+ * Input options define what values can be put in a holding register before serialization.
+ * This is first and foremost intended to validate values that should be written to the holding register but can be used
+ * to defining HTML input elements
+ */
+export type InputOptions =
+  | {
+      options: { [key: number]: string };
+    }
+  | { min: number; max: number; step: number };
 type HoldingRegisterDefinition<T> = RegisterDefinition<T> & {
   serialize: SerializeFunction<T>;
+  isValid?(value: T): value is T;
+  input?: InputOptions;
 };
 
-class InputRegister<T> {
+export class InputRegister<T> {
   #device: Device;
-  #length: number;
-  #address: number;
-  #deserialize: DeserializeFunction<T>;
+  #definition: InputRegisterDefinition<T>;
 
-  constructor(
-    device: Device,
-    address: number,
-    length: number,
-    deserialize: DeserializeFunction<T>
-  ) {
+  get label(): string | undefined {
+    return this.#definition.label;
+  }
+
+  constructor(device: Device, definition: InputRegisterDefinition<T>) {
     this.#device = device;
-    this.#length = length;
-    this.#address = address;
-    this.#deserialize = deserialize;
+    this.#definition = definition;
   }
 
   async read(signal?: AbortSignal): Promise<T | undefined> {
@@ -113,7 +124,7 @@ class InputRegister<T> {
     // Function
     view.setUint8(1, FunctionCode.ReadInputRegister);
     // Register address
-    view.setUint16(2, this.#address);
+    view.setUint16(2, this.#definition.address);
     // Number of registers
     view.setUint16(4, 1);
     // CRC
@@ -138,40 +149,41 @@ class InputRegister<T> {
     if (!value) return;
 
     const response = { view: new DataView(value.buffer), frame: value };
+
     if (
       !isReadResponseValid(
         response,
         this.#device.address,
         FunctionCode.ReadInputRegister,
-        this.#length
+        this.#definition.length
       )
     )
       return;
 
-    const deserializationView = new DataView(value.buffer, 3, this.#length);
-    return this.#deserialize(deserializationView);
+    const deserializationView = new DataView(
+      value.buffer,
+      3,
+      this.#definition.length
+    );
+    return this.#definition.deserialize(deserializationView);
   }
 }
 
-class HoldingRegister<T> {
+export class HoldingRegister<T> {
   #device: Device;
-  #length: number;
-  #address: number;
-  #deserialize: DeserializeFunction<T>;
-  #serialize: SerializeFunction<T>;
+  #definition: HoldingRegisterDefinition<T>;
 
-  constructor(
-    device: Device,
-    address: number,
-    length: number,
-    deserialize: DeserializeFunction<T>,
-    serialize: SerializeFunction<T>
-  ) {
+  get input(): InputOptions | undefined {
+    return this.#definition.input;
+  }
+
+  get label(): string | undefined {
+    return this.#definition.label;
+  }
+
+  constructor(device: Device, definition: HoldingRegisterDefinition<T>) {
     this.#device = device;
-    this.#length = length;
-    this.#address = address;
-    this.#deserialize = deserialize;
-    this.#serialize = serialize;
+    this.#definition = definition;
   }
 
   async read(signal?: AbortSignal): Promise<T | undefined> {
@@ -186,7 +198,7 @@ class HoldingRegister<T> {
     // Function
     view.setUint8(1, FunctionCode.ReadHoldingRegister);
     // Register address
-    view.setUint16(2, this.#address);
+    view.setUint16(2, this.#definition.address);
     // Number of registers
     view.setUint16(4, 1);
     // CRC
@@ -216,19 +228,26 @@ class HoldingRegister<T> {
         response,
         this.#device.address,
         FunctionCode.ReadHoldingRegister,
-        this.#length
+        this.#definition.length
       )
     )
       return;
 
-    const deserializationView = new DataView(value.buffer, 3, this.#length);
+    const deserializationView = new DataView(
+      value.buffer,
+      3,
+      this.#definition.length
+    );
 
-    return this.#deserialize(deserializationView);
+    return this.#definition.deserialize(deserializationView);
   }
 
   async write(value: T, signal?: AbortSignal) {
-    if (signal?.aborted) return false;
-
+    if (
+      signal?.aborted ||
+      (this.#definition.isValid && !this.#definition.isValid(value))
+    )
+      return false;
     const length = 8;
     const crcOffset = length - 2;
     const frame = new Uint8Array(length);
@@ -238,9 +257,9 @@ class HoldingRegister<T> {
     // Function
     view.setUint8(1, FunctionCode.WriteSingleHoldingRegister);
     // Register address
-    view.setUint16(2, this.#address);
+    view.setUint16(2, this.#definition.address);
     // Register value
-    view.setInt16(4, this.#serialize(value));
+    view.setInt16(4, this.#definition.serialize(value));
     // CRC
     const crc = crc16(new Uint8Array(frame.slice(0, crcOffset)));
     view.setUint16(crcOffset, crc);
@@ -269,6 +288,7 @@ class HoldingRegister<T> {
 export abstract class Device {
   address: number;
   #port: SerialPort;
+
   abstract inputRegisters: { readonly [name: string]: InputRegister<any> };
   abstract holdingRegisters: {
     readonly [name: string]: HoldingRegister<any>;
@@ -291,12 +311,7 @@ export abstract class Device {
   protected createInputRegister<T>(
     definition: InputRegisterDefinition<T>
   ): InputRegister<T> {
-    return new InputRegister<T>(
-      this,
-      definition.address,
-      definition.length,
-      definition.deserialize
-    );
+    return new InputRegister<T>(this, definition);
   }
 
   /**
@@ -304,13 +319,7 @@ export abstract class Device {
    * @param definition the object describing the register
    */
   protected createHoldingRegister<T>(definition: HoldingRegisterDefinition<T>) {
-    return new HoldingRegister<T>(
-      this,
-      definition.address,
-      definition.length,
-      definition.deserialize,
-      definition.serialize
-    );
+    return new HoldingRegister<T>(this, definition);
   }
 
   async write(frame: Uint8Array | ArrayBuffer, signal?: AbortSignal) {
