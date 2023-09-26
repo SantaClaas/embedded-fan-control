@@ -1,4 +1,4 @@
-import { Device } from "./modbus";
+import { Device } from "../modbus";
 
 export function isValidAddress(value: any): value is number {
   // Device address (1~247)

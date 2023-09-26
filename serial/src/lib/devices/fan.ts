@@ -1,4 +1,4 @@
-import { Device } from "./modbus";
+import { Device } from "../modbus";
 
 enum InputRegisterAddress {
   Identification = 0xd000,

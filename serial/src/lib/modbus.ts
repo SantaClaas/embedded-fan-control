@@ -289,6 +289,7 @@ export abstract class Device {
   address: number;
   #port: SerialPort;
 
+  static name: string;
   abstract inputRegisters: { readonly [name: string]: InputRegister<any> };
   abstract holdingRegisters: {
     readonly [name: string]: HoldingRegister<any>;

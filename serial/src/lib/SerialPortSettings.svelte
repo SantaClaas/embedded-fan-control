@@ -1,6 +1,6 @@
 <script lang="ts">
   import BaudRateSelect, { type BaudRate } from "./BaudRateSelect.svelte";
-  import ModbusSettings from "./ModbusSettings.svelte";
+  import PortDevices from "./PortDevices.svelte";
 
   export let port: SerialPort;
   export let info: Partial<SerialPortInfo>;
@@ -61,7 +61,7 @@
 </fieldset>
 
 {#if isOpen}
-  <ModbusSettings baudrate={selectedRate} {port} />
+  <PortDevices baudrate={selectedRate} {port} />
 {/if}
 
 <style>
