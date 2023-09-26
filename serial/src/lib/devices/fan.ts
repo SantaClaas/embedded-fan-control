@@ -2,7 +2,7 @@ import { Device } from "../modbus";
 
 enum InputRegisterAddress {
   Identification = 0xd000,
-  MaxCountBytes = 0xd001,
+  MaxMessageLength = 0xd001,
   SoftwareNameBusController = 0xd002,
   SoftwareVersionBusController = 0xd003,
   SoftwareNameCommutationController = 0xd004,
@@ -336,14 +336,26 @@ enum HoldingRegisterAddress {
   MassFlowHeightAboveSeaLevel = 0xd602,
 }
 
+function toUint16(view: DataView) {
+  return view.getUint16(0);
+}
+
 export class Fan extends Device {
   inputRegisters = {
+    /**
+     * The maximum length in bytes a message can have
+     */
+    maxMessageLength: this.createInputRegister({
+      label: "Maximum Byte Count",
+      address: InputRegisterAddress.MaxMessageLength,
+      length: 2,
+      deserialize: toUint16,
+    }),
     heartbeat: this.createInputRegister({
+      label: "Heartbeat",
       address: InputRegisterAddress.Heartbeat,
       length: 2,
-      deserialize(view) {
-        return view.getUint16(0);
-      },
+      deserialize: toUint16,
     }),
   };
   holdingRegisters = {};
