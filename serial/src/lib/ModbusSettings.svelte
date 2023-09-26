@@ -1,7 +1,10 @@
 <script lang="ts">
   import BaudRateSelect, { type BaudRate } from "./BaudRateSelect.svelte";
-  import Fan from "./Fan.svelte";
-  import TemperatureSensor from "./TemperatureSensor.svelte";
+
+  import DeviceView from "./Device.svelte";
+
+  import { Fan } from "./fan";
+  import { TemperatureSensor } from "./temperatureSensor";
 
   // Baudrate is set on serial port, not modbus
   export let baudrate: BaudRate;
@@ -12,13 +15,19 @@
   let selectedDevice: typeof temperatureSensorOption | typeof fanOption =
     "temperature-sensor";
 
+  $: device =
+    selectedDevice === "fan"
+      ? new Fan(port, address)
+      : new TemperatureSensor(port, address);
+
   let address = 1;
+  let disabled = false;
 </script>
 
 <h3>Modbus</h3>
 <fieldset class="device">
   <legend>Connected Device</legend>
-  <BaudRateSelect value={baudrate} disabled />
+  <BaudRateSelect value={baudrate} disabled id="baud-rate-device" />
   <label for="device-address">Address</label>
   <input
     id="device-address"
@@ -32,15 +41,11 @@
   <label for="device-type">Type</label>
   <select id="device-type" bind:value={selectedDevice}>
     <option value={temperatureSensorOption}>Temperature Sensor</option>
-    <option disabled value={fanOption}>Fan (Coming soon)</option>
+    <option value={fanOption}>Fan</option>
   </select>
 </fieldset>
 
-{#if selectedDevice === "temperature-sensor"}
-  <TemperatureSensor sensorAddress={address} {port} />
-{:else if selectedDevice === "fan"}
-  <Fan />
-{/if}
+<DeviceView {device} {disabled} />
 
 <style>
   fieldset.device {
