@@ -151,15 +151,16 @@ The default baud rate is 9600 (users can set by themselves),
 1 bit of stop,
 no parity RS485 communication
 
-Serial command
-| Description READ
-| Trigger a temperature and humidity report (27.4℃, 67.7% temperature 27.4℃ humidity 67.7%) AUTO
-| Start the automatic temperature and humidity report function (Same as above) STOP
-| Stop the automatic reporting of temperature and humidity BR:XXXX
-| Set the baud rate 9600~19200 (BR: 9600 baud rate is 9600) TC:XX.X
-| Set temperature calibration (-10.0~10.0) (TC:02.0 temperature correction value is 2.0℃) HC:XX.X
-| Set humidity calibration (-10.0~10.0) (HC:-05.1 Humidity correction value is -5.1%) HZ:XXX
-| Set the temperature and humidity report rate (0.5,1,2,5,10) (HZ: 2 automatic reporting rate 2Hz) PARAM
-| Read current system settings，
+| Serial command | Description                                                                                      |
+| -------------- | ------------------------------------------------------------------------------------------------ |
+| READ           | Trigger a temperature and humidity report (27.4℃, 67.7% temperature 27.4℃ humidity 67.7%)        |
+| AUTO           | Start the automatic temperature and humidity report function (Same as above)                     |
+| STOP           | Stop the automatic reporting of temperature and humidity                                         |
+| BR:XXXX        | Set the baud rate 9600~19200 (BR: 9600 baud rate is 9600)                                        |
+| TC:XX.X        | Set temperature calibration (-10.0~10.0) (TC:02.0 temperature correction value is 2.0℃)          |
+| HC:XX.X        | Set humidity calibration (-10.0~10.0) (HC:-05.1 Humidity correction value is -5.1%)              |
+| HZ:XXX         | Set the temperature and humidity report rate (0.5,1,2,5,10) (HZ: 2 automatic reporting rate 2Hz) |
+| PARAM          | Read current system settings，                                                                   |
 
-PARAM instruction: TC:0.0,HC:0.0,BR:9600,HZ:1 ->Temperature correction value 0.0 Humidity correction value 0.0 Baud rate 9600 Report rate 1Hz SLAVE_ADD:1 ->MODBUS slave address 0x01
+PARAM instruction:
+TC:0.0,HC:0.0,BR:9600,HZ:1 -> Temperature correction value 0.0 Humidity correction value 0.0 Baud rate 9600 Report rate 1Hz SLAVE_ADD:1 ->MODBUS slave address 0x01
