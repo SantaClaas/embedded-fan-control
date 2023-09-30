@@ -7,11 +7,15 @@
   let value: T | "error reading";
   const id = self.crypto.randomUUID();
 
+  function getTimeout() {
+    return AbortSignal.timeout(5_000);
+  }
+
   async function read() {
     if (disabled) return;
     disabled = true;
     try {
-      const result = await register.read();
+      const result = await register.read(getTimeout());
       value = result ?? "error reading";
     } finally {
       disabled = false;
@@ -24,7 +28,7 @@
     disabled = true;
 
     try {
-      await register.write(value);
+      await register.write(value, getTimeout());
     } finally {
       disabled = false;
     }
