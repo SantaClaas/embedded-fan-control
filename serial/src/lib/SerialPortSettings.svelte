@@ -8,10 +8,14 @@
   let selectedRate: BaudRate = 9600;
   let isOpen = !!port.writable && !!port.readable;
 
+  type SupportedParity = Exclude<ParityType, "mark" | "space">;
+  let parity: SupportedParity = "none";
+  const parityOptions: SupportedParity[] = ["none", "even", "odd"];
+
   async function openPort() {
     if (isOpen) return;
 
-    await port.open({ baudRate: selectedRate });
+    await port.open({ baudRate: selectedRate, parity });
 
     isOpen = !!port.writable && !!port.readable;
   }
@@ -54,6 +58,13 @@
     id="baud-rate-port"
   />
 
+  <label for="parity">Parity</label>
+  <select id="parity" bind:value={parity}>
+    {#each parityOptions as parity}
+      <option value={parity}>{parity}</option>
+    {/each}
+  </select>
+
   <div>
     <button disabled={!isOpen} on:click={closePort}>Close</button>
     <button disabled={isOpen} on:click={openPort}>Open</button>
@@ -74,5 +85,10 @@
       justify-self: end;
       grid-column: 2 / 3;
     }
+  }
+
+  /* Can't style option directly so we rely on inheritance */
+  select#parity {
+    text-transform: capitalize;
   }
 </style>
