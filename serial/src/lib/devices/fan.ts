@@ -1,5 +1,8 @@
 import { Device } from "../modbus";
 
+function identity<T>(value: T) {
+  return value;
+}
 enum InputRegisterAddress {
   Identification = 0xd000,
   MaxMessageLength = 0xd001,
@@ -241,7 +244,7 @@ enum HoldingRegisterAddress {
   SerialNumber2 = 0xd1a3,
   ProductionDate = 0xd1a4,
   VolumeFlowReferenceValue = 0xd1ed,
-  MassFlowReferenceValue = 0xd1ed,
+  MassFlowReferenceValue = 0xd1ee,
 
   /**
    * The original address register stores the register address of the register that should be mirrored.
@@ -357,6 +360,89 @@ export class Fan extends Device {
       length: 2,
       deserialize: toUint16,
     }),
+    phaseFactor: this.createInputRegister({
+      label: "Phase Factor",
+      address: InputRegisterAddress.PhaseControlFactor,
+      length: 2,
+      //TODO interpretation
+      deserialize: toUint16,
+    }),
+    temperatureSensor1: this.createInputRegister({
+      label: "Temperature Sensor 1",
+      address: InputRegisterAddress.TemperatureSensor1,
+      length: 2,
+      //TODO interpretation
+      deserialize: toUint16,
+    }),
+    temperatureSensor2: this.createInputRegister({
+      label: "Temperature Sensor 2",
+      address: InputRegisterAddress.TemperatureSensor2,
+      length: 2,
+      //TODO interpretation
+      deserialize: toUint16,
+    }),
+    humiditySensor1: this.createInputRegister({
+      label: "Humidity Sensor 1",
+      address: InputRegisterAddress.HumiditySensor1,
+      length: 2,
+      deserialize: (view) => {
+        const value = toUint16(view);
+        return (value / 65536) * 100;
+      },
+    }),
+    humiditySensor2: this.createInputRegister({
+      label: "Humidity Sensor 2",
+      address: InputRegisterAddress.HumiditySensor2,
+      length: 2,
+      deserialize: (view) => {
+        const value = toUint16(view);
+        return (value / 65536) * 100;
+      },
+    }),
+    volumeFlowAbsolute: this.createInputRegister({
+      label: "Volume Flow Absolute",
+      address: InputRegisterAddress.VolumeFlowAbsolute,
+      length: 2,
+      deserialize: toUint16,
+    }),
   };
-  holdingRegisters = {};
+
+  holdingRegisters = {
+    targetValue: this.createHoldingRegister({
+      label: "Target Value (m³/h currently)",
+      address: HoldingRegisterAddress.DefaultTargetValue,
+      length: 2,
+      deserialize: toUint16,
+      serialize: identity,
+    }),
+    volumeFlowReferenceValue: this.createHoldingRegister({
+      label: "Volume Flow Reference Value",
+      address: HoldingRegisterAddress.VolumeFlowReferenceValue,
+      length: 2,
+      deserialize: toUint16,
+      serialize: (value) => {
+        throw new Error("Not allowed to write to this register");
+      },
+    }),
+    operatingMode: this.createHoldingRegister({
+      label: "Operating Mode",
+      address: HoldingRegisterAddress.OperatingMode,
+      length: 2,
+      deserialize: toUint16,
+      serialize: (value) => {
+        //TODO valid values: 0, 1, 2
+        throw new Error("Not implemented");
+      },
+    }),
+    sensorCurrentValueSource: this.createHoldingRegister({
+      label: "Sensor Current Value Source",
+      address: HoldingRegisterAddress.SensorCurrentValueSource,
+      length: 2,
+      deserialize: toUint16,
+      serialize: (value) => {
+        //TODO valid values: 0, 1, 2
+        throw new Error("Not implemented");
+      },
+    }),
+  };
 }
