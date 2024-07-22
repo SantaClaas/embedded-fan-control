@@ -4,19 +4,14 @@
 use embassy_rp::uart;
 use embassy_rp::uart::{DataBits, Parity, StopBits};
 
-const BAUDRATE: u32 = 19200;
-const DATA_BITS: DataBits = DataBits::DataBits8;
-const PARITY: Parity = Parity::ParityEven;
-const STOP_BITS: StopBits = StopBits::STOP1;
-
 
 pub(crate) fn get_configuration() -> uart::Config {
     // I wish I could make this constant time but default isn't, there is no new and struct is non-exhaustive 😅
     let mut configuration: uart::Config = uart::Config::default();
-    configuration.baudrate = BAUDRATE;
-    configuration.data_bits = DATA_BITS;
-    configuration.parity = PARITY;
-    configuration.stop_bits = STOP_BITS;
+    configuration.baudrate = 19_200;
+    configuration.data_bits = DataBits::DataBits8;
+    configuration.parity = Parity::ParityEven;
+    configuration.stop_bits = StopBits::STOP1;
     // Setting inverts should be a no-op as they should be false by default
     configuration
 }

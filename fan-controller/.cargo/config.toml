@@ -4,7 +4,8 @@ runner = "probe-rs run --chip RP2040"
 # runner = "elf2uf2-rs -d"
 
 [build]
-target = "thumbv6m-none-eabi" # Cortex-M0 and Cortex-M0+
+# Cortex-M0 and Cortex-M0+
+target = "thumbv6m-none-eabi"
 
 [env]
 DEFMT_LOG = "debug"

@@ -61,20 +61,33 @@ async fn main(spawner: Spawner) {
         .await;
 
     // UART things
+    // PIN_4 seems to refer to GP4 on the Pico W pinout
+    let mut driver_enable = Output::new(peripherals.PIN_4, Level::Low);
     //TODO read up on interrupts
-    let mut uart = Uart::new_blocking(peripherals.UART0, peripherals.PIN_0, peripherals.PIN_1, fan::get_configuration());
-    let result = uart.blocking_write(&[0u8, 1, 2, 3, 4, 5, 6]);
-    info!("uart result: {:?}", result);
+    let mut uart = Uart::new_blocking(peripherals.UART0, peripherals.PIN_12, peripherals.PIN_13, fan::get_configuration());
 
     let on_duration = Duration::from_secs(1);
-    let off_duration = Duration::from_secs(20);
+    let off_duration = Duration::from_secs(1);
+    // driver_enable.set_high();
     loop {
         info!("led on!");
         control.gpio_set(0, true).await;
+        // Set pin setting DI (data in) to on (high) on the MAX845 to send data
+        driver_enable.set_high();
         Timer::after(on_duration).await;
+
+
+        let result = uart.blocking_write(&[0b100010u8, 0b100010]);
+        info!("uart result: {:?} {:#b}", result, 42u8);
+        let result = uart.blocking_flush();
+        info!("uart flush result: {:?}", result);
+
 
         info!("led off!");
         control.gpio_set(0, false).await;
+        // Close sending data to enable receiving data
+        driver_enable.set_low();
         Timer::after(off_duration).await;
+
     }
 }
