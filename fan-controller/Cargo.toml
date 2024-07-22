@@ -1,11 +1,12 @@
 [package]
-name = "pico-experiments"
+name = "fan-controller"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
 cortex-m = { version = "0.7.7", features = ["inline-asm"] }
 cortex-m-rt = "0.7.3"
+crc = "3.2.1"
 cyw43 = { version = "0.1.0", features = ["defmt", "firmware-logs"] }
 cyw43-pio = { version = "0.1.0", features = ["defmt", "overclock"] }
 defmt = "0.3.8"
