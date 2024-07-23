@@ -1,6 +1,8 @@
 //! ebm-pabst [RadiCal centrifugal fans in scroll housings for residential ventilation](https://www.ebmpapst.com/us/en/campaigns/product-campaigns/centrifugal-fans/radical-with-scroll-housing.html)
 //! specific configuration and constants
 
+use crc::{Crc, CRC_16_MODBUS};
+use defmt::Format;
 use embassy_rp::uart;
 use embassy_rp::uart::{DataBits, Parity, StopBits};
 
@@ -14,27 +16,23 @@ pub(crate) fn get_configuration() -> uart::Config {
     // Setting inverts should be a no-op as they should be false by default
     configuration
 }
-// pub const CONFIGURATION: uart::Config = {
-//     let mut configuration: uart::Config =
-//         uart::Config {
-//             baudrate: 19200,
-//             data_bits: DataBits::DataBits8,
-//             parity: Parity::ParityEven,
-//             stop_bits: StopBits::STOP1,
-//             invert_cts: false,
-//             invert_rts: false,
-//             invert_rx: false,
-//             invert_tx: false,
-//         };
-//     configuration
-// };
-//     uart::Config {
-//     baudrate: 19200,
-//     data_bits: DataBits::DataBits8,
-//     parity: Parity::ParityEven,
-//     stop_bits: StopBits::STOP1,
-//     invert_cts: false,
-//     invert_rts: false,
-//     invert_rx: false,
-//     invert_tx: false,
-// };
+
+pub(crate) const MAX_SET_POINT: u16 = 64_000;
+
+#[derive(Default, Format)]
+pub(crate) enum State {
+    #[default]
+    Off,
+    Low,
+    Medium,
+    High,
+}
+
+pub(crate) mod address {
+    pub(crate) const FAN_1: u8 = 0x02;
+    pub(crate) const FAN_2: u8 = 0x03;
+}
+
+pub(super) mod holding_registers {
+    pub(crate) const REFERENCE_SET_POINT: [u8; 2] = 0xd001_u16.to_be_bytes();
+}
