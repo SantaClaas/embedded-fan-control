@@ -6,10 +6,11 @@ use defmt::Format;
 use embassy_rp::uart;
 use embassy_rp::uart::{DataBits, Parity, StopBits};
 
+pub(crate) const BAUD_RATE: u32 = 19_200;
 pub(crate) fn get_configuration() -> uart::Config {
     // I wish I could make this constant time but default isn't, there is no new and struct is non-exhaustive 😅
     let mut configuration: uart::Config = uart::Config::default();
-    configuration.baudrate = 19_200;
+    configuration.baudrate = BAUD_RATE;
     configuration.data_bits = DataBits::DataBits8;
     configuration.parity = Parity::ParityEven;
     configuration.stop_bits = StopBits::STOP1;
