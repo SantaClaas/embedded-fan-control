@@ -170,11 +170,11 @@ async fn main(spawner: Spawner) {
 
         // Before closing we need to flush the buffer to ensure that all data is written
         let result = uart.blocking_flush();
-        //TODO do we need to do a 3.5 byte pause before sending the next message?
 
-        let is_fan_2_enabled = false;
+        let is_fan_2_enabled = true;
         if is_fan_2_enabled {
-
+            //TODO try to set to 3.5 byte pause before sending the next message
+            Timer::after(Duration::from_secs(1)).await;
         // Form message to fan 2
         // Update the fan address and therefore the CRC
         // Keep speed as both fans should be running at the same speed
