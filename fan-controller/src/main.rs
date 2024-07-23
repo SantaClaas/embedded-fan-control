@@ -7,14 +7,17 @@
 
 mod fan;
 
+use core::cmp::min;
+use core::ops::Mul;
 use cyw43_pio::PioSpi;
 use defmt::*;
 use embassy_executor::Spawner;
-use embassy_rp::{bind_interrupts, uart};
+use embassy_futures::yield_now;
 use embassy_rp::gpio::{Level, Output};
 use embassy_rp::peripherals::{DMA_CH0, PIN_23, PIN_25, PIO0};
 use embassy_rp::pio::{InterruptHandler, Pio};
 use embassy_rp::uart::Uart;
+use embassy_rp::{bind_interrupts, uart};
 use embassy_time::{Duration, Timer};
 use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
@@ -23,9 +26,14 @@ bind_interrupts!(struct Irqs {
     PIO0_IRQ_0 => InterruptHandler<PIO0>;
 });
 
-
 #[embassy_executor::task]
-async fn wifi_task(runner: cyw43::Runner<'static, Output<'static, PIN_23>, PioSpi<'static, PIN_25, PIO0, 0, DMA_CH0>>) -> ! {
+async fn wifi_task(
+    runner: cyw43::Runner<
+        'static,
+        Output<'static, PIN_23>,
+        PioSpi<'static, PIN_25, PIO0, 0, DMA_CH0>,
+    >,
+) -> ! {
     runner.run().await
 }
 
@@ -48,7 +56,15 @@ async fn main(spawner: Spawner) {
     let pwr = Output::new(peripherals.PIN_23, Level::Low);
     let cs = Output::new(peripherals.PIN_25, Level::High);
     let mut pio = Pio::new(peripherals.PIO0, Irqs);
-    let spi = PioSpi::new(&mut pio.common, pio.sm0, pio.irq0, cs, peripherals.PIN_24, peripherals.PIN_29, peripherals.DMA_CH0);
+    let spi = PioSpi::new(
+        &mut pio.common,
+        pio.sm0,
+        pio.irq0,
+        cs,
+        peripherals.PIN_24,
+        peripherals.PIN_29,
+        peripherals.DMA_CH0,
+    );
 
     static STATE: StaticCell<cyw43::State> = StaticCell::new();
     let state = STATE.init(cyw43::State::new());
@@ -64,30 +80,47 @@ async fn main(spawner: Spawner) {
     // PIN_4 seems to refer to GP4 on the Pico W pinout
     let mut driver_enable = Output::new(peripherals.PIN_4, Level::Low);
     //TODO read up on interrupts
-    let mut uart = Uart::new_blocking(peripherals.UART0, peripherals.PIN_12, peripherals.PIN_13, fan::get_configuration());
+    let mut uart = Uart::new_blocking(
+        peripherals.UART0,
+        peripherals.PIN_12,
+        peripherals.PIN_13,
+        fan::get_configuration(),
+    );
 
     let on_duration = Duration::from_secs(1);
     let off_duration = Duration::from_secs(1);
-    // driver_enable.set_high();
+
     loop {
         info!("led on!");
         control.gpio_set(0, true).await;
-        // Set pin setting DI (data in) to on (high) on the MAX845 to send data
-        driver_enable.set_high();
         Timer::after(on_duration).await;
 
+        // Set pin setting DI (data in) to on (high) on the MAX845 to send data
+        driver_enable.set_high();
+        let message = [
+            0b100010u8, 0b100010, 0b101010, 0b101010, 0b101010, 0b101010, 0b101010, 0b101010,
+        ];
+        let result = uart.blocking_write(&message);
 
-        let result = uart.blocking_write(&[0b100010u8, 0b100010]);
-        info!("uart result: {:?} {:#b}", result, 42u8);
+        info!("uart result: {:?}", result);
+
+        // Before closing we need to flush the buffer to ensure that all data is written
+        // And we need to wait for some time before turning off data in on the MAX845 because we
+        // might be too fast and cut off the last byte or more. (This happened)
         let result = uart.blocking_flush();
-        info!("uart flush result: {:?}", result);
+        // I saw someone using 120 microseconds.
+        // Found out just 0 microseconds might be enough. This probably has to do with async. Should
+        // try a blocking non-async version for delay
+        // Timer::after(Duration::from_micros(0)).await;
+        // This works the same
+        yield_now().await;
 
+        // Close sending data to enable receiving data
+        driver_enable.set_low();
+        info!("uart flush result: {:?}", result);
 
         info!("led off!");
         control.gpio_set(0, false).await;
-        // Close sending data to enable receiving data
-        driver_enable.set_low();
         Timer::after(off_duration).await;
-
     }
 }
