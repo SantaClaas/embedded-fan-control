@@ -13,11 +13,11 @@ use cyw43_pio::PioSpi;
 use defmt::*;
 use embassy_executor::Spawner;
 use embassy_futures::yield_now;
-use embassy_rp::gpio::{Level, Output};
+use embassy_rp::gpio::{Input, Level, Output, Pull};
 use embassy_rp::peripherals::{DMA_CH0, PIN_23, PIN_25, PIO0};
 use embassy_rp::pio::{InterruptHandler, Pio};
 use embassy_rp::uart::Uart;
-use embassy_rp::{bind_interrupts, uart};
+use embassy_rp::{bind_interrupts, uart, Peripherals};
 use embassy_time::{Duration, Timer};
 use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
@@ -39,7 +39,20 @@ async fn wifi_task(
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
-    let peripherals = embassy_rp::init(Default::default());
+    let Peripherals {
+        PIN_23,
+        PIN_25,
+        PIO0,
+        DMA_CH0,
+        PIN_24,
+        PIN_29,
+        PIN_4,
+        UART0,
+        PIN_12,
+        PIN_13,
+        PIN_18,
+        ..
+    } = embassy_rp::init(Default::default());
     let firmware = include_bytes!("../cyw43-firmware/43439A0.bin");
     // Google AI says CLM stands for "Chip Local Memory". Feels like everyone except me knows
     // what it is. I hate acronyms. I searched for "CLM" in the source code and on the internet and
@@ -53,17 +66,17 @@ async fn main(spawner: Spawner) {
     //let fw = unsafe { core::slice::from_raw_parts(0x10100000 as *const u8, 230321) };
     //let clm = unsafe { core::slice::from_raw_parts(0x10140000 as *const u8, 4752) };
 
-    let pwr = Output::new(peripherals.PIN_23, Level::Low);
-    let cs = Output::new(peripherals.PIN_25, Level::High);
-    let mut pio = Pio::new(peripherals.PIO0, Irqs);
+    let pwr = Output::new(PIN_23, Level::Low);
+    let cs = Output::new(PIN_25, Level::High);
+    let mut pio = Pio::new(PIO0, Irqs);
     let spi = PioSpi::new(
         &mut pio.common,
         pio.sm0,
         pio.irq0,
         cs,
-        peripherals.PIN_24,
-        peripherals.PIN_29,
-        peripherals.DMA_CH0,
+        PIN_24,
+        PIN_29,
+        DMA_CH0,
     );
 
     static STATE: StaticCell<cyw43::State> = StaticCell::new();
@@ -78,19 +91,28 @@ async fn main(spawner: Spawner) {
 
     // UART things
     // PIN_4 seems to refer to GP4 on the Pico W pinout
-    let mut driver_enable = Output::new(peripherals.PIN_4, Level::Low);
+    let mut driver_enable = Output::new(PIN_4, Level::Low);
     //TODO read up on interrupts
-    let mut uart = Uart::new_blocking(
-        peripherals.UART0,
-        peripherals.PIN_12,
-        peripherals.PIN_13,
-        fan::get_configuration(),
-    );
+    let mut uart = Uart::new_blocking(UART0, PIN_12, PIN_13, fan::get_configuration());
 
     let on_duration = Duration::from_secs(1);
     let off_duration = Duration::from_secs(1);
 
+    // Send signal test button
+
+    let button = Input::new(PIN_18, Pull::Up);
+
+
     loop {
+        //
+        let level = button.get_level();
+        info!("button level: {}", if level == Level::High { "high" } else { "low" });
+
+        if button.is_high() {
+            Timer::after(Duration::from_secs(1)).await;
+            continue;
+        }
+
         info!("led on!");
         control.gpio_set(0, true).await;
         Timer::after(on_duration).await;
@@ -108,12 +130,9 @@ async fn main(spawner: Spawner) {
         // And we need to wait for some time before turning off data in on the MAX845 because we
         // might be too fast and cut off the last byte or more. (This happened)
         let result = uart.blocking_flush();
-        // I saw someone using 120 microseconds.
-        // Found out just 0 microseconds might be enough. This probably has to do with async. Should
-        // try a blocking non-async version for delay
-        // Timer::after(Duration::from_micros(0)).await;
-        // This works the same
-        yield_now().await;
+        // I saw someone using 120 microseconds (https://youtu.be/i46jdhvRej4?t=886). This number
+        // is based on trial and error. Don't feel bad to change it if it doesn't work.
+        Timer::after(Duration::from_micros(190)).await;
 
         // Close sending data to enable receiving data
         driver_enable.set_low();

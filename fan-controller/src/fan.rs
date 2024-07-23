@@ -4,7 +4,6 @@
 use embassy_rp::uart;
 use embassy_rp::uart::{DataBits, Parity, StopBits};
 
-
 pub(crate) fn get_configuration() -> uart::Config {
     // I wish I could make this constant time but default isn't, there is no new and struct is non-exhaustive 😅
     let mut configuration: uart::Config = uart::Config::default();
