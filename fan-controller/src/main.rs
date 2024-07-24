@@ -158,10 +158,8 @@ async fn main(spawner: Spawner) {
         message[6] = checksum[1];
         message[7] = checksum[0];
 
-        info!("Message to fan 1: {:?}", message);
+        info!("Sending message to fan 1: {:?}", message);
 
-        // Send data to fan 1
-        info!("sending data to fan 1");
 
         // Set pin setting DE (driver enable) to on (high) on the MAX845 to send data
         driver_enable.set_high();
@@ -180,20 +178,13 @@ async fn main(spawner: Spawner) {
         // Read response from fan 1
         let mut response_buffer: [u8; 8] = [0; 8];
         let response = uart.blocking_read(&mut response_buffer);
-        info!("response: {:?} {:?}", response, response_buffer);
+        info!("response from fan 1: {:?} {:?}", response, response_buffer);
+        //TODO validate response from fan 1
 
-
-
-
-
-        //TODO try to set to 3.5 byte pause before sending the next message
-        /// Modbus delay between messages in bits
-        /// The modbus delay between messages is 3.5 bytes or 28 bits
-        const DELAY_BITS: u64 = 28 + 4;
-        const MICROSECONDS_PER_BIT: u64 = 1_000_000u64;
         /// Messsage delay between modbus messages in microseconds
-        const MESSAGE_DELAY: u64 = 1_000_000u64 * DELAY_BITS / fan::BAUD_RATE as u64;
-        Timer::after(Duration::from_micros(1_000_000u64)).await;
+        const MESSAGE_DELAY: u64 = modbus::get_message_delay(fan::BAUD_RATE);
+        Timer::after_micros(MESSAGE_DELAY).await;
+
         // Form message to fan 2
         // Update the fan address and therefore the CRC
         // Keep speed as both fans should be running at the same speed
@@ -201,7 +192,7 @@ async fn main(spawner: Spawner) {
         let checksum = modbus::CRC.checksum(&message[..6]).to_be_bytes();
         message[6] = checksum[1];
         message[7] = checksum[0];
-        info!("sending data to fan 2");
+        info!("sending message to fan 2: {:?}", message);
 
         // Set pin setting DE (driver enable) to on (high) on the MAX845 to send data
         driver_enable.set_high();
@@ -213,7 +204,7 @@ async fn main(spawner: Spawner) {
         let result = uart.blocking_flush();
         info!("uart flush result: {:?}", result);
 
-        //TODO read response from fan 2
+
 
         // In addition to flushing we need to wait for some time before turning off data in on the
         // MAX845 because we might be too fast and cut off the last byte or more. (This happened)
@@ -223,8 +214,12 @@ async fn main(spawner: Spawner) {
 
         // Close sending data to enable receiving data
         driver_enable.set_low();
+        //TODO validate response from fan 2
+
+        // Read response from fan 2
+        let response = uart.blocking_read(&mut response_buffer);
+        info!("response from fan 2: {:?} {:?}", response, response_buffer);
 
         control.gpio_set(0, false).await;
-        // Timer::after(off_duration).await;
     }
 }
