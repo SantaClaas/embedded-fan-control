@@ -1,12 +1,11 @@
-use crc::{Crc, CRC_16_MODBUS};
 use crate::fan;
+use crc::{Crc, CRC_16_MODBUS};
 
 pub(super) mod function_code {
     pub const READ_HOLDING_REGISTER: u8 = 0x03;
     pub const READ_INPUT_REGISTER: u8 = 0x04;
     pub const WRITE_SINGLE_REGISTER: u8 = 0x06;
 }
-
 
 /// Used to create CRC checksums when forming modbus messages
 pub(super) const CRC: Crc<u16> = Crc::<u16>::new(&CRC_16_MODBUS);
@@ -26,11 +25,9 @@ pub(super) const fn get_message_delay(baud_rate: u32) -> u64 {
     // Putting the division last to avoid add on effect of inaccurate floating point division
     const MICROSECONDS_FOR_BITS: u64 = 1_000_000 * DELAY_BITS;
 
-
     // Using floating point division to be closer to the logical mathematical result
     // (e.g. 3 / 2 = 1.5 instead of 1 with integer division)
 
     // Round up as it is better to wait longer than too short
     MICROSECONDS_FOR_BITS.div_ceil(baud_rate as u64)
-
 }

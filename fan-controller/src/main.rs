@@ -7,19 +7,24 @@
 
 mod fan;
 mod modbus;
+mod mqtt;
 
 use core::cmp::min;
 use core::ops::Mul;
 use crc::{Crc, CRC_16_MODBUS};
+use cyw43::Control;
 use cyw43_pio::PioSpi;
 use defmt::*;
 use embassy_executor::Spawner;
 use embassy_futures::yield_now;
-use embassy_rp::gpio::{Input, Level, Output, Pull};
-use embassy_rp::peripherals::{DMA_CH0, PIN_23, PIN_25, PIO0};
-use embassy_rp::pio::{InterruptHandler, Pio};
+use embassy_rp::gpio::{Input, Level, Output, Pin, Pull};
+use embassy_rp::peripherals::{
+    DMA_CH0, PIN_12, PIN_13, PIN_18, PIN_23, PIN_24, PIN_25, PIN_29, PIN_4, PIO0, UART0,
+};
+use embassy_rp::pio::{InterruptHandler, Pio, PioPin};
 use embassy_rp::uart::Uart;
-use embassy_rp::{bind_interrupts, uart, Peripherals};
+use embassy_rp::{bind_interrupts, uart, Peripherals, Peripheral, pio, dma};
+use embassy_rp::spi::ClkPin;
 use embassy_time::{Duration, Timer};
 use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
@@ -39,6 +44,83 @@ async fn wifi_task(
     runner.run().await
 }
 
+// async fn setup_control(spawner: Spawner) {
+//     let firmware = include_bytes!("../cyw43-firmware/43439A0.bin");
+//     // Google AI says CLM stands for "Chip Local Memory". Feels like everyone except me knows
+//     // what it is. I hate acronyms. I searched for "CLM" in the source code and on the internet and
+//     // still no idea.
+//     let chip_local_memory = include_bytes!("../cyw43-firmware/43439A0_clm.bin");
+//
+//
+//     let pwr = Output::new(pin_23, Level::Low);
+//     let cs = Output::new(pin_25, Level::High);
+//     let mut pio = Pio::new(pio0, Irqs);
+//     let spi = PioSpi::new(
+//         &mut pio.common,
+//         pio.sm0,
+//         pio.irq0,
+//         cs,
+//         pin_24,
+//         pin_29,
+//         dma_ch0,
+//     );
+//
+//     static STATE: StaticCell<cyw43::State> = StaticCell::new();
+//     let state = STATE.init(cyw43::State::new());
+//     let (_net_device, mut control, runner) = cyw43::new(state, pwr, spi, firmware).await;
+//     unwrap!(spawner.spawn(wifi_task(runner)));
+//
+//     control.init(chip_local_memory).await;
+//     control
+//         .set_power_management(cyw43::PowerManagementMode::PowerSave)
+//         .await;
+// }
+
+async fn gain_control(
+    spawner: Spawner,
+    pwr_pin: PIN_23,
+    cs_pin: PIN_25,
+    pio: PIO0,//impl Peripheral<P=impl pio::Instance>,
+    dma: DMA_CH0,//impl Peripheral<P=impl dma::Channel>,
+    dio: impl PioPin,
+    clk: impl PioPin,
+) -> Control<'static> {
+    let firmware = include_bytes!("../cyw43-firmware/43439A0.bin");
+    // Google AI says CLM stands for "Chip Local Memory". Feels like everyone except me knows
+    // what it is. I hate acronyms. I searched for "CLM" in the source code and on the internet and
+    // still no idea.
+    let chip_local_memory = include_bytes!("../cyw43-firmware/43439A0_clm.bin");
+
+    // To make flashing faster for development, you may want to flash the firmwares independently
+    // at hardcoded addresses, instead of baking them into the program with `include_bytes!`:
+    //     probe-rs download 43439A0.bin --binary-format bin --chip RP2040 --base-address 0x10100000
+    //     probe-rs download 43439A0_clm.bin --binary-format bin --chip RP2040 --base-address 0x10140000
+    //let fw = unsafe { core::slice::from_raw_parts(0x10100000 as *const u8, 230321) };
+    //let clm = unsafe { core::slice::from_raw_parts(0x10140000 as *const u8, 4752) };
+    let pwr = Output::new(pwr_pin, Level::Low);
+    let cs = Output::new(cs_pin, Level::High);
+    let mut pio = Pio::new(pio, Irqs);
+    let spi = PioSpi::new(
+        &mut pio.common,
+        pio.sm0,
+        pio.irq0,
+        cs,
+        dio,
+        clk,
+        dma,
+    );
+
+    static STATE: StaticCell<cyw43::State> = StaticCell::new();
+    let state = STATE.init(cyw43::State::new());
+    let (_net_device, mut control, runner) = cyw43::new(state, pwr, spi, firmware).await;
+    unwrap!(spawner.spawn(wifi_task(runner)));
+    control.init(chip_local_memory).await;
+    control
+        .set_power_management(cyw43::PowerManagementMode::PowerSave)
+        .await;
+    control
+}
+
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
     let Peripherals {
@@ -55,40 +137,16 @@ async fn main(spawner: Spawner) {
         PIN_18: pin_18,
         ..
     } = embassy_rp::init(Default::default());
-    let firmware = include_bytes!("../cyw43-firmware/43439A0.bin");
-    // Google AI says CLM stands for "Chip Local Memory". Feels like everyone except me knows
-    // what it is. I hate acronyms. I searched for "CLM" in the source code and on the internet and
-    // still no idea.
-    let chip_local_memory = include_bytes!("../cyw43-firmware/43439A0_clm.bin");
 
-    // To make flashing faster for development, you may want to flash the firmwares independently
-    // at hardcoded addresses, instead of baking them into the program with `include_bytes!`:
-    //     probe-rs download 43439A0.bin --binary-format bin --chip RP2040 --base-address 0x10100000
-    //     probe-rs download 43439A0_clm.bin --binary-format bin --chip RP2040 --base-address 0x10140000
-    //let fw = unsafe { core::slice::from_raw_parts(0x10100000 as *const u8, 230321) };
-    //let clm = unsafe { core::slice::from_raw_parts(0x10140000 as *const u8, 4752) };
-
-    let pwr = Output::new(pin_23, Level::Low);
-    let cs = Output::new(pin_25, Level::High);
-    let mut pio = Pio::new(pio0, Irqs);
-    let spi = PioSpi::new(
-        &mut pio.common,
-        pio.sm0,
-        pio.irq0,
-        cs,
+    let mut control = gain_control(
+        spawner,
+        pin_23,
+        pin_25,
+        pio0,
+        dma_ch0,
         pin_24,
         pin_29,
-        dma_ch0,
-    );
-
-    static STATE: StaticCell<cyw43::State> = StaticCell::new();
-    let state = STATE.init(cyw43::State::new());
-    let (_net_device, mut control, runner) = cyw43::new(state, pwr, spi, firmware).await;
-    unwrap!(spawner.spawn(wifi_task(runner)));
-
-    control.init(chip_local_memory).await;
-    control
-        .set_power_management(cyw43::PowerManagementMode::PowerSave)
+    )
         .await;
 
     // UART things
@@ -106,7 +164,6 @@ async fn main(spawner: Spawner) {
     let mut fan_state = fan::State::default();
 
     loop {
-
         // Falling edge for our button -> button down (pressing down
         // Rising edge for our button -> button up (letting go after press)
         // Act on press as there is delay between pressing and letting go and it feels snappier
@@ -119,7 +176,6 @@ async fn main(spawner: Spawner) {
             fan::State::High => fan::State::Off,
         };
 
-
         info!("fan state: {:?}", fan_state);
 
         // Setting values low on purpose for testing
@@ -131,8 +187,8 @@ async fn main(spawner: Spawner) {
             fan::State::Medium => fan::MAX_SET_POINT / 4,
             // 50%
             fan::State::High => fan::MAX_SET_POINT / 2,
-        }.to_be_bytes();
-
+        }
+            .to_be_bytes();
 
         control.gpio_set(0, true).await;
         // Form message to fan 1
@@ -159,7 +215,6 @@ async fn main(spawner: Spawner) {
         message[7] = checksum[0];
 
         info!("Sending message to fan 1: {:?}", message);
-
 
         // Set pin setting DE (driver enable) to on (high) on the MAX845 to send data
         driver_enable.set_high();
