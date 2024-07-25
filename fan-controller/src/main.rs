@@ -12,11 +12,13 @@ mod mqtt;
 use core::cmp::min;
 use core::ops::Mul;
 use crc::{Crc, CRC_16_MODBUS};
-use cyw43::Control;
+use cyw43::{Control, NetDriver};
 use cyw43_pio::PioSpi;
 use defmt::*;
 use embassy_executor::Spawner;
 use embassy_futures::yield_now;
+use embassy_net::{Config, Stack, StackResources};
+use embassy_net::tcp::client::{TcpClient, TcpClientState};
 use embassy_rp::gpio::{Input, Level, Output, Pin, Pull};
 use embassy_rp::peripherals::{
     DMA_CH0, PIN_12, PIN_13, PIN_18, PIN_23, PIN_24, PIN_25, PIN_29, PIN_4, PIO0, UART0,
@@ -24,8 +26,10 @@ use embassy_rp::peripherals::{
 use embassy_rp::pio::{InterruptHandler, Pio, PioPin};
 use embassy_rp::uart::Uart;
 use embassy_rp::{bind_interrupts, uart, Peripherals, Peripheral, pio, dma};
+use embassy_rp::clocks::RoscRng;
 use embassy_rp::spi::ClkPin;
 use embassy_time::{Duration, Timer};
+use reqwless::client::{TlsConfig, TlsVerify};
 use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
 
@@ -119,6 +123,83 @@ async fn gain_control(
         .set_power_management(cyw43::PowerManagementMode::PowerSave)
         .await;
     control
+}
+
+/// Don't put credentials in the source code
+const WIFI_NETWORK: &str = env!("FAN_CONTROL_WIFI_NETWORK");
+
+/// Don't put credentials in the source code
+const WIFI_PASSWORD: &str = env!("FAN_CONTROL_WIFI_PASSWORD");
+
+#[embassy_executor::task]
+async fn net_task(stack: &'static Stack<cyw43::NetDriver<'static>>) -> ! {
+    stack.run().await
+}
+
+async fn setup_tls(spawner: Spawner, net_device: NetDriver, mut control: Control) {
+    let mut rng = RoscRng;
+    let configuration = Config::dhcpv4(Default::default());
+    // Use static IP configuration instead of DHCP
+    //let config = embassy_net::Config::ipv4_static(embassy_net::StaticConfigV4 {
+    //    address: Ipv4Cidr::new(Ipv4Address::new(192, 168, 69, 2), 24),
+    //    dns_servers: Vec::new(),
+    //    gateway: Some(Ipv4Address::new(192, 168, 69, 1)),
+    //});
+
+    // Generate random seed
+    let seed = rng.next_u64();
+
+    // Initialize network stack
+    static STACK: StaticCell<Stack<NetDriver<'static>>> = StaticCell::new();
+    static RESOURCES: StaticCell<StackResources<5>> = StaticCell::new();
+    let stack = &*STACK.init(Stack::new(
+        net_device,
+        configuration, RESOURCES.init(StackResources::<5>::new()), seed));
+
+
+    unwrap!(spawner.spawn(net_task(stack)));
+
+    // Try to join the network
+    loop {
+        // Can also use join_open to join open networks
+        match control.join_wpa2(WIFI_NETWORK, WIFI_PASSWORD).await {
+            Ok(()) => break,
+            Err(error) => info!("Error joining network. Failed with status: {}", error),
+        }
+    }
+
+    info!("Waiting for DHCP");
+    // Waiting for DHCP is not necessary when using a static IP address
+    while !stack.is_config_up() {
+        Timer::after_millis(100).await;
+    }
+    info!("DHCP is up");
+
+    info!("Waiting for link up");
+    while !stack.is_link_up() {
+        Timer::after_millis(100).await;
+    }
+    info!("Link is up");
+
+    info!("Waiting for stack to be up");
+    stack.wait_config_up().await;
+    info!("Stack is up");
+
+    // Now we can use it
+
+    loop {
+        // Buffer to receive data
+        let mut rx_buffer = [0; 8_192];
+        let mut tls_read_buffer = [0; 16_640];
+        let mut tls_write_buffer = [0; 16_640];
+
+        let client_state = TcpClientState::<1, 1024, 1024>::new();
+        let tcp_client = TcpClient::new(stack, &client_state);
+        let dns_client = embassy_net::dns::DnsSocket::new(stack);
+        //TODO consider increasing security by including a pre shared key otherwise this is
+        // vulnerable to man in the middle attacks
+        let tls_configuration = TlsConfig::new(seed, &mut tls_read_buffer, &mut tls_write_buffer, TlsVerify::None);
+    }
 }
 
 #[embassy_executor::main]
