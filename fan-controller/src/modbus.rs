@@ -26,10 +26,11 @@ pub(super) const fn get_message_delay(baud_rate: u32) -> u64 {
     // Putting the division last to avoid add on effect of inaccurate floating point division
     const MICROSECONDS_FOR_BITS: u64 = 1_000_000 * DELAY_BITS;
 
+
     // Using floating point division to be closer to the logical mathematical result
     // (e.g. 3 / 2 = 1.5 instead of 1 with integer division)
-    let message_delay: f64 = MICROSECONDS_FOR_BITS as f64 / baud_rate as f64;
 
     // Round up as it is better to wait longer than too short
-    message_delay.ceil() as u64
+    MICROSECONDS_FOR_BITS.div_ceil(baud_rate as u64)
+
 }

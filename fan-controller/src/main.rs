@@ -204,8 +204,6 @@ async fn main(spawner: Spawner) {
         let result = uart.blocking_flush();
         info!("uart flush result: {:?}", result);
 
-
-
         // In addition to flushing we need to wait for some time before turning off data in on the
         // MAX845 because we might be too fast and cut off the last byte or more. (This happened)
         // I saw someone using 120 microseconds (https://youtu.be/i46jdhvRej4?t=886). This number
