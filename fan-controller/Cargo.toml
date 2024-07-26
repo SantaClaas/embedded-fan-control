@@ -17,6 +17,7 @@ embassy-net = { version = "0.4.0", features = ["defmt", "tcp", "dhcpv4", "dns"] 
 embassy-rp = { version = "0.1.0", features = ["defmt", "unstable-pac", "time-driver", "critical-section-impl"] }
 embassy-time = "0.3.1"
 mqttrust = "0.6.0"
+mqttrust_core = { version = "0.6.0", features = ["defmt"] }
 panic-probe = "0.3.2"
 portable-atomic = { version = "1.7", features = ["critical-section"] }
 reqwless = { version = "0.12.1", features = ["defmt"] }

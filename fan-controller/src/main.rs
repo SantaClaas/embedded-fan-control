@@ -29,6 +29,7 @@ use embassy_rp::{bind_interrupts, uart, Peripherals, Peripheral, pio, dma};
 use embassy_rp::clocks::RoscRng;
 use embassy_rp::spi::ClkPin;
 use embassy_time::{Duration, Timer};
+use mqttrust_core::bbqueue::BBBuffer;
 use reqwless::client::{TlsConfig, TlsVerify};
 use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
@@ -199,6 +200,16 @@ async fn setup_tls(spawner: Spawner, net_device: NetDriver, mut control: Control
         //TODO consider increasing security by including a pre shared key otherwise this is
         // vulnerable to man in the middle attacks
         let tls_configuration = TlsConfig::new(seed, &mut tls_read_buffer, &mut tls_write_buffer, TlsVerify::None);
+
+
+        // MQTT stuff following the examples in the mqttrust repository
+        static mut BUFFER: BBBuffer<{ 1024 * 6 }> = BBBuffer::new();
+
+        let (producer, consumer) = unsafe { BUFFER.try_split_framed().unwrap() };
+
+        let client_id = "mqtt_test_client_id";
+
+        let client = mqttrust_core::Client::new(producer, client_id);
     }
 }
 
