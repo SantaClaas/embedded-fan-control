@@ -17,17 +17,17 @@ use cyw43_pio::PioSpi;
 use defmt::*;
 use embassy_executor::Spawner;
 use embassy_futures::yield_now;
-use embassy_net::{Config, Stack, StackResources};
 use embassy_net::tcp::client::{TcpClient, TcpClientState};
+use embassy_net::{Config, Stack, StackResources};
+use embassy_rp::clocks::RoscRng;
 use embassy_rp::gpio::{Input, Level, Output, Pin, Pull};
 use embassy_rp::peripherals::{
     DMA_CH0, PIN_12, PIN_13, PIN_18, PIN_23, PIN_24, PIN_25, PIN_29, PIN_4, PIO0, UART0,
 };
 use embassy_rp::pio::{InterruptHandler, Pio, PioPin};
-use embassy_rp::uart::Uart;
-use embassy_rp::{bind_interrupts, uart, Peripherals, Peripheral, pio, dma};
-use embassy_rp::clocks::RoscRng;
 use embassy_rp::spi::ClkPin;
+use embassy_rp::uart::Uart;
+use embassy_rp::{bind_interrupts, dma, pio, uart, Peripheral, Peripherals};
 use embassy_time::{Duration, Timer};
 use mqttrust_core::bbqueue::BBBuffer;
 use reqwless::client::{TlsConfig, TlsVerify};
@@ -85,8 +85,8 @@ async fn gain_control(
     spawner: Spawner,
     pwr_pin: PIN_23,
     cs_pin: PIN_25,
-    pio: PIO0,//impl Peripheral<P=impl pio::Instance>,
-    dma: DMA_CH0,//impl Peripheral<P=impl dma::Channel>,
+    pio: PIO0,    //impl Peripheral<P=impl pio::Instance>,
+    dma: DMA_CH0, //impl Peripheral<P=impl dma::Channel>,
     dio: impl PioPin,
     clk: impl PioPin,
 ) -> Control<'static> {
@@ -105,15 +105,7 @@ async fn gain_control(
     let pwr = Output::new(pwr_pin, Level::Low);
     let cs = Output::new(cs_pin, Level::High);
     let mut pio = Pio::new(pio, Irqs);
-    let spi = PioSpi::new(
-        &mut pio.common,
-        pio.sm0,
-        pio.irq0,
-        cs,
-        dio,
-        clk,
-        dma,
-    );
+    let spi = PioSpi::new(&mut pio.common, pio.sm0, pio.irq0, cs, dio, clk, dma);
 
     static STATE: StaticCell<cyw43::State> = StaticCell::new();
     let state = STATE.init(cyw43::State::new());
@@ -155,8 +147,10 @@ async fn setup_tls(spawner: Spawner, net_device: NetDriver, mut control: Control
     static RESOURCES: StaticCell<StackResources<5>> = StaticCell::new();
     let stack = &*STACK.init(Stack::new(
         net_device,
-        configuration, RESOURCES.init(StackResources::<5>::new()), seed));
-
+        configuration,
+        RESOURCES.init(StackResources::<5>::new()),
+        seed,
+    ));
 
     unwrap!(spawner.spawn(net_task(stack)));
 
@@ -199,8 +193,12 @@ async fn setup_tls(spawner: Spawner, net_device: NetDriver, mut control: Control
         let dns_client = embassy_net::dns::DnsSocket::new(stack);
         //TODO consider increasing security by including a pre shared key otherwise this is
         // vulnerable to man in the middle attacks
-        let tls_configuration = TlsConfig::new(seed, &mut tls_read_buffer, &mut tls_write_buffer, TlsVerify::None);
-
+        let tls_configuration = TlsConfig::new(
+            seed,
+            &mut tls_read_buffer,
+            &mut tls_write_buffer,
+            TlsVerify::None,
+        );
 
         // MQTT stuff following the examples in the mqttrust repository
         static mut BUFFER: BBBuffer<{ 1024 * 6 }> = BBBuffer::new();
@@ -230,16 +228,7 @@ async fn main(spawner: Spawner) {
         ..
     } = embassy_rp::init(Default::default());
 
-    let mut control = gain_control(
-        spawner,
-        pin_23,
-        pin_25,
-        pio0,
-        dma_ch0,
-        pin_24,
-        pin_29,
-    )
-        .await;
+    let mut control = gain_control(spawner, pin_23, pin_25, pio0, dma_ch0, pin_24, pin_29).await;
 
     // UART things
     // PIN_4 seems to refer to GP4 on the Pico W pinout
@@ -280,7 +269,7 @@ async fn main(spawner: Spawner) {
             // 50%
             fan::State::High => fan::MAX_SET_POINT / 2,
         }
-            .to_be_bytes();
+        .to_be_bytes();
 
         control.gpio_set(0, true).await;
         // Form message to fan 1
