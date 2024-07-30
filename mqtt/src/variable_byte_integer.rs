@@ -15,7 +15,7 @@ fn encode_variable_byte_integer(mut value: u32) -> Vec<u8> {
 
         // x = 128 = 0b1000_0000
         // encoded_byte = 128 % 0b1000_0000 = 0
-        let mut encoded_byte = (value % 0b1000_0000);
+        let mut encoded_byte = value % 0b1000_0000;
 
         // x = 128 / 128 = 1
         value = value / 0b1000_0000;
@@ -59,7 +59,7 @@ const fn encode<const N: usize>(mut value: u32) -> [u8; N] {
     let mut index = 0;
 
     loop {
-        let mut encoded_byte = (value % 0b1000_0000);
+        let mut encoded_byte = value % 0b1000_0000;
         value = value / 0b1000_0000;
         if value > 0 {
             encoded_byte |= 0b1000_0000;

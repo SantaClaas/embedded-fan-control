@@ -1,11 +1,3 @@
-use std::net::ToSocketAddrs;
-use std::sync::Arc;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
-use tokio_rustls::rustls::{ClientConfig, RootCertStore};
-use tokio_rustls::rustls::pki_types::ServerName;
-use tokio_rustls::TlsConnector;
-use crate::AppError;
 
 pub(super) fn create_connect(client_identifier: &str, username: &str, password: &[u8]) -> Vec<u8> {
     //TODO validate identifier length is between 1 and 23 bytes and contains only valid characters

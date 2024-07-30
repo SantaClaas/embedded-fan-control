@@ -1,18 +1,13 @@
-mod variable_byte_integer;
 mod packet;
+mod variable_byte_integer;
 
 use bytes::BytesMut;
-use std::net::{AddrParseError, SocketAddr, ToSocketAddrs};
-use std::ops::{BitOrAssign, Rem};
-use std::rc::Rc;
-use std::str::FromStr;
+use std::net::{AddrParseError, ToSocketAddrs};
 use std::sync::Arc;
-use std::{cmp, env, ops};
-use tokio::fs::File;
+use std::env;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
-use tokio_rustls::client::TlsStream;
-use tokio_rustls::rustls::pki_types::{CertificateDer, InvalidDnsNameError, ServerName};
+use tokio_rustls::rustls::pki_types::{InvalidDnsNameError, ServerName};
 use tokio_rustls::rustls::{ClientConfig, RootCertStore};
 use tokio_rustls::TlsConnector;
 
@@ -141,7 +136,6 @@ async fn main() -> Result<(), AppError> {
                 let reason_string_length = stream.read_u16().await?;
                 bytes_remaining -= 2;
                 println!("Reason string length: {reason_string_length}");
-                // let mut buffer = Vec::with_capacity(reason_string_length as usize);
                 let mut buffer = BytesMut::with_capacity(reason_string_length as usize);
                 let bytes_read = stream.read_buf(&mut buffer).await?;
                 bytes_remaining -= bytes_read;
@@ -167,62 +161,10 @@ async fn main() -> Result<(), AppError> {
     // Publish a message
     let publish_packet = packet::create_publish("test", b"testpayload");
     stream.write_all(&publish_packet).await?;
-    // stream
-    //     .write_all(&[
-    //         // Fixed header
-    //         // Packet type PUBLISH (3) and flags
-    //         0b0011_0000,
-    //         //TODO Remaining length variable byte integer
-    //         13,
-    //         // Variable header
-    //         // Topic name length
-    //         0x00,
-    //         0x04,
-    //         // Topic name
-    //         b't',
-    //         b'e',
-    //         b's',
-    //         b't',
-    //         // Property length
-    //         0x00,
-    //         // Payload
-    //         b't',
-    //         b'e',
-    //         b's',
-    //         b't',
-    //         b'p',
-    //         b'l',
-    //     ])
-    //     .await?;
-    // 30 31 00 07 72 65 71 75 65 73 74 10 02 00 00 01 2c 08 00 08
-    // 72 65 73 70 6f 6e 73 65 54 68 69 73 20 69 73 20 61 20 51 6f
-    // 53 20 30 20 6d 65 73 73 61 67 65
-    // stream.write_all(&[
-    //     0b0011_0000,
-    //     0x31, 0x00, 0x07, 0x72, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x10, 0x02, 0x00, 0x00, 0x01, 0x2c, 0x08, 0x00, 0x08,
-    //     0x72, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x54, 0x68, 0x69, 0x73, 0x20, 0x69, 0x73, 0x20, 0x61, 0x20, 0x51, 0x6f,
-    //     0x53, 0x20, 0x30, 0x20, 0x6d, 0x65, 0x73, 0x73, 0x61, 0x67, 0x65,
-    // ]).await?;
 
     stream.flush().await?;
 
     // No PUBACK with Quality of Service 0
-    // PUBACK Fixed header
-    // println!("Reading response package type");
-    // let package_type = stream.read_u8().await?;
-    // println!(
-    //     "Package type: {package_type} {package_type:#x} {package_type:#010b} {}",
-    //     package_type >> 4
-    // );
-    // let remaining_length = stream.read_u8().await?;
-    // println!("Remaining length: {remaining_length}");
-    //
-    // // Disconnect package type
-    // if (package_type & 0b1110_0000) != 0 {
-    //     // Read reason for disconnect
-    //     let reason_code = stream.read_u8().await?;
-    //     println!("Reason code: {reason_code:#x} {reason_code:#010b}");
-    // }
 
     println!("Done");
     Ok(())
