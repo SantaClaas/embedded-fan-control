@@ -1,4 +1,3 @@
-
 pub(super) fn create_connect(client_identifier: &str, username: &str, password: &[u8]) -> Vec<u8> {
     //TODO validate identifier length is between 1 and 23 bytes and contains only valid characters
     let identifier_length = client_identifier.len() as u16;
@@ -88,31 +87,32 @@ pub(super) fn create_connect(client_identifier: &str, username: &str, password: 
 }
 
 pub(super) fn create_publish(topic_name: &str, payload: &[u8]) -> Vec<u8> {
-    let mut packet = Vec::with_capacity(0);
     // Shadowing topic name to not confuse str and bytes length
     let topic_name = topic_name.as_bytes();
     let topic_name_length = topic_name.len() as u16;
     let payload_length = payload.len() as u16;
 
+    // Remaining length is variable byte integer
+    // 2 = name length
+    // 1 = length property length bytes
+    //TODO ensure u32 is in less than variable byte integer max
+    let remaining_length: u32 = (2 + topic_name_length + 1 + payload_length) as u32;
+    let remaining_length_bytes = crate::variable_byte_integer::encode(remaining_length);
+    let mut packet =
+        Vec::with_capacity(1 + remaining_length_bytes.len() + remaining_length as usize);
+
     // Fixed header
     // Packet type PUBLISH (3) and flags
     packet.push(3 << 4);
-    //TODO ensure remaining length is less than max u8
-
-    // 2 = name length
-    // 1 = length property length bytes
-    let remaining_length: u8 = (2 + topic_name_length + 1 + payload_length) as u8;
-    packet.push(remaining_length);
+    packet.extend_from_slice(&remaining_length_bytes);
 
     // Variable header
     // Topic name length
     let length_bytes = topic_name_length.to_be_bytes();
     packet.push(length_bytes[0]);
     packet.push(length_bytes[1]);
-
     // Topic name
     packet.extend_from_slice(topic_name);
-
     // Property length
     // No properties supported for now so set to 0
     packet.push(0);
@@ -184,10 +184,11 @@ fn can_create_connect_packet() {
     );
 
     // Payload
+
+    #[rustfmt::skip]
     assert_eq!(
         connect_packet[13..],
         // Rust formatting is doing some wild stuff here for some reason
-        #[rustfmt::skip]
         [
             // Client identifier length
             0x00, 0x0e,

@@ -1,5 +1,8 @@
 /// Encodes an integer as variable byte integer according to the MQTT specification
-fn encode_variable_byte_integer(mut value: u32) -> Vec<u8> {
+pub(super) fn encode(mut value: u32) -> Vec<u8> {
+    //TODO Try to accept any integer type
+    //TODO Error if value is too large
+
     // Each byte can hold 7 bits, so how many 7 bit "bytes" do we need for 32 bits?
     // 32 / 7
     let length: usize = match value {
@@ -54,7 +57,7 @@ const fn length<const N: u32>() -> usize {
     panic!("Variable byte integer can only hold up to 268_435_455 which is 4 bytes");
 }
 
-const fn encode<const N: usize>(mut value: u32) -> [u8; N] {
+const fn encode_const<const N: usize>(mut value: u32) -> [u8; N] {
     let mut output = [0; N];
     let mut index = 0;
 
@@ -108,39 +111,33 @@ impl TryFrom<u32> for VariableByteIntegerVariant {
 #[test]
 fn can_encode_variable_byte_integer() {
     // Random examples from https://www.emqx.com/en/blog/mqtt-5-0-control-packets-01-connect-connack
-    assert_eq!(encode_variable_byte_integer(47), [0x2f]);
-    assert_eq!(encode_variable_byte_integer(19), [0x13]);
+    assert_eq!(encode_const(47), [0x2f]);
+    assert_eq!(encode_const(19), [0x13]);
 
     // Range one byte
-    assert_eq!(encode_variable_byte_integer(0), [0b0000_0000]);
-    assert_eq!(encode_variable_byte_integer(1), [0b0000_0001]);
-    assert_eq!(encode_variable_byte_integer(127), [0b0111_1111]);
+    assert_eq!(encode_const(0), [0b0000_0000]);
+    assert_eq!(encode_const(1), [0b0000_0001]);
+    assert_eq!(encode_const(127), [0b0111_1111]);
     // Range two bytes
-    assert_eq!(
-        encode_variable_byte_integer(128),
-        [0b1000_0000, 0b0000_0001]
-    );
-    assert_eq!(
-        encode_variable_byte_integer(16_383),
-        [0b1111_1111, 0b0111_1111]
-    );
+    assert_eq!(encode_const(128), [0b1000_0000, 0b0000_0001]);
+    assert_eq!(encode_const(16_383), [0b1111_1111, 0b0111_1111]);
 
     // Range three bytes
     assert_eq!(
-        encode_variable_byte_integer(16_384),
+        encode_const(16_384),
         [0b1000_0000, 0b1000_0000, 0b0000_0001]
     );
     assert_eq!(
-        encode_variable_byte_integer(2_097_151),
+        encode_const(2_097_151),
         [0b1111_1111, 0b1111_1111, 0b0111_1111]
     );
     // Range four bytes
     assert_eq!(
-        encode_variable_byte_integer(2_097_152),
+        encode_const(2_097_152),
         [0b1000_0000, 0b1000_0000, 0b1000_0000, 0b0000_0001]
     );
     assert_eq!(
-        encode_variable_byte_integer(268_435_455),
+        encode_const(268_435_455),
         [0b1111_1111, 0b1111_1111, 0b1111_1111, 0b0111_1111]
     );
 }
