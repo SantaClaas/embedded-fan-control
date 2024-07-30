@@ -2,9 +2,9 @@ mod packet;
 mod variable_byte_integer;
 
 use bytes::BytesMut;
+use std::env;
 use std::net::{AddrParseError, ToSocketAddrs};
 use std::sync::Arc;
-use std::env;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio_rustls::rustls::pki_types::{InvalidDnsNameError, ServerName};
@@ -157,9 +157,42 @@ async fn main() -> Result<(), AppError> {
         }
     }
 
-    println!("Sending PUBLISH");
+    println!("Sending discovery publish");
+
+    // homeassistant/{domain}/{object_id}/config
+
+    // Prefix is "homeassistant", but it can be changed in home assistant configuration
+    const DISCOVERY_TOPIC: &str = "homeassistant/fan/testfan/config";
+
+    // Configuration is like the YAML configuration that would be added in Home Assistant but as JSON
+    // Command topic: The MQTT topic to publish commands to change the state of the fan
+    //TODO set firmware version from Cargo.toml package version
+    //TODO think about setting hardware version, support url, and manufacturer
+    //TODO create single home assistant device with multiple entities for sensors in fan and the bypass
+    //TODO add diagnostic entity like IP address
+    //TODO availability topic
+    const DISCOVERY_PAYLOAD: &str = r#"{
+        "name": "Fan",
+        "unique_id": "testfan",
+        "state_topic": "testfan/on/state",
+        "command_topic": "testfan/on/set",
+        "percentage_state_topic": "testfan/speed/percentage_state",
+        "percentage_command_topic": "testfan/speed/percentage",
+
+        "preset_mode_state_topic": "testfan/preset_mode_state",
+        "preset_mode_command_topic": "testfan/preset_mode",
+        "preset_modes": ["off", "low", "medium", "high"],
+
+        "speed_range_min": 1,
+        "speed_range_max": 64000,
+        "qos": 0,
+        "optimistic": true
+    }"#;
+
+
+
     // Publish a message
-    let publish_packet = packet::create_publish("test", b"testpayload");
+    let publish_packet = packet::create_publish(DISCOVERY_TOPIC, DISCOVERY_PAYLOAD.as_bytes());
     stream.write_all(&publish_packet).await?;
 
     stream.flush().await?;
