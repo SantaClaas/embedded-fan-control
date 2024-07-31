@@ -229,12 +229,37 @@ async fn main() -> Result<(), AppError> {
     stream.flush().await?;
     println!("Sent subscribe packet");
 
-    // Try read for next packet
+    println!("Reading response package type");
     let packet_type = stream.read_u8().await?;
     println!(
         "Packet type: {packet_type} {packet_type:#x} {packet_type:#010b} {}",
         packet_type >> 4
     );
+
+    let mut remaining_length = stream.read_u8().await?;
+    println!("Remaining length: {remaining_length}");
+
+    let packet_identifier = stream.read_u16().await?;
+    println!("Packet identifier: {packet_identifier}");
+    remaining_length -= 2;
+
+    let property_length = stream.read_u8().await?;
+    println!("Property length: {property_length}");
+    remaining_length -= 1;
+
+    if property_length > 0 {
+        unimplemented!("Not implmemented property length > 0 handling");
+    }
+
+    // Payload
+    let reason_code = stream.read_u8().await?;
+    println!("Reason code: {reason_code}");
+    remaining_length -= 1;
+
+    println!("Remaining length: {}", remaining_length);
+    let whut = stream.read_u8().await?;
+    println!("what: {}", whut);
+    let whut = stream.read_u8().await?;
 
     println!("Done");
     Ok(())
