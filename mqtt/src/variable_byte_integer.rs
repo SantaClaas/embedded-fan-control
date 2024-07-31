@@ -6,7 +6,8 @@ pub(super) fn encode(mut value: u32) -> Vec<u8> {
     // Each byte can hold 7 bits, so how many 7 bit "bytes" do we need for 32 bits?
     // 32 / 7
     let length: usize = match value {
-        0..=127 => 1,
+        // Short circuit when it fits in one byte
+        0..=127 => return vec![value as u8],
         128..=16_383 => 2,
         16_384..=2_097_151 => 3,
         2_097_152..=268_435_455 => 4,

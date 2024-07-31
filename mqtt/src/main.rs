@@ -1,6 +1,7 @@
 mod packet;
 mod variable_byte_integer;
 
+use crate::packet::{QualityOfService, RetainHandling, Subscription, SubscriptionOptions};
 use bytes::BytesMut;
 use std::env;
 use std::net::{AddrParseError, ToSocketAddrs};
@@ -189,8 +190,6 @@ async fn main() -> Result<(), AppError> {
         "optimistic": true
     }"#;
 
-
-
     // Publish a message
     let publish_packet = packet::create_publish(DISCOVERY_TOPIC, DISCOVERY_PAYLOAD.as_bytes());
     stream.write_all(&publish_packet).await?;
@@ -198,6 +197,44 @@ async fn main() -> Result<(), AppError> {
     stream.flush().await?;
 
     // No PUBACK with Quality of Service 0
+
+    // Topics that were observed to be triggered when the state is change in Home Assistant UI
+    let topics = &[
+        // Listen to when the fan should be turned on or off
+        // Payload will be "ON" or "OFF"
+        Subscription::new(
+            "testfan/on/set",
+            SubscriptionOptions::new(
+                QualityOfService::AtMostOnceDelivery,
+                false,
+                false,
+                RetainHandling::DoNotSend,
+            ),
+        ),
+        // Listen to speed changes from home assistant
+        Subscription::new(
+            "testfan/speed/percentage",
+            SubscriptionOptions::new(
+                QualityOfService::AtMostOnceDelivery,
+                false,
+                false,
+                RetainHandling::DoNotSend,
+            ),
+        ),
+    ];
+
+    let subscribe_packet = packet::create_subscribe(9, topics);
+    println!("Sending subscribe packet");
+    stream.write_all(&subscribe_packet).await?;
+    stream.flush().await?;
+    println!("Sent subscribe packet");
+
+    // Try read for next packet
+    let packet_type = stream.read_u8().await?;
+    println!(
+        "Packet type: {packet_type} {packet_type:#x} {packet_type:#010b} {}",
+        packet_type >> 4
+    );
 
     println!("Done");
     Ok(())
