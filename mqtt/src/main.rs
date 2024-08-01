@@ -3,15 +3,17 @@ mod variable_byte_integer;
 
 use crate::packet::{QualityOfService, RetainHandling, Subscription, SubscriptionOptions};
 use bytes::BytesMut;
-use packet::PacketType;
+use packet::{ConnectErrorReasonCode, ConnectReasonCode, PacketType, UnkownConnectReasonCode};
 use std::env;
 use std::net::{AddrParseError, ToSocketAddrs};
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
+use tokio::sync::{mpsc, oneshot};
 use tokio_rustls::rustls::pki_types::{InvalidDnsNameError, ServerName};
 use tokio_rustls::rustls::{ClientConfig, RootCertStore};
 use tokio_rustls::TlsConnector;
+use variable_byte_integer::{DecodeVariableByteIntegerError, VariableByteInteger};
 
 #[derive(Debug, thiserror::Error)]
 enum AppError {
@@ -56,10 +58,209 @@ async fn set_up_tls_connection(
     Ok(stream)
 }
 
+enum MqttActorMessage {
+    Connect {
+        client_identifier: Arc<str>,
+        username: Arc<str>,
+        password: Arc<[u8]>,
+        responder: oneshot::Sender<Result<(), ConnectError>>,
+    },
+}
+
+struct MqttActor {
+    receiver: mpsc::Receiver<MqttActorMessage>,
+    stream: TcpStream,
+}
+
+/// Errors while reading the Connect Acknowledgement packet (CONNACK)
+#[derive(Debug)]
+enum ConnectAcknowledgementError {
+    /// The acknowledgement packet is smaller than the minimum length for an connect acknowledge packet
+    /// This might be due to having received an invalid packet type
+    InvalidLength,
+    /// The server sent a different packet type than connect acknowledgement (2)
+    UnexpectedPacketType(u8),
+    InvalidRemainingLength(DecodeVariableByteIntegerError),
+    /// The remaining length indicates bytes are missing
+    MissingData,
+    InvalidReasonCode(UnkownConnectReasonCode),
+    ErrorReasonCode(ConnectErrorReasonCode),
+}
+
+#[derive(Debug)]
+enum ConnectError {
+    EmptyResponse,
+    SendError(std::io::Error),
+    ReadAcknowledgementError(std::io::Error),
+    AcknowledgementError(ConnectAcknowledgementError),
+}
+
+fn read_connect_acknowledgement(
+    buffer: Vec<u8>,
+    bytes_read: usize,
+) -> Result<(), ConnectAcknowledgementError> {
+    // Fixed header
+    let packet_type_and_flags = buffer[0];
+    if (packet_type_and_flags >> 4) != 2 {
+        return Err(ConnectAcknowledgementError::UnexpectedPacketType(
+            packet_type_and_flags >> 4,
+        ));
+    }
+
+    //TODO determine minimum length for smallest CONNACK packet
+    if bytes_read < 2 {
+        return Err(ConnectAcknowledgementError::InvalidLength);
+    }
+
+    let (remaining_length, remaining_length_length) = VariableByteInteger::decode(&buffer)
+        .map_err(ConnectAcknowledgementError::InvalidRemainingLength)?;
+
+    if buffer.len() != 2 + remaining_length {
+        return Err(ConnectAcknowledgementError::MissingData);
+    }
+
+    // CONNACK Variable header
+    // Acknowledge flags
+    // Bit 7-1 are reserved and must be set to 0, although we don't validate this
+    // Bit 0 is the Session Present Flag
+    // let flags = buffer[remaining_length_length + 1];
+    // let is_session_present = (acknowledge_flags & 0b0000_0001) != 0;
+
+    let connect_reason_code = buffer[remaining_length + 2];
+    let code = ConnectReasonCode::try_from(connect_reason_code)
+        .map_err(ConnectAcknowledgementError::InvalidReasonCode)?;
+
+    if let ConnectReasonCode::Error(error_code) = code {
+        return Err(ConnectAcknowledgementError::ErrorReasonCode(error_code));
+    }
+
+    // Ignore properties for now
+    Ok(())
+}
+
+async fn connect(
+    stream: &mut TcpStream,
+    client_identifier: Arc<str>,
+    username: Arc<str>,
+    password: Arc<[u8]>,
+) -> Result<(), ConnectError> {
+    let packet = packet::create_connect(
+        client_identifier.as_ref(),
+        username.as_ref(),
+        password.as_ref(),
+    );
+
+    stream
+        .write_all(&packet)
+        .await
+        .map_err(ConnectError::SendError)?;
+
+    // We read the acknowledgemetn "synchronous" as we can't receive or send other packets before the connection is established
+    // Response for connection has to come in next
+    let mut buffer = Vec::default();
+    let bytes_read = stream
+        .read_to_end(&mut buffer)
+        .await
+        .map_err(ConnectError::ReadAcknowledgementError)?;
+
+    dbg!("here");
+    if bytes_read == 0 {
+        return Err(ConnectError::EmptyResponse);
+    }
+
+    read_connect_acknowledgement(buffer, bytes_read).map_err(ConnectError::AcknowledgementError)
+}
+
+async fn process_message(message: MqttActorMessage, stream: &mut TcpStream) {
+    match message {
+        MqttActorMessage::Connect {
+            client_identifier,
+            username,
+            password,
+            responder,
+        } => {
+            let result = connect(stream, client_identifier, username, password).await;
+
+            // Ignore error if they cancelled waiting for the response
+            let _ = responder.send(result);
+        }
+    }
+}
+fn process_mqtt_message(buffer: &Vec<u8>) {
+    todo!("Process MQTT message")
+}
+
+async fn run_actor(mut actor: MqttActor) {
+    let mut buffer = Vec::new();
+    loop {
+        // let a = actor.stream.read_to_end(&mut buffer).await;
+
+        tokio::select! {
+            Some(message) = actor.receiver.recv() => process_message(message, &mut actor.stream).await,
+            Ok(_bytes_read) = actor.stream.read_to_end(&mut buffer) => process_mqtt_message(&buffer),
+            else => break,
+        }
+
+        buffer.clear();
+    }
+}
+
+struct MqttActorHandle {
+    sender: mpsc::Sender<MqttActorMessage>,
+}
+
+#[derive(Debug)]
+enum HandleError<SE: std::error::Error, RE: std::error::Error, AE> {
+    SendError(SE),
+    ReceiveError(RE),
+    ActorError(AE),
+}
+
+impl MqttActorHandle {
+    fn new(stream: TcpStream) -> Self {
+        let (sender, receiver) = mpsc::channel(8);
+        let actor = MqttActor { stream, receiver };
+
+        tokio::spawn(run_actor(actor));
+
+        Self { sender }
+    }
+
+    async fn connect(
+        &self,
+        client_identifier: Arc<str>,
+        username: Arc<str>,
+        password: Arc<[u8]>,
+    ) -> Result<(), HandleError<impl std::error::Error, impl std::error::Error, ConnectError>> {
+        let (sender, receiver) = oneshot::channel();
+
+        type Error = HandleError<
+            mpsc::error::SendError<MqttActorMessage>,
+            oneshot::error::RecvError,
+            ConnectError,
+        >;
+
+        self.sender
+            .send(MqttActorMessage::Connect {
+                client_identifier,
+                username,
+                password,
+                responder: sender,
+            })
+            .await
+            .map_err(Error::SendError)?;
+
+        receiver
+            .await
+            .map_err(Error::ReceiveError)?
+            .map_err(Error::ActorError)
+    }
+}
+
 async fn set_up_tcp_connection(
     broker_address: String,
     broker_port: u16,
-) -> Result<impl AsyncReadExt + AsyncWriteExt, AppError> {
+) -> Result<TcpStream, AppError> {
     let address = (broker_address.as_ref(), broker_port)
         .to_socket_addrs()?
         .next()
@@ -80,14 +281,30 @@ async fn main() -> Result<(), AppError> {
     // The password might need to be surrounded by single quotes (e.g. 'password') to be read correctly
     let password = env::var("MQTT_BROKER_PASSWORD")?;
 
-    let mut stream = set_up_tcp_connection(broker_address, broker_port).await?;
+    // Could directly set it up in the handle new but eh
+    let stream = set_up_tcp_connection(broker_address, broker_port).await?;
+    let actor = MqttActorHandle::new(stream);
 
+    actor
+        .connect(
+            "testclient".into(),
+            username.into(),
+            password.as_bytes().into(),
+        )
+        .await
+        .unwrap();
+
+    println!("Connected");
+    Ok(())
+}
+
+async fn old_code() -> Result<(), AppError> {
     // MQTT
     // Good resource: https://www.emqx.com/en/blog/mqtt-5-0-control-packets-01-connect-connack
     // 3.1 CONNECT - Connection request
 
-    let connect_packet =
-        packet::create_connect("testclient", username.as_str(), password.as_bytes());
+    let stream: TcpStream = todo!();
+    let connect_packet = packet::create_connect("testclient", todo!(), todo!());
 
     stream.write_all(&connect_packet).await?;
 
@@ -268,5 +485,4 @@ async fn main() -> Result<(), AppError> {
     println!("Packet type {packet_type:?}");
 
     println!("Done");
-    Ok(())
 }

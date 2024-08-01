@@ -190,6 +190,7 @@ async fn setup_tls(spawner: Spawner, net_device: NetDriver, mut control: Control
 
         let client_state = TcpClientState::<1, 1024, 1024>::new();
         let tcp_client = TcpClient::new(stack, &client_state);
+
         let dns_client = embassy_net::dns::DnsSocket::new(stack);
         //TODO consider increasing security by including a pre shared key otherwise this is
         // vulnerable to man in the middle attacks

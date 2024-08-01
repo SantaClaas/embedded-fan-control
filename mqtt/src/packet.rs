@@ -255,8 +255,8 @@ pub(super) fn create_subscribe(packet_identifier: u16, subscriptions: &[Subscrip
     packet
 }
 
-pub enum ConnectReasonCode {
-    Success = 0x00,
+#[derive(Debug)]
+pub(super) enum ConnectErrorReasonCode {
     UnspecifiedError = 0x80,
     MalformedPacket = 0x81,
     ProtocolError = 0x82,
@@ -279,35 +279,79 @@ pub enum ConnectReasonCode {
     ServerMoved = 0x9D,
     ConnectionRateExceeded = 0x9F,
 }
+pub(super) enum ConnectReasonCode {
+    Success,
+    Error(ConnectErrorReasonCode),
+}
 
-pub struct UnkownConnectReasonCode(u8);
+#[derive(Debug)]
+pub(super) struct UnkownConnectReasonCode(u8);
 impl TryFrom<u8> for ConnectReasonCode {
     type Error = UnkownConnectReasonCode;
 
-    fn try_from(value: u8) -> Result<Self, Self::Error> {
+    fn try_from(value: u8) -> Result<Self, <Self as TryFrom<u8>>::Error> {
         match value {
             0x00 => Ok(ConnectReasonCode::Success),
-            0x80 => Ok(ConnectReasonCode::UnspecifiedError),
-            0x81 => Ok(ConnectReasonCode::MalformedPacket),
-            0x82 => Ok(ConnectReasonCode::ProtocolError),
-            0x83 => Ok(ConnectReasonCode::ImplementationSpecificError),
-            0x84 => Ok(ConnectReasonCode::UnsupportedProtocolVersion),
-            0x85 => Ok(ConnectReasonCode::ClientIdentifierNotValid),
-            0x86 => Ok(ConnectReasonCode::BadUserNameOrPassword),
-            0x87 => Ok(ConnectReasonCode::NotAuthorized),
-            0x88 => Ok(ConnectReasonCode::ServerUnavailable),
-            0x89 => Ok(ConnectReasonCode::ServerBusy),
-            0x8A => Ok(ConnectReasonCode::Banned),
-            0x8C => Ok(ConnectReasonCode::BadAuthenticationMethod),
-            0x90 => Ok(ConnectReasonCode::TopicNameInvalid),
-            0x95 => Ok(ConnectReasonCode::PacketTooLarge),
-            0x97 => Ok(ConnectReasonCode::QuotaExceeded),
-            0x99 => Ok(ConnectReasonCode::PayloadFormatInvalid),
-            0x9A => Ok(ConnectReasonCode::RetainNotSupported),
-            0x9B => Ok(ConnectReasonCode::QosNotSupported),
-            0x9C => Ok(ConnectReasonCode::UseAnotherServer),
-            0x9D => Ok(ConnectReasonCode::ServerMoved),
-            0x9F => Ok(ConnectReasonCode::ConnectionRateExceeded),
+            0x80 => Ok(ConnectReasonCode::Error(
+                ConnectErrorReasonCode::UnspecifiedError,
+            )),
+            0x81 => Ok(ConnectReasonCode::Error(
+                ConnectErrorReasonCode::MalformedPacket,
+            )),
+            0x82 => Ok(ConnectReasonCode::Error(
+                ConnectErrorReasonCode::ProtocolError,
+            )),
+            0x83 => Ok(ConnectReasonCode::Error(
+                ConnectErrorReasonCode::ImplementationSpecificError,
+            )),
+            0x84 => Ok(ConnectReasonCode::Error(
+                ConnectErrorReasonCode::UnsupportedProtocolVersion,
+            )),
+            0x85 => Ok(ConnectReasonCode::Error(
+                ConnectErrorReasonCode::ClientIdentifierNotValid,
+            )),
+            0x86 => Ok(ConnectReasonCode::Error(
+                ConnectErrorReasonCode::BadUserNameOrPassword,
+            )),
+            0x87 => Ok(ConnectReasonCode::Error(
+                ConnectErrorReasonCode::NotAuthorized,
+            )),
+            0x88 => Ok(ConnectReasonCode::Error(
+                ConnectErrorReasonCode::ServerUnavailable,
+            )),
+            0x89 => Ok(ConnectReasonCode::Error(ConnectErrorReasonCode::ServerBusy)),
+            0x8A => Ok(ConnectReasonCode::Error(ConnectErrorReasonCode::Banned)),
+            0x8C => Ok(ConnectReasonCode::Error(
+                ConnectErrorReasonCode::BadAuthenticationMethod,
+            )),
+            0x90 => Ok(ConnectReasonCode::Error(
+                ConnectErrorReasonCode::TopicNameInvalid,
+            )),
+            0x95 => Ok(ConnectReasonCode::Error(
+                ConnectErrorReasonCode::PacketTooLarge,
+            )),
+            0x97 => Ok(ConnectReasonCode::Error(
+                ConnectErrorReasonCode::QuotaExceeded,
+            )),
+            0x99 => Ok(ConnectReasonCode::Error(
+                ConnectErrorReasonCode::PayloadFormatInvalid,
+            )),
+            0x9A => Ok(ConnectReasonCode::Error(
+                ConnectErrorReasonCode::RetainNotSupported,
+            )),
+            0x9B => Ok(ConnectReasonCode::Error(
+                ConnectErrorReasonCode::QosNotSupported,
+            )),
+            0x9C => Ok(ConnectReasonCode::Error(
+                ConnectErrorReasonCode::UseAnotherServer,
+            )),
+            0x9D => Ok(ConnectReasonCode::Error(
+                ConnectErrorReasonCode::ServerMoved,
+            )),
+            0x9F => Ok(ConnectReasonCode::Error(
+                ConnectErrorReasonCode::ConnectionRateExceeded,
+            )),
+
             unknown => Err(UnkownConnectReasonCode(unknown)),
         }
     }

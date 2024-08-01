@@ -115,7 +115,7 @@ macro_rules! non_zero_usize {
 impl VariableByteInteger {
     const MAX: u32 = 268_435_455;
 
-    const fn encode(mut value: u32) -> Result<Self, VariableByteIntegerError> {
+    pub(super) const fn encode(mut value: u32) -> Result<Self, VariableByteIntegerError> {
         if value > Self::MAX {
             return Err(VariableByteIntegerError::TooLarge);
         }
@@ -141,6 +141,47 @@ impl VariableByteInteger {
             }
         }
         Ok(Self(output))
+    }
+
+    pub(super) const fn decode(
+        buffer: &[u8],
+    ) -> Result<(usize, usize), DecodeVariableByteIntegerError> {
+        // The buffer is allowed to be longer than the 4 bytes we need as we will only read the bytes necessary
+        // But a variable byte integer has to be at least one byte
+        if buffer.is_empty() {
+            return Err(DecodeVariableByteIntegerError::EmptyInput);
+        }
+
+        let mut multiplier = 1;
+        let mut value = 0;
+        let mut index = 0;
+
+        loop {
+            let encoded_byte = buffer[index];
+            index += 1;
+
+            value += (encoded_byte & 127) as usize * multiplier;
+
+            if multiplier > 128 * 128 * 128 {
+                return Err(DecodeVariableByteIntegerError::MalformedVariableByteIntegerError);
+            }
+
+            multiplier *= 128;
+
+            // The last byte has the most significant bit set to 0 indicating that there are no more bytes to follow
+            if (encoded_byte & 128) == 0 {
+                break;
+            }
+
+            // The current byte indicates the next byte is part of the integer but we would be past 4 bytes
+            if index > 4 {
+                return Err(DecodeVariableByteIntegerError::InvalidLength);
+            }
+        }
+
+        // As index is immediately increased it reflects the length at this point
+        // index is usize but can't pass the value 4
+        Ok((value, index))
     }
 
     /// Returns the length of the encoded integer in bytes which is either 1, 2, 3 or 4.
@@ -197,9 +238,14 @@ fn can_encode_variable_byte_integer() {
 }
 
 #[derive(Debug)]
-enum DecodeVariableByteIntegerError {
+pub(super) enum DecodeVariableByteIntegerError {
+    /// The bytes provided had a length of 0
+    EmptyInput,
     MalformedVariableByteIntegerError,
+    /// The last byte indicates that the next byte is part of the variable byte integer but there was no next byte
     UnexpectedEndOfInput,
+    // The variable byte integer is longer than 4 bytes
+    InvalidLength,
 }
 
 fn decode_variable_byte_integer(
