@@ -145,6 +145,7 @@ impl VariableByteInteger {
         Ok(Self(output))
     }
 
+    //TODO clean up having all these decode and encode versions
     pub(super) async fn decode(
         stream: &mut TcpStream,
     ) -> Result<(usize, usize), DecodeVariableByteIntegerError> {
@@ -154,6 +155,39 @@ impl VariableByteInteger {
 
         loop {
             let encoded_byte = stream.read_u8().await?;
+            index += 1;
+
+            value += (encoded_byte & 127) as usize * multiplier;
+
+            if multiplier > 128 * 128 * 128 {
+                return Err(DecodeVariableByteIntegerError::MalformedVariableByteIntegerError);
+            }
+
+            multiplier *= 128;
+
+            // The last byte has the most significant bit set to 0 indicating that there are no more bytes to follow
+            if (encoded_byte & 128) == 0 {
+                break;
+            }
+
+            // The current byte indicates the next byte is part of the integer but we would be past 4 bytes
+            if index > 4 {
+                return Err(DecodeVariableByteIntegerError::InvalidLength);
+            }
+        }
+
+        // As index is immediately increased it reflects the length at this point
+        // index is usize but can't pass the value 4
+        Ok((value, index))
+    }
+
+    pub(super) fn decode_2(bytes: &[u8]) -> Result<(usize, usize), DecodeVariableByteIntegerError> {
+        let mut multiplier = 1;
+        let mut value = 0;
+        let mut index = 0;
+
+        loop {
+            let encoded_byte = bytes[index];
             index += 1;
 
             value += (encoded_byte & 127) as usize * multiplier;

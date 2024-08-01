@@ -1,4 +1,4 @@
-use std::convert::TryFrom;
+use std::{convert::TryFrom, sync::Arc};
 
 pub(super) fn create_connect(client_identifier: &str, username: &str, password: &[u8]) -> Vec<u8> {
     let identifier_length = client_identifier.len() as u16;
@@ -194,20 +194,20 @@ impl SubscriptionOptions {
     }
 }
 
-pub(super) struct Subscription<'a> {
-    topic_filter: &'a str,
+pub(super) struct Subscription {
+    pub(super) topic_filter: Arc<str>,
     options: SubscriptionOptions,
 }
 
-impl<'a> Subscription<'a> {
-    pub(super) const fn new(topic_filter: &'a str, options: SubscriptionOptions) -> Self {
+impl Subscription {
+    pub(super) fn new(topic_filter: Arc<str>, options: SubscriptionOptions) -> Self {
         Self {
             options,
             topic_filter,
         }
     }
 
-    const fn length(&self) -> usize {
+    fn length(&self) -> usize {
         self.topic_filter.len() + size_of::<u8>()
     }
 }
