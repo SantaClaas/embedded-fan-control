@@ -1,3 +1,5 @@
+use std::num::{NonZero, NonZeroUsize};
+
 /// Encodes an integer as variable byte integer according to the MQTT specification
 pub(super) fn encode(mut value: u32) -> Vec<u8> {
     //TODO Try to accept any integer type
@@ -77,35 +79,86 @@ const fn encode_const<const N: usize>(mut value: u32) -> [u8; N] {
     output
 }
 
-trait VariableByteInteger {
-    const LENGTH: usize;
-    const MAX: u32 = 268_435_455;
-}
-
-enum VariableByteIntegerVariant {
-    OneByte([u8; 1]),
-    TwoBytes([u8; 2]),
-    ThreeBytes([u8; 3]),
-    FourBytes([u8; 4]),
-}
-
 enum VariableByteIntegerError {
-    // The integer is too large to be encoded.
+    /// The integer is larger than 268,435,455  ([VariableByteInteger::MAX]).
     TooLarge,
 }
 
-impl TryFrom<u32> for VariableByteIntegerVariant {
-    type Error = VariableByteIntegerError;
+/// The variable byte integer is an integer that can be encoded in 1-4 bytes.
+/// The first bit of every byte is a continuation bit, if it is set, the next byte is also part of the integer.
+/// Internally it is represented as a 4 byte array because variable size byte arrays with known size at compile time is hard.
+/// And we can't use vectors because they are not const and no std.
+/// So this really just saves on data send on the wire.
+pub(super) struct VariableByteInteger([u8; 4]);
 
-    fn try_from(value: u32) -> Result<Self, Self::Error> {
-        let length = match value {
-            0..=127 => 1,
-            128..=16_383 => 2,
-            16_384..=2_097_151 => 3,
-            2_097_152..=268_435_455 => 4,
-            _ => return Err(VariableByteIntegerError::TooLarge),
+/// Helps to mark an integer as a non zero integer when you know at compile time that it is not zero
+macro_rules! non_zero_usize {
+    (0) => {
+        compile_error!("0 is not a valid NonZeroUsize")
+    };
+    ($value:expr) => {{
+        const VALUE: NonZeroUsize = {
+            let Some(value) = NonZeroUsize::new($value) else {
+                // Using compile_error!() would always cause a compile error.
+                // So panic at const time it is
+                // Formatting goes strange here
+            panic!(stringify!($value is not a valid NonZeroUsize));
+            };
+
+            value
         };
-        todo!()
+
+        VALUE
+    }};
+}
+
+impl VariableByteInteger {
+    const MAX: u32 = 268_435_455;
+
+    const fn encode(mut value: u32) -> Result<Self, VariableByteIntegerError> {
+        if value > Self::MAX {
+            return Err(VariableByteIntegerError::TooLarge);
+        }
+
+        // Short circuit if it fits in one byte (0-127)
+        if value < 128 {
+            return Ok(Self([value as u8, 0, 0, 0]));
+        }
+
+        let mut output = [0; 4];
+        let mut index = 0;
+
+        loop {
+            let mut encoded_byte = value % 0b1000_0000;
+            value = value / 0b1000_0000;
+            if value > 0 {
+                encoded_byte |= 0b1000_0000;
+            }
+            output[index] = encoded_byte as u8;
+            index += 1;
+            if value == 0 {
+                break;
+            }
+        }
+        Ok(Self(output))
+    }
+
+    /// Returns the length of the encoded integer in bytes which is either 1, 2, 3 or 4.
+    /// This helps to determine how many bytes are needed on the wire to represent this integer.
+    const fn length(&self) -> NonZero<usize> {
+        if (self.0[2] & 0b1000_0000) != 0 {
+            return non_zero_usize!(4);
+        }
+
+        if (self.0[1] & 0b1000_0000) != 0 {
+            return non_zero_usize!(3);
+        }
+
+        if (self.0[0] & 0b1000_0000) != 0 {
+            return non_zero_usize!(2);
+        }
+
+        return non_zero_usize!(1);
     }
 }
 
