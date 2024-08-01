@@ -3,6 +3,7 @@ mod variable_byte_integer;
 
 use crate::packet::{QualityOfService, RetainHandling, Subscription, SubscriptionOptions};
 use bytes::BytesMut;
+use packet::PacketType;
 use std::env;
 use std::net::{AddrParseError, ToSocketAddrs};
 use std::sync::Arc;
@@ -95,9 +96,10 @@ async fn main() -> Result<(), AppError> {
     println!("Flushed");
 
     // CONNACK Fixed header
-    println!("Reading response package type");
-    let package_type = stream.read_u8().await?;
-    println!("Package type: {package_type} {package_type:#x} {package_type:#010b}");
+    println!("Reading response packet type");
+    let packet_type_and_flags = stream.read_u8().await?;
+    let packet_type = PacketType::try_from(packet_type_and_flags);
+    println!("Packet type: {packet_type:?}");
 
     let remaining_length = stream.read_u8().await?;
     println!("Remaining length: {remaining_length}");
@@ -230,11 +232,11 @@ async fn main() -> Result<(), AppError> {
     println!("Sent subscribe packet");
 
     println!("Reading response package type");
-    let packet_type = stream.read_u8().await?;
-    println!(
-        "Packet type: {packet_type} {packet_type:#x} {packet_type:#010b} {}",
-        packet_type >> 4
-    );
+
+    let packet_type_and_flags = stream.read_u8().await?;
+    let packet_type = PacketType::try_from(packet_type_and_flags);
+
+    println!("Packet type: {packet_type:?}");
 
     let mut remaining_length = stream.read_u8().await?;
     println!("Remaining length: {remaining_length}");
@@ -257,9 +259,13 @@ async fn main() -> Result<(), AppError> {
     remaining_length -= 1;
 
     println!("Remaining length: {}", remaining_length);
+    //TODO figure out what this trailing byte in the subscribe acknolwedgement is
     let whut = stream.read_u8().await?;
     println!("what: {}", whut);
-    let whut = stream.read_u8().await?;
+    // Packet type of next packet
+    let packet_type_and_flags = stream.read_u8().await?;
+    let packet_type = PacketType::try_from(packet_type_and_flags);
+    println!("Packet type {packet_type:?}");
 
     println!("Done");
     Ok(())

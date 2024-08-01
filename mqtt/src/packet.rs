@@ -1,3 +1,5 @@
+use std::convert::TryFrom;
+
 pub(super) fn create_connect(client_identifier: &str, username: &str, password: &[u8]) -> Vec<u8> {
     let identifier_length = client_identifier.len() as u16;
 
@@ -251,6 +253,112 @@ pub(super) fn create_subscribe(packet_identifier: u16, subscriptions: &[Subscrip
     }
 
     packet
+}
+
+pub enum ConnectReasonCode {
+    Success = 0x00,
+    UnspecifiedError = 0x80,
+    MalformedPacket = 0x81,
+    ProtocolError = 0x82,
+    ImplementationSpecificError = 0x83,
+    UnsupportedProtocolVersion = 0x84,
+    ClientIdentifierNotValid = 0x85,
+    BadUserNameOrPassword = 0x86,
+    NotAuthorized = 0x87,
+    ServerUnavailable = 0x88,
+    ServerBusy = 0x89,
+    Banned = 0x8A,
+    BadAuthenticationMethod = 0x8C,
+    TopicNameInvalid = 0x90,
+    PacketTooLarge = 0x95,
+    QuotaExceeded = 0x97,
+    PayloadFormatInvalid = 0x99,
+    RetainNotSupported = 0x9A,
+    QosNotSupported = 0x9B,
+    UseAnotherServer = 0x9C,
+    ServerMoved = 0x9D,
+    ConnectionRateExceeded = 0x9F,
+}
+
+pub struct UnkownConnectReasonCode(u8);
+impl TryFrom<u8> for ConnectReasonCode {
+    type Error = UnkownConnectReasonCode;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0x00 => Ok(ConnectReasonCode::Success),
+            0x80 => Ok(ConnectReasonCode::UnspecifiedError),
+            0x81 => Ok(ConnectReasonCode::MalformedPacket),
+            0x82 => Ok(ConnectReasonCode::ProtocolError),
+            0x83 => Ok(ConnectReasonCode::ImplementationSpecificError),
+            0x84 => Ok(ConnectReasonCode::UnsupportedProtocolVersion),
+            0x85 => Ok(ConnectReasonCode::ClientIdentifierNotValid),
+            0x86 => Ok(ConnectReasonCode::BadUserNameOrPassword),
+            0x87 => Ok(ConnectReasonCode::NotAuthorized),
+            0x88 => Ok(ConnectReasonCode::ServerUnavailable),
+            0x89 => Ok(ConnectReasonCode::ServerBusy),
+            0x8A => Ok(ConnectReasonCode::Banned),
+            0x8C => Ok(ConnectReasonCode::BadAuthenticationMethod),
+            0x90 => Ok(ConnectReasonCode::TopicNameInvalid),
+            0x95 => Ok(ConnectReasonCode::PacketTooLarge),
+            0x97 => Ok(ConnectReasonCode::QuotaExceeded),
+            0x99 => Ok(ConnectReasonCode::PayloadFormatInvalid),
+            0x9A => Ok(ConnectReasonCode::RetainNotSupported),
+            0x9B => Ok(ConnectReasonCode::QosNotSupported),
+            0x9C => Ok(ConnectReasonCode::UseAnotherServer),
+            0x9D => Ok(ConnectReasonCode::ServerMoved),
+            0x9F => Ok(ConnectReasonCode::ConnectionRateExceeded),
+            unknown => Err(UnkownConnectReasonCode(unknown)),
+        }
+    }
+}
+
+enum ConnectAcknowledgementProperty {}
+
+#[derive(Debug)]
+pub(super) enum PacketType {
+    Connect = 1,
+    ConnectAcknowledgement = 2,
+    Publish = 3,
+    PublishAcknowledgement = 4,
+    PublishReceived = 5,
+    PublishRelease = 6,
+    PublishComplete = 7,
+    Subscribe = 8,
+    SubscribeAcknowledgement = 9,
+    Unsubscribe = 10,
+    UnsubscribeAcknowledgement = 11,
+    PingRequest = 12,
+    PingResponse = 13,
+    Disconnect = 14,
+    Authentication = 15,
+}
+
+#[derive(Debug)]
+pub(super) struct UnknownPacketTypeError(u8);
+impl TryFrom<u8> for PacketType {
+    type Error = UnknownPacketTypeError;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value >> 4 {
+            1 => Ok(PacketType::Connect),
+            2 => Ok(PacketType::ConnectAcknowledgement),
+            3 => Ok(PacketType::Publish),
+            4 => Ok(PacketType::PublishAcknowledgement),
+            5 => Ok(PacketType::PublishReceived),
+            6 => Ok(PacketType::PublishRelease),
+            7 => Ok(PacketType::PublishComplete),
+            8 => Ok(PacketType::Subscribe),
+            9 => Ok(PacketType::SubscribeAcknowledgement),
+            10 => Ok(PacketType::Unsubscribe),
+            11 => Ok(PacketType::UnsubscribeAcknowledgement),
+            12 => Ok(PacketType::PingRequest),
+            13 => Ok(PacketType::PingResponse),
+            14 => Ok(PacketType::Disconnect),
+            15 => Ok(PacketType::Authentication),
+            unknown => Err(UnknownPacketTypeError(unknown)),
+        }
+    }
 }
 
 #[cfg(test)]
