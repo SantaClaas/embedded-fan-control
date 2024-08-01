@@ -279,15 +279,17 @@ pub(super) enum ConnectErrorReasonCode {
     ServerMoved = 0x9D,
     ConnectionRateExceeded = 0x9F,
 }
+
 pub(super) enum ConnectReasonCode {
     Success,
     Error(ConnectErrorReasonCode),
 }
 
-#[derive(Debug)]
-pub(super) struct UnkownConnectReasonCode(u8);
+#[derive(Debug, thiserror::Error)]
+#[error("Unknown connect reason code: {0}")]
+pub(super) struct UnknownConnectReasonCode(u8);
 impl TryFrom<u8> for ConnectReasonCode {
-    type Error = UnkownConnectReasonCode;
+    type Error = UnknownConnectReasonCode;
 
     fn try_from(value: u8) -> Result<Self, <Self as TryFrom<u8>>::Error> {
         match value {
@@ -352,7 +354,7 @@ impl TryFrom<u8> for ConnectReasonCode {
                 ConnectErrorReasonCode::ConnectionRateExceeded,
             )),
 
-            unknown => Err(UnkownConnectReasonCode(unknown)),
+            unknown => Err(UnknownConnectReasonCode(unknown)),
         }
     }
 }

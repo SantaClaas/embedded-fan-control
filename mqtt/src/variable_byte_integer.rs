@@ -1,5 +1,7 @@
 use std::num::{NonZero, NonZeroUsize};
 
+use tokio::{io::AsyncReadExt, net::TcpStream};
+
 /// Encodes an integer as variable byte integer according to the MQTT specification
 pub(super) fn encode(mut value: u32) -> Vec<u8> {
     //TODO Try to accept any integer type
@@ -143,21 +145,15 @@ impl VariableByteInteger {
         Ok(Self(output))
     }
 
-    pub(super) const fn decode(
-        buffer: &[u8],
+    pub(super) async fn decode(
+        stream: &mut TcpStream,
     ) -> Result<(usize, usize), DecodeVariableByteIntegerError> {
-        // The buffer is allowed to be longer than the 4 bytes we need as we will only read the bytes necessary
-        // But a variable byte integer has to be at least one byte
-        if buffer.is_empty() {
-            return Err(DecodeVariableByteIntegerError::EmptyInput);
-        }
-
         let mut multiplier = 1;
         let mut value = 0;
         let mut index = 0;
 
         loop {
-            let encoded_byte = buffer[index];
+            let encoded_byte = stream.read_u8().await?;
             index += 1;
 
             value += (encoded_byte & 127) as usize * multiplier;
@@ -237,14 +233,16 @@ fn can_encode_variable_byte_integer() {
     );
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub(super) enum DecodeVariableByteIntegerError {
-    /// The bytes provided had a length of 0
-    EmptyInput,
+    #[error("Error reading from stream: {0}")]
+    ReadError(#[from] std::io::Error),
+    #[error("The variable byte integer is malformed")]
     MalformedVariableByteIntegerError,
     /// The last byte indicates that the next byte is part of the variable byte integer but there was no next byte
+    #[error("The variable byte ended unexpectedly")]
     UnexpectedEndOfInput,
-    // The variable byte integer is longer than 4 bytes
+    #[error("The variable byte integer is longer than 4 bytes")]
     InvalidLength,
 }
 

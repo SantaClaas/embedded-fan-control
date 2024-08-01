@@ -3,7 +3,7 @@ mod variable_byte_integer;
 
 use crate::packet::{QualityOfService, RetainHandling, Subscription, SubscriptionOptions};
 use bytes::BytesMut;
-use packet::{ConnectErrorReasonCode, ConnectReasonCode, PacketType, UnkownConnectReasonCode};
+use packet::{ConnectErrorReasonCode, ConnectReasonCode, PacketType, UnknownConnectReasonCode};
 use std::env;
 use std::net::{AddrParseError, ToSocketAddrs};
 use std::sync::Arc;
@@ -73,60 +73,54 @@ struct MqttActor {
 }
 
 /// Errors while reading the Connect Acknowledgement packet (CONNACK)
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 enum ConnectAcknowledgementError {
-    /// The acknowledgement packet is smaller than the minimum length for an connect acknowledge packet
-    /// This might be due to having received an invalid packet type
-    InvalidLength,
+    #[error("Error while reading from the stream: {0}")]
+    ReadError(#[from] std::io::Error),
     /// The server sent a different packet type than connect acknowledgement (2)
+    #[error("Unexpected packet type: {0:#04x}")]
     UnexpectedPacketType(u8),
+    #[error("Invalid remaining length: {0}")]
     InvalidRemainingLength(DecodeVariableByteIntegerError),
-    /// The remaining length indicates bytes are missing
-    MissingData,
-    InvalidReasonCode(UnkownConnectReasonCode),
+    #[error("Invalid reason code: {0}")]
+    InvalidReasonCode(UnknownConnectReasonCode),
+    #[error("Error reason code: {0:?}")]
     ErrorReasonCode(ConnectErrorReasonCode),
 }
 
 #[derive(Debug)]
 enum ConnectError {
-    EmptyResponse,
     SendError(std::io::Error),
-    ReadAcknowledgementError(std::io::Error),
     AcknowledgementError(ConnectAcknowledgementError),
 }
 
-fn read_connect_acknowledgement(
-    buffer: Vec<u8>,
-    bytes_read: usize,
+async fn read_connect_acknowledgement(
+    stream: &mut TcpStream,
 ) -> Result<(), ConnectAcknowledgementError> {
     // Fixed header
-    let packet_type_and_flags = buffer[0];
+    let packet_type_and_flags = stream.read_u8().await?;
     if (packet_type_and_flags >> 4) != 2 {
         return Err(ConnectAcknowledgementError::UnexpectedPacketType(
             packet_type_and_flags >> 4,
         ));
     }
 
-    //TODO determine minimum length for smallest CONNACK packet
-    if bytes_read < 2 {
-        return Err(ConnectAcknowledgementError::InvalidLength);
-    }
-
-    let (remaining_length, remaining_length_length) = VariableByteInteger::decode(&buffer)
+    let (remaining_length, _remaining_length_length) = VariableByteInteger::decode(stream)
+        .await
         .map_err(ConnectAcknowledgementError::InvalidRemainingLength)?;
 
-    if buffer.len() != 2 + remaining_length {
-        return Err(ConnectAcknowledgementError::MissingData);
-    }
+    let mut buffer = Vec::with_capacity(remaining_length);
+    // Could warn if we read less or more than remaining_length
+    let _bytes_read = stream.read_buf(&mut buffer).await?;
 
     // CONNACK Variable header
     // Acknowledge flags
     // Bit 7-1 are reserved and must be set to 0, although we don't validate this
     // Bit 0 is the Session Present Flag
-    // let flags = buffer[remaining_length_length + 1];
-    // let is_session_present = (acknowledge_flags & 0b0000_0001) != 0;
+    // let flags = stream.read_u8().await?;
+    // let is_session_present = (flags & 0b0000_0001) != 0;
 
-    let connect_reason_code = buffer[remaining_length + 2];
+    let connect_reason_code = buffer[1];
     let code = ConnectReasonCode::try_from(connect_reason_code)
         .map_err(ConnectAcknowledgementError::InvalidReasonCode)?;
 
@@ -157,18 +151,10 @@ async fn connect(
 
     // We read the acknowledgemetn "synchronous" as we can't receive or send other packets before the connection is established
     // Response for connection has to come in next
-    let mut buffer = Vec::default();
-    let bytes_read = stream
-        .read_to_end(&mut buffer)
+
+    read_connect_acknowledgement(stream)
         .await
-        .map_err(ConnectError::ReadAcknowledgementError)?;
-
-    dbg!("here");
-    if bytes_read == 0 {
-        return Err(ConnectError::EmptyResponse);
-    }
-
-    read_connect_acknowledgement(buffer, bytes_read).map_err(ConnectError::AcknowledgementError)
+        .map_err(ConnectError::AcknowledgementError)
 }
 
 async fn process_message(message: MqttActorMessage, stream: &mut TcpStream) {
