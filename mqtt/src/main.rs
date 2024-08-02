@@ -9,6 +9,7 @@ use std::env;
 use std::net::{AddrParseError, ToSocketAddrs};
 use std::str::Utf8Error;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, oneshot};
@@ -403,7 +404,7 @@ async fn process_message(message: MqttActorMessage, stream: &mut TcpStream) {
     }
 }
 
-fn process_publish(publish: Publish) {
+async fn process_publish(publish: Publish, stream: &mut TcpStream) {
     println!("Received publish");
     println!("Topic: {}", publish.topic_name);
     println!("Payload: {:?}", publish.payload);
@@ -434,6 +435,20 @@ fn process_publish(publish: Publish) {
                     eprintln!("Expected speed percentage to be a number: {}", error);
                 }
             }
+
+            //TODO implement debounce. Gather all update requests for a while and only send the latest if there hasn't been any in specific time window. This should avoid overburdening the modbus channel and avoid weird race conditions
+            // Mock sending update to the device
+            tokio::time::sleep(Duration::from_secs(1)).await;
+
+            // Send update through publish to percentage_state_topic
+            let result = crate::publish(
+                stream,
+                "testfan/speed/percentage_state".into(),
+                publish.payload,
+            )
+            .await;
+            //TODO error handling: sink the result in some log or something
+            println!("Published result: {:?}", result);
         }
         "testfan/on/set" => {
             let payload = match std::str::from_utf8(&publish.payload) {
@@ -461,6 +476,14 @@ fn process_publish(publish: Publish) {
                     );
                 }
             }
+
+            //TODO implement debounce. Gather all update requests for a while and only send the latest if there hasn't been any in specific time window. This should avoid overburdening the modbus channel and avoid weird race conditions
+            // Mock sending update to the device
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            // We just echo the state send to us
+            let result = crate::publish(stream, "testfan/on/state".into(), publish.payload).await;
+            //TODO error handling: sink the result in some log or something
+            println!("Published result: {:?}", result);
         }
         unexpected => {
             eprintln!(
@@ -476,7 +499,7 @@ async fn run_actor(mut actor: MqttActor) {
 
         tokio::select! {
             Some(message) = actor.receiver.recv() => process_message(message, &mut actor.stream).await,
-            Ok(publish) = read_publish(&mut actor.stream) => process_publish(publish),
+            Ok(publish) = read_publish(&mut actor.stream) => process_publish(publish, &mut actor.stream).await,
             else => break,
         }
     }
@@ -654,7 +677,7 @@ async fn main() -> Result<(), AppError> {
     // pct_cmd_t -> percentage_command_topic
     // spd_rng_max -> speed_range_max
     // Don't need to set speed_range_min because it is 1 by default
-    //TODO remove whitespace
+    //TODO remove whitespace at compile time through macro, build script or const fn
     const DISCOVERY_PAYLOAD: &[u8] = br#"{
         "name": "Fan",
         "uniq_id": "testfan",
