@@ -1,6 +1,11 @@
 use std::{convert::TryFrom, sync::Arc};
 
-pub(super) fn create_connect(client_identifier: &str, username: &str, password: &[u8]) -> Vec<u8> {
+/// KA: Keep alive in seconds
+pub(super) fn create_connect<const KA: u16>(
+    client_identifier: &str,
+    username: &str,
+    password: &[u8],
+) -> Vec<u8> {
     let identifier_length = client_identifier.len() as u16;
 
     // Length is length of bytes not characters
@@ -13,8 +18,30 @@ pub(super) fn create_connect(client_identifier: &str, username: &str, password: 
     //TODO use variable byte integer
     //TODO check length is not exceeding variable byte integer max
 
+    // Create variable header
+    let variable_header: [u8; 11] = [
+        // Protocol name length
+        0x00,
+        0x04,
+        // Protocol name
+        b'M',
+        b'Q',
+        b'T',
+        b'T',
+        // Protocol version
+        5,
+        // Connect Flags
+        // USER_NAME_FLAG | PASSWORD_FLAG | CLEAN_START
+        0b1100_0010,
+        // Keep alive
+        (KA >> 8) as u8,
+        KA as u8,
+        // Property length 0 (no properties). Has to be set to 0 if there are no properties
+        0,
+    ];
+
     // 2 = length of length fields
-    let remaining_length: u8 = (VARIABLE_HEADER.len() as u16
+    let remaining_length: u8 = (variable_header.len() as u16
         + 2
         + identifier_length
         + 2
@@ -30,34 +57,12 @@ pub(super) fn create_connect(client_identifier: &str, username: &str, password: 
         remaining_length,
     ];
 
-    // Create variable header
-    const VARIABLE_HEADER: [u8; 11] = [
-        // Protocol name length
-        0x00,
-        0x04,
-        // Protocol name
-        b'M',
-        b'Q',
-        b'T',
-        b'T',
-        // Protocol version
-        5,
-        // Connect Flags
-        // USER_NAME_FLAG | PASSWORD_FLAG | CLEAN_START
-        0b1100_0010,
-        // Keep alive = 60 seconds
-        0x00,
-        60,
-        // Property length 0 (no properties). Has to be set to 0 if there are no properties
-        0,
-    ];
-
     let mut packet = Vec::with_capacity(fixed_header.len() + remaining_length as usize);
     // packet.append(fixed_header)
     packet.extend_from_slice(&fixed_header);
 
     // Variable header
-    packet.extend_from_slice(&VARIABLE_HEADER);
+    packet.extend_from_slice(&variable_header);
 
     // Payload
 
@@ -442,7 +447,7 @@ mod tests {
     #[test]
     fn can_create_connect_packet() {
         // Act
-        let connect_packet = create_connect("mqttx_0x668d0d", "admin", b"public");
+        let connect_packet = create_connect::<60>("mqttx_0x668d0d", "admin", b"public");
         // Assert
         // Fixed header
         assert_eq!(connect_packet[..2], [0b0001_0000, 42]);

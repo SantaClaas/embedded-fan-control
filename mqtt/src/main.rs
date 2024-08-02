@@ -1,22 +1,28 @@
-mod packet;
-mod variable_byte_integer;
-
-use crate::packet::{QualityOfService, RetainHandling, Subscription, SubscriptionOptions};
-use bytes::BytesMut;
-use packet::{ConnectErrorReasonCode, ConnectReasonCode, PacketType, UnknownConnectReasonCode};
-use std::collections::HashMap;
 use std::env;
 use std::net::{AddrParseError, ToSocketAddrs};
 use std::str::Utf8Error;
 use std::sync::Arc;
 use std::time::Duration;
+
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, oneshot};
-use tokio_rustls::rustls::pki_types::{InvalidDnsNameError, ServerName};
+use tokio::time::Interval;
 use tokio_rustls::rustls::{ClientConfig, RootCertStore};
+use tokio_rustls::rustls::pki_types::{InvalidDnsNameError, ServerName};
 use tokio_rustls::TlsConnector;
+
+use packet::{ConnectErrorReasonCode, ConnectReasonCode, UnknownConnectReasonCode};
 use variable_byte_integer::{DecodeVariableByteIntegerError, VariableByteInteger};
+
+use crate::packet::{QualityOfService, RetainHandling, Subscription, SubscriptionOptions};
+
+mod packet;
+mod variable_byte_integer;
+
+/// We send a ping request every 60 seconds to keep the connection alive
+/// The server will wait 1.5 times the keep alive time before disconnecting
+const KEEP_ALIVE_SECONDS: u16 = 60;
 
 #[derive(Debug, thiserror::Error)]
 enum AppError {
@@ -129,6 +135,12 @@ struct MqttActor {
     receiver: mpsc::Receiver<MqttActorMessage>,
     stream: TcpStream,
     send_publish: mpsc::Sender<()>,
+    // Use ticker in embassy-time
+    //TODO put this in a "Connected" variant as this has no effect if the connection is not established
+    /// The last time we send a packet to the broker. Used with [crate::KEEP_ALIVE_SECONDS]
+    /// to determine when to send the next ping request to keep the connection alive
+    ping_interval: Interval,
+    is_connected: bool,
 }
 
 async fn read_connect_acknowledgement(
@@ -169,29 +181,35 @@ async fn read_connect_acknowledgement(
     Ok(())
 }
 
-async fn connect(
-    stream: &mut TcpStream,
+async fn send_connect(
+    actor: &mut MqttActor,
     client_identifier: Arc<str>,
     username: Arc<str>,
     password: Arc<[u8]>,
 ) -> Result<(), ConnectError> {
-    let packet = packet::create_connect(
+    let packet = packet::create_connect::<KEEP_ALIVE_SECONDS>(
         client_identifier.as_ref(),
         username.as_ref(),
         password.as_ref(),
     );
 
-    stream
+    actor
+        .stream
         .write_all(&packet)
         .await
         .map_err(ConnectError::SendError)?;
 
-    stream.flush().await.map_err(ConnectError::FlushError)?;
+    actor
+        .stream
+        .flush()
+        .await
+        .map_err(ConnectError::FlushError)?;
 
-    // We read the acknowledgemetn "synchronous" as we can't receive or send other packets before the connection is established
+    actor.ping_interval.reset();
+
+    // We read the acknowledgement "synchronous" as we can't receive or send other packets before the connection is established
     // Response for connection has to come in next
-
-    read_connect_acknowledgement(stream)
+    read_connect_acknowledgement(&mut actor.stream)
         .await
         .map_err(ConnectError::AcknowledgementError)
 }
@@ -280,7 +298,7 @@ struct Publish {
     payload: Arc<[u8]>,
 }
 
-async fn read_publish(stream: &mut TcpStream) -> Result<Publish, ReadPublishError> {
+async fn receive_publish(stream: &mut TcpStream) -> Result<Publish, ReadPublishError> {
     let type_and_flags = stream.read_u8().await?;
 
     if (type_and_flags >> 4) != 3 {
@@ -334,42 +352,51 @@ async fn read_publish(stream: &mut TcpStream) -> Result<Publish, ReadPublishErro
     })
 }
 
-async fn publish(
-    stream: &mut TcpStream,
+async fn send_publish(
+    actor: &mut MqttActor,
     topic: Arc<str>,
     payload: Arc<[u8]>,
 ) -> Result<(), std::io::Error> {
     let packet = packet::create_publish(topic.as_ref(), payload.as_ref());
 
-    // Fire and forget with quality of service 0 but we can at least confirm locally if the packet was sent
-    stream.write_all(&packet).await?;
-    stream.flush().await?;
+    // Fire and forget with quality of service 0, but we can at least confirm locally if the packet was sent
+    actor.stream.write_all(&packet).await?;
+    actor.stream.flush().await?;
+
+    actor.ping_interval.reset();
 
     // We don't wait for the PUBACK packet if there is no Quality of Service (QoS) configured
     // If there was QoS, then we would need to assign a packet identifier and store the channel for as long as we wait for the PUBACK
     Ok(())
 }
 
-async fn subscribe(
-    stream: &mut TcpStream,
+async fn send_subscribe(
+    actor: &mut MqttActor,
     subscriptions: Arc<[Subscription]>,
 ) -> Result<(), SubscribeError> {
     //TODO manage available identifiers
     let packet = packet::create_subscribe(9, subscriptions.as_ref());
 
-    stream
+    actor
+        .stream
         .write_all(&packet)
         .await
         .map_err(SubscribeError::SendError)?;
-    stream.flush().await.map_err(SubscribeError::FlushError)?;
+    actor
+        .stream
+        .flush()
+        .await
+        .map_err(SubscribeError::FlushError)?;
 
-    // We wait for the subscribe acknowledgement but we should probably do that "asynchronously"
-    read_subscribe_acknowledgement(stream, subscriptions)
+    actor.ping_interval.reset();
+    // We wait for the subscribe acknowledgement, but we should probably do that "asynchronously"
+    read_subscribe_acknowledgement(&mut actor.stream, subscriptions)
         .await
         .map_err(SubscribeError::AcknowledgementError)
 }
 
-async fn process_message(message: MqttActorMessage, stream: &mut TcpStream) {
+async fn process_message(actor: &mut MqttActor, message: MqttActorMessage) {
+    //TODO handle case when connection is closed or lost and might want to reconnect
     match message {
         MqttActorMessage::Connect {
             client_identifier,
@@ -377,8 +404,10 @@ async fn process_message(message: MqttActorMessage, stream: &mut TcpStream) {
             password,
             responder,
         } => {
-            let result = connect(stream, client_identifier, username, password).await;
-
+            let result = send_connect(actor, client_identifier, username, password).await;
+            if result.is_ok() {
+                actor.is_connected = true;
+            }
             // Ignore error if they cancelled waiting for the response
             let _ = responder.send(result);
         }
@@ -387,7 +416,7 @@ async fn process_message(message: MqttActorMessage, stream: &mut TcpStream) {
             payload,
             responder,
         } => {
-            let result = publish(stream, topic, payload).await;
+            let result = send_publish(actor, topic, payload).await;
 
             // Ignore error if they cancelled waiting for the response
             let _ = responder.send(result);
@@ -396,7 +425,7 @@ async fn process_message(message: MqttActorMessage, stream: &mut TcpStream) {
             subscriptions,
             responder,
         } => {
-            let result = subscribe(stream, subscriptions).await;
+            let result = send_subscribe(actor, subscriptions).await;
 
             // Ignore error if they cancelled waiting for the response
             let _ = responder.send(result);
@@ -404,7 +433,7 @@ async fn process_message(message: MqttActorMessage, stream: &mut TcpStream) {
     }
 }
 
-async fn process_publish(publish: Publish, stream: &mut TcpStream) {
+async fn process_publish(actor: &mut MqttActor, publish: Publish) {
     println!("Received publish");
     println!("Topic: {}", publish.topic_name);
     println!("Payload: {:?}", publish.payload);
@@ -441,8 +470,8 @@ async fn process_publish(publish: Publish, stream: &mut TcpStream) {
             tokio::time::sleep(Duration::from_secs(1)).await;
 
             // Send update through publish to percentage_state_topic
-            let result = crate::publish(
-                stream,
+            let result = crate::send_publish(
+                actor,
                 "testfan/speed/percentage_state".into(),
                 publish.payload,
             )
@@ -481,7 +510,7 @@ async fn process_publish(publish: Publish, stream: &mut TcpStream) {
             // Mock sending update to the device
             tokio::time::sleep(Duration::from_secs(1)).await;
             // We just echo the state send to us
-            let result = crate::publish(stream, "testfan/on/state".into(), publish.payload).await;
+            let result = send_publish(actor, "testfan/on/state".into(), publish.payload).await;
             //TODO error handling: sink the result in some log or something
             println!("Published result: {:?}", result);
         }
@@ -493,13 +522,50 @@ async fn process_publish(publish: Publish, stream: &mut TcpStream) {
         }
     }
 }
+
+#[derive(Debug)]
+enum PingRequestError {
+    WriteError(std::io::Error),
+    FlushError(std::io::Error),
+}
+
+async fn send_ping_request(actor: &mut MqttActor) -> Result<(), PingRequestError> {
+    println!("Sending ping request");
+    // Probably the simplest of them all
+    actor
+        .stream
+        .write_all(&[12 << 4, 0])
+        .await
+        .map_err(PingRequestError::WriteError)?;
+    actor
+        .stream
+        .flush()
+        .await
+        .map_err(PingRequestError::FlushError)?;
+
+    // Wait for the ping response
+    let read = actor.stream.read_u16();
+    
+    // Specification only says "reasonable amount of time". How long is reasonable?
+    let result = tokio::time::timeout(Duration::from_secs(30), read).await;
+    
+    if result.is_err() {
+        println!("Ping response timed out");
+        actor.is_connected = false;
+    }
+
+    //TODO handle other packet type than ping response
+
+    Ok(())
+}
+
 async fn run_actor(mut actor: MqttActor) {
     loop {
-        // let a = actor.stream.read_to_end(&mut buffer).await;
-
         tokio::select! {
-            Some(message) = actor.receiver.recv() => process_message(message, &mut actor.stream).await,
-            Ok(publish) = read_publish(&mut actor.stream) => process_publish(publish, &mut actor.stream).await,
+            Some(message) = actor.receiver.recv() => process_message(&mut actor, message).await,
+            Ok(publish) = receive_publish(&mut actor.stream) => process_publish(&mut actor, publish).await,
+            //TODO remove unwrap
+            _ = actor.ping_interval.tick(), if actor.is_connected => send_ping_request(&mut actor).await.unwrap(),
             else => break,
         }
     }
@@ -525,6 +591,8 @@ impl MqttActorHandle {
             stream,
             receiver,
             send_publish,
+            ping_interval: tokio::time::interval(Duration::from_secs(KEEP_ALIVE_SECONDS as u64)),
+            is_connected: false,
         };
 
         tokio::spawn(run_actor(actor));
