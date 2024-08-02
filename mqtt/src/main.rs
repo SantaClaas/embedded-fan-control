@@ -645,18 +645,24 @@ async fn main() -> Result<(), AppError> {
     //TODO create single home assistant device with multiple entities for sensors in fan and the bypass
     //TODO add diagnostic entity like IP address
     //TODO availability topic
+    // Using abbreviations to save space of binary and on the wire (haven't measured effect though...)
+    // name -> name
+    // uniq_id -> unique_id
+    // stat_t -> state_topic
+    // cmd_t -> command_topic
+    // pct_stat_t -> percentage_state_topic
+    // pct_cmd_t -> percentage_command_topic
+    // spd_rng_max -> speed_range_max
+    // Don't need to set speed_range_min because it is 1 by default
+    //TODO remove whitespace
     const DISCOVERY_PAYLOAD: &[u8] = br#"{
         "name": "Fan",
-        "unique_id": "testfan",
-        "state_topic": "testfan/on/state",
-        "command_topic": "testfan/on/set",
-        "percentage_state_topic": "testfan/speed/percentage_state",
-        "percentage_command_topic": "testfan/speed/percentage",
-
-        "speed_range_min": 1,
-        "speed_range_max": 64000,
-        "qos": 0,
-        "optimistic": true
+        "uniq_id": "testfan",
+        "stat_t": "testfan/on/state",
+        "cmd_topic": "testfan/on/set",
+        "pct_stat_t": "testfan/speed/percentage_state",
+        "pct_cmd_t": "testfan/speed/percentage",
+        "spd_rng_max": 64000,
     }"#;
 
     println!("Connected");
