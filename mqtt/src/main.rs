@@ -7,6 +7,7 @@ use packet::{ConnectErrorReasonCode, ConnectReasonCode, PacketType, UnknownConne
 use std::collections::HashMap;
 use std::env;
 use std::net::{AddrParseError, ToSocketAddrs};
+use std::str::Utf8Error;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -253,6 +254,85 @@ async fn read_subscribe_acknowledgement(
     Ok(())
 }
 
+/// Errors while reading the Subscribe Acknowledgement packet (SUBACK)
+#[derive(Debug, thiserror::Error)]
+enum ReadPublishError {
+    #[error("Error while reading from the stream: {0}")]
+    ReadError(#[from] std::io::Error),
+    /// The server sent a different packet type than connect acknowledgement (2)
+    #[error("Unexpected packet type: {0:#04x}")]
+    UnexpectedPacketType(u8),
+    #[error("Invalid remaining length: {0}")]
+    InvalidRemainingLength(DecodeVariableByteIntegerError),
+    #[error("Topic name is not valid UTF-8: {0}")]
+    InvalidTopicName(#[from] Utf8Error),
+    #[error("Zero length topic name is a protocol error")]
+    ZeroLengthTopicName,
+    #[error("Invalid properties length: {0}")]
+    InvalidPropertiesLength(DecodeVariableByteIntegerError),
+    #[error("Invalid reason code length: expected {expected} topic(s), got {actual}")]
+    InvalidReasonCodeLength { expected: usize, actual: usize },
+}
+
+struct Publish {
+    topic_name: Arc<str>,
+    payload: Arc<[u8]>,
+}
+
+async fn read_publish(stream: &mut TcpStream) -> Result<Publish, ReadPublishError> {
+    let type_and_flags = stream.read_u8().await?;
+
+    if (type_and_flags >> 4) != 3 {
+        return Err(ReadPublishError::UnexpectedPacketType(type_and_flags >> 4));
+    }
+
+    // Flags matter here but we ignore them for now
+    // let is_re_delivery = (type_and_flags & 0b0000_1000) != 0;
+    let quality_of_service_level = (type_and_flags & 0b0000_0110) >> 1;
+    if quality_of_service_level > 0 {
+        // This changes the layout of the packet and adds a packet identifier which we don't expect right now
+        unimplemented!("Quality of service level other than 0 is not implemented yet")
+    }
+
+    // Ignore retain as it should only matter for packets send to the server
+
+    let (remaining_length, _remaining_length_length) = VariableByteInteger::decode(stream)
+        .await
+        .map_err(ReadPublishError::InvalidRemainingLength)?;
+
+    let mut buffer = Vec::with_capacity(remaining_length);
+    let _bytes_read = stream.read_buf(&mut buffer).await?;
+    //TODO check if remaining length matches bytes read
+
+    // Variable header
+    let topic_length = ((buffer[0] as u16) << 8) | buffer[1] as u16;
+    if topic_length == 0 {
+        return Err(ReadPublishError::ZeroLengthTopicName);
+    }
+
+    let topic_name = std::str::from_utf8(&buffer[2..2 + topic_length as usize])?;
+    //TODO validate topic name does not contain MQTT wildcard characters
+
+    //TODO read packet identifier if QoS > 0
+    let (property_length, property_length_length) =
+        VariableByteInteger::decode_2(&buffer[2 + topic_length as usize..])
+            .map_err(ReadPublishError::InvalidPropertiesLength)?;
+
+    // Ignore properties for now
+
+    // Payload
+    let variable_header_length =
+        2 + topic_length as usize + property_length_length + property_length;
+    let payload_length = remaining_length - variable_header_length;
+    //TODO validate there is enough space left in the buffer
+    let payload = &buffer[variable_header_length..variable_header_length + payload_length];
+
+    Ok(Publish {
+        topic_name: topic_name.into(),
+        payload: payload.into(),
+    })
+}
+
 async fn publish(
     stream: &mut TcpStream,
     topic: Arc<str>,
@@ -265,7 +345,7 @@ async fn publish(
     stream.flush().await?;
 
     // We don't wait for the PUBACK packet if there is no Quality of Service (QoS) configured
-    // If there was QoS it, then we would need to assign a packet identifier and store the channel for as long as we wait for the PUBACK
+    // If there was QoS, then we would need to assign a packet identifier and store the channel for as long as we wait for the PUBACK
     Ok(())
 }
 
@@ -322,18 +402,81 @@ async fn process_message(message: MqttActorMessage, stream: &mut TcpStream) {
         }
     }
 }
-async fn process_packet(first_byte: u8, actor: &mut MqttActor) {
-    println!("Received packet: {}", first_byte >> 4);
-    actor.send_publish.send(()).await.unwrap();
-}
 
+fn process_publish(publish: Publish) {
+    println!("Received publish");
+    println!("Topic: {}", publish.topic_name);
+    println!("Payload: {:?}", publish.payload);
+
+    match publish.topic_name.as_ref() {
+        "testfan/speed/percentage" => {
+            let payload = match std::str::from_utf8(&publish.payload) {
+                Ok(payload) => payload,
+                Err(error) => {
+                    eprintln!(
+                        "Expected percentage_command_topic payload (speed percentage) to be a valid UTF-8 string with a number: {}",
+                        error
+                    );
+                    return;
+                }
+            };
+
+            let set_point = payload.parse::<u16>();
+
+            match set_point {
+                Ok(set_point) if set_point > 64000 => {
+                    eprintln!("Received higher speed set point than configured by this device: {set_point}");
+                }
+                Ok(set_point) => {
+                    println!("Set point: {}", set_point);
+                }
+                Err(error) => {
+                    eprintln!("Expected speed percentage to be a number: {}", error);
+                }
+            }
+        }
+        "testfan/on/set" => {
+            let payload = match std::str::from_utf8(&publish.payload) {
+                Ok(payload) => payload,
+                Err(error) => {
+                    eprintln!(
+                        "Expected comman_topic payload to be a valid UTF-8 string with either \"ON\" or \"OFF\": {}",
+                        error
+                    );
+                    return;
+                }
+            };
+
+            match payload {
+                "ON" => {
+                    println!("Turning on");
+                }
+                "OFF" => {
+                    println!("Turning off");
+                }
+                unknown => {
+                    eprintln!(
+                        "Expected either \"ON\" or \"OFF\" but received: {}",
+                        unknown
+                    );
+                }
+            }
+        }
+        unexpected => {
+            eprintln!(
+                "Unexpected topic: {:?} with payload: {:?}",
+                unexpected, publish.payload
+            );
+        }
+    }
+}
 async fn run_actor(mut actor: MqttActor) {
     loop {
         // let a = actor.stream.read_to_end(&mut buffer).await;
 
         tokio::select! {
             Some(message) = actor.receiver.recv() => process_message(message, &mut actor.stream).await,
-            Ok(first_byte) = actor.stream.read_u8() => process_packet(first_byte, &mut actor).await,
+            Ok(publish) = read_publish(&mut actor.stream) => process_publish(publish),
             else => break,
         }
     }
