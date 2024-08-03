@@ -750,10 +750,10 @@ async fn main() -> Result<(), AppError> {
         "name": "Fan",
         "uniq_id": "testfan",
         "stat_t": "testfan/on/state",
-        "cmd_topic": "testfan/on/set",
+        "cmd_t": "testfan/on/set",
         "pct_stat_t": "testfan/speed/percentage_state",
         "pct_cmd_t": "testfan/speed/percentage",
-        "spd_rng_max": 64000,
+        "spd_rng_max": 64000
     }"#;
 
     println!("Connected");
