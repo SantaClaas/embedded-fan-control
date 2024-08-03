@@ -1,0 +1,9 @@
+[package]
+name = "exponential_distribution"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+plotlib = "0.5.1"
+rand = "0.8.5"
+rand_distr = "0.4.3"
