@@ -5,20 +5,19 @@
 #![no_std]
 #![no_main]
 
-mod fan;
-mod modbus;
-mod mqtt;
-
 use core::cmp::min;
 use core::ops::Mul;
+
 use crc::{Crc, CRC_16_MODBUS};
 use cyw43::{Control, NetDriver};
 use cyw43_pio::PioSpi;
 use defmt::*;
+use dotenvy_macro::dotenv;
 use embassy_executor::Spawner;
 use embassy_futures::yield_now;
-use embassy_net::tcp::client::{TcpClient, TcpClientState};
 use embassy_net::{Config, Stack, StackResources};
+use embassy_net::tcp::client::{TcpClient, TcpClientState};
+use embassy_rp::{bind_interrupts, dma, Peripheral, Peripherals, pio, uart};
 use embassy_rp::clocks::RoscRng;
 use embassy_rp::gpio::{Input, Level, Output, Pin, Pull};
 use embassy_rp::peripherals::{
@@ -27,12 +26,17 @@ use embassy_rp::peripherals::{
 use embassy_rp::pio::{InterruptHandler, Pio, PioPin};
 use embassy_rp::spi::ClkPin;
 use embassy_rp::uart::Uart;
-use embassy_rp::{bind_interrupts, dma, pio, uart, Peripheral, Peripherals};
 use embassy_time::{Duration, Timer};
-use mqttrust_core::bbqueue::BBBuffer;
+use rand::RngCore;
 use reqwless::client::{TlsConfig, TlsVerify};
 use static_cell::StaticCell;
+
 use {defmt_rtt as _, panic_probe as _};
+
+
+mod fan;
+mod modbus;
+mod mqtt;
 
 bind_interrupts!(struct Irqs {
     PIO0_IRQ_0 => InterruptHandler<PIO0>;
@@ -119,10 +123,10 @@ async fn gain_control(
 }
 
 /// Don't put credentials in the source code
-const WIFI_NETWORK: &str = env!("FAN_CONTROL_WIFI_NETWORK");
+const WIFI_NETWORK: &str = ""; //  env!("FAN_CONTROL_WIFI_NETWORK");
 
 /// Don't put credentials in the source code
-const WIFI_PASSWORD: &str = env!("FAN_CONTROL_WIFI_PASSWORD");
+const WIFI_PASSWORD: &str = ""; //env!("FAN_CONTROL_WIFI_PASSWORD");
 
 #[embassy_executor::task]
 async fn net_task(stack: &'static Stack<cyw43::NetDriver<'static>>) -> ! {
@@ -200,15 +204,6 @@ async fn setup_tls(spawner: Spawner, net_device: NetDriver, mut control: Control
             &mut tls_write_buffer,
             TlsVerify::None,
         );
-
-        // MQTT stuff following the examples in the mqttrust repository
-        static mut BUFFER: BBBuffer<{ 1024 * 6 }> = BBBuffer::new();
-
-        let (producer, consumer) = unsafe { BUFFER.try_split_framed().unwrap() };
-
-        let client_id = "mqtt_test_client_id";
-
-        let client = mqttrust_core::Client::new(producer, client_id);
     }
 }
 
@@ -230,7 +225,6 @@ async fn main(spawner: Spawner) {
     } = embassy_rp::init(Default::default());
 
     let mut control = gain_control(spawner, pin_23, pin_25, pio0, dma_ch0, pin_24, pin_29).await;
-
     // UART things
     // PIN_4 seems to refer to GP4 on the Pico W pinout
     let mut driver_enable = Output::new(pin_4, Level::Low);
