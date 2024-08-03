@@ -7,6 +7,7 @@ use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, oneshot};
+use tokio::time::error::Elapsed;
 use tokio::time::Interval;
 use tokio_rustls::rustls::{ClientConfig, RootCertStore};
 use tokio_rustls::rustls::pki_types::{InvalidDnsNameError, ServerName};
@@ -108,6 +109,7 @@ enum SubscribeAcknowledgementError {
 
 #[derive(Debug)]
 enum SubscribeError {
+    NotConnected,
     SendError(std::io::Error),
     FlushError(std::io::Error),
     AcknowledgementError(SubscribeAcknowledgementError),
@@ -123,7 +125,7 @@ enum MqttActorMessage {
     Publish {
         topic: Arc<str>,
         payload: Arc<[u8]>,
-        responder: oneshot::Sender<Result<(), std::io::Error>>,
+        responder: oneshot::Sender<Result<(), PublishError>>,
     },
     Subscribe {
         subscriptions: Arc<[Subscription]>,
@@ -352,16 +354,35 @@ async fn receive_publish(stream: &mut TcpStream) -> Result<Publish, ReadPublishE
     })
 }
 
+#[derive(Debug)]
+enum PublishError {
+    NotConnected,
+    WriteError(std::io::Error),
+    FlushError(std::io::Error),
+}
+
 async fn send_publish(
     actor: &mut MqttActor,
     topic: Arc<str>,
     payload: Arc<[u8]>,
-) -> Result<(), std::io::Error> {
+) -> Result<(), PublishError> {
+    if !actor.is_connected {
+        return Err(PublishError::NotConnected);
+    }
+
     let packet = packet::create_publish(topic.as_ref(), payload.as_ref());
 
     // Fire and forget with quality of service 0, but we can at least confirm locally if the packet was sent
-    actor.stream.write_all(&packet).await?;
-    actor.stream.flush().await?;
+    actor
+        .stream
+        .write_all(&packet)
+        .await
+        .map_err(PublishError::WriteError)?;
+    actor
+        .stream
+        .flush()
+        .await
+        .map_err(PublishError::FlushError)?;
 
     actor.ping_interval.reset();
 
@@ -374,6 +395,10 @@ async fn send_subscribe(
     actor: &mut MqttActor,
     subscriptions: Arc<[Subscription]>,
 ) -> Result<(), SubscribeError> {
+    if !actor.is_connected {
+        return Err(SubscribeError::NotConnected);
+    }
+
     //TODO manage available identifiers
     let packet = packet::create_subscribe(9, subscriptions.as_ref());
 
@@ -527,6 +552,9 @@ async fn process_publish(actor: &mut MqttActor, publish: Publish) {
 enum PingRequestError {
     WriteError(std::io::Error),
     FlushError(std::io::Error),
+    TimeoutError(Elapsed),
+    ReadResponseError(std::io::Error),
+    UnexpectedPacketType(u8),
 }
 
 async fn send_ping_request(actor: &mut MqttActor) -> Result<(), PingRequestError> {
@@ -545,18 +573,42 @@ async fn send_ping_request(actor: &mut MqttActor) -> Result<(), PingRequestError
 
     // Wait for the ping response
     let read = actor.stream.read_u16();
-    
+
     // Specification only says "reasonable amount of time". How long is reasonable?
-    let result = tokio::time::timeout(Duration::from_secs(30), read).await;
-    
-    if result.is_err() {
-        println!("Ping response timed out");
-        actor.is_connected = false;
+    let fixed_header = tokio::time::timeout(Duration::from_secs(30), read)
+        .await
+        .map_err(PingRequestError::TimeoutError)?
+        .map_err(PingRequestError::ReadResponseError)?;
+
+    let packet_type = fixed_header >> 12;
+    if packet_type != 13 {
+        return Err(PingRequestError::UnexpectedPacketType(packet_type as u8));
     }
 
-    //TODO handle other packet type than ping response
-
     Ok(())
+}
+
+async fn process_ping(actor: &mut MqttActor) {
+    let result = send_ping_request(actor).await;
+
+    println!("Ping result: {:?}", result);
+
+    let Err(error) = result else {
+        return;
+    };
+
+    match error {
+        PingRequestError::WriteError(_)
+        | PingRequestError::FlushError(_)
+        | PingRequestError::TimeoutError(_) => {}
+        PingRequestError::ReadResponseError(_) => {
+            actor.is_connected = false;
+            println!("Disconnected due to ping response read error");
+        }
+        PingRequestError::UnexpectedPacketType(packet_type) => {
+            println!("Unexpected packet type: {packet_type:#04x}");
+        }
+    }
 }
 
 async fn run_actor(mut actor: MqttActor) {
@@ -564,8 +616,7 @@ async fn run_actor(mut actor: MqttActor) {
         tokio::select! {
             Some(message) = actor.receiver.recv() => process_message(&mut actor, message).await,
             Ok(publish) = receive_publish(&mut actor.stream) => process_publish(&mut actor, publish).await,
-            //TODO remove unwrap
-            _ = actor.ping_interval.tick(), if actor.is_connected => send_ping_request(&mut actor).await.unwrap(),
+            _ = actor.ping_interval.tick(), if actor.is_connected => process_ping(&mut actor).await,
             else => break,
         }
     }
@@ -634,12 +685,11 @@ impl MqttActorHandle {
         &self,
         topic: Arc<str>,
         payload: Arc<[u8]>,
-    ) -> Result<(), HandleError<impl std::error::Error, impl std::error::Error, std::io::Error>>
-    {
+    ) -> Result<(), HandleError<impl std::error::Error, impl std::error::Error, PublishError>> {
         type Error = HandleError<
             mpsc::error::SendError<MqttActorMessage>,
             oneshot::error::RecvError,
-            std::io::Error,
+            PublishError,
         >;
         let (sender, receiver) = oneshot::channel();
         self.sender
