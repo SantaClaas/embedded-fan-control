@@ -133,7 +133,7 @@ async fn net_task(stack: &'static Stack<cyw43::NetDriver<'static>>) -> ! {
     stack.run().await
 }
 
-async fn setup_tls(spawner: Spawner, net_device: NetDriver, mut control: Control) {
+async fn setup_tls(spawner: Spawner, net_device: NetDriver<'static>, mut control: Control<'_>) {
     let mut rng = RoscRng;
     let configuration = Config::dhcpv4(Default::default());
     // Use static IP configuration instead of DHCP
@@ -163,7 +163,7 @@ async fn setup_tls(spawner: Spawner, net_device: NetDriver, mut control: Control
         // Can also use join_open to join open networks
         match control.join_wpa2(WIFI_NETWORK, WIFI_PASSWORD).await {
             Ok(()) => break,
-            Err(error) => info!("Error joining network. Failed with status: {}", error),
+            Err(error) => info!("Error joining network. Failed with status: {}", error.status),
         }
     }
 

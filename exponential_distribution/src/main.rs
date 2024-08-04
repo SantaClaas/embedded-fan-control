@@ -6,7 +6,7 @@ use rand::Rng;
 use rand::rngs::ThreadRng;
 use rand_distr::num_traits::Pow;
 
-// Written by AI
+// Written by AI. Is this exponential distribution?
 fn exponential_random(random: &mut ThreadRng, max_value: f64, rate: f64) -> usize {
     let exp_sample = random.gen::<f64>();
     (max_value - (-exp_sample.ln() / rate)).floor() as usize
@@ -27,7 +27,7 @@ fn main() {
     let mut count = 0;
     loop {
         // let value = my_exponential_random(&mut random);
-        let value = exponential_random(&mut random, 60.0, 0.1);
+        let value = my_exponential_random(&mut random);
         // dbg!(value);
 
         result_counts[value] += 1;
