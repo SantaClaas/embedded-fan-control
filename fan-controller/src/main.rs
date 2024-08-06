@@ -1,21 +1,16 @@
-//! This example test the RP Pico W on board LED.
-//!
-//! It does not work with the RP Pico board. See blinky.rs.
-
 #![no_std]
 #![no_main]
-
-use core::cmp::min;
-use core::ops::Mul;
+#![allow(warnings)]
 
 use crc::{Crc, CRC_16_MODBUS};
 use cyw43::{Control, NetDriver};
 use cyw43_pio::PioSpi;
 use defmt::*;
-use dotenvy_macro::dotenv;
 use embassy_executor::Spawner;
-use embassy_futures::yield_now;
-use embassy_net::{Config, Stack, StackResources};
+use embassy_futures::join::join;
+use embassy_net::{Config, IpAddress, IpEndpoint, Stack, StackResources, tcp};
+use embassy_net::dns::{DnsQueryType, DnsSocket};
+use embassy_net::tcp::{TcpReader, TcpSocket, TcpWriter};
 use embassy_net::tcp::client::{TcpClient, TcpClientState};
 use embassy_rp::{bind_interrupts, dma, Peripheral, Peripherals, pio, uart};
 use embassy_rp::clocks::RoscRng;
@@ -24,15 +19,28 @@ use embassy_rp::peripherals::{
     DMA_CH0, PIN_12, PIN_13, PIN_18, PIN_23, PIN_24, PIN_25, PIN_29, PIN_4, PIO0, UART0,
 };
 use embassy_rp::pio::{InterruptHandler, Pio, PioPin};
-use embassy_rp::spi::ClkPin;
 use embassy_rp::uart::Uart;
+use embassy_sync::blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex};
+use embassy_sync::channel;
+use embassy_sync::channel::Channel;
+use embassy_sync::mutex::Mutex;
+use embassy_sync::pubsub::PubSubChannel;
+use embassy_sync::signal::Signal;
 use embassy_time::{Duration, Timer};
+use embedded_io_async::{Read, Write};
+use embedded_nal_async::{AddrType, Dns, SocketAddr, TcpConnect};
 use rand::RngCore;
 use reqwless::client::{TlsConfig, TlsVerify};
 use static_cell::StaticCell;
 
 use {defmt_rtt as _, panic_probe as _};
 
+use crate::mqtt::{connect, publish, subscribe};
+use crate::mqtt::{Packet, QualityOfService};
+use crate::mqtt::connect::Connect;
+use crate::mqtt::connect_acknowledgement::ConnectReasonCode;
+use crate::mqtt::publish::Publish;
+use crate::mqtt::subscribe::{Subscribe, Subscription};
 
 mod fan;
 mod modbus;
@@ -53,47 +61,15 @@ async fn wifi_task(
     runner.run().await
 }
 
-// async fn setup_control(spawner: Spawner) {
-//     let firmware = include_bytes!("../cyw43-firmware/43439A0.bin");
-//     // Google AI says CLM stands for "Chip Local Memory". Feels like everyone except me knows
-//     // what it is. I hate acronyms. I searched for "CLM" in the source code and on the internet and
-//     // still no idea.
-//     let chip_local_memory = include_bytes!("../cyw43-firmware/43439A0_clm.bin");
-//
-//
-//     let pwr = Output::new(pin_23, Level::Low);
-//     let cs = Output::new(pin_25, Level::High);
-//     let mut pio = Pio::new(pio0, Irqs);
-//     let spi = PioSpi::new(
-//         &mut pio.common,
-//         pio.sm0,
-//         pio.irq0,
-//         cs,
-//         pin_24,
-//         pin_29,
-//         dma_ch0,
-//     );
-//
-//     static STATE: StaticCell<cyw43::State> = StaticCell::new();
-//     let state = STATE.init(cyw43::State::new());
-//     let (_net_device, mut control, runner) = cyw43::new(state, pwr, spi, firmware).await;
-//     unwrap!(spawner.spawn(wifi_task(runner)));
-//
-//     control.init(chip_local_memory).await;
-//     control
-//         .set_power_management(cyw43::PowerManagementMode::PowerSave)
-//         .await;
-// }
-
 async fn gain_control(
     spawner: Spawner,
     pwr_pin: PIN_23,
     cs_pin: PIN_25,
-    pio: PIO0,    //impl Peripheral<P=impl pio::Instance>,
-    dma: DMA_CH0, //impl Peripheral<P=impl dma::Channel>,
+    pio: PIO0,
+    dma: DMA_CH0,
     dio: impl PioPin,
     clk: impl PioPin,
-) -> Control<'static> {
+) -> (NetDriver<'static>, Control<'static>) {
     let firmware = include_bytes!("../cyw43-firmware/43439A0.bin");
     // Google AI says CLM stands for "Chip Local Memory". Feels like everyone except me knows
     // what it is. I hate acronyms. I searched for "CLM" in the source code and on the internet and
@@ -113,42 +89,146 @@ async fn gain_control(
 
     static STATE: StaticCell<cyw43::State> = StaticCell::new();
     let state = STATE.init(cyw43::State::new());
-    let (_net_device, mut control, runner) = cyw43::new(state, pwr, spi, firmware).await;
+    let (net_device, mut control, runner) = cyw43::new(state, pwr, spi, firmware).await;
     unwrap!(spawner.spawn(wifi_task(runner)));
     control.init(chip_local_memory).await;
     control
         .set_power_management(cyw43::PowerManagementMode::PowerSave)
         .await;
-    control
+    (net_device, control)
 }
 
+//TODO make configurable
 /// Don't put credentials in the source code
 const WIFI_NETWORK: &str = ""; //  env!("FAN_CONTROL_WIFI_NETWORK");
 
+//TODO make configurable
 /// Don't put credentials in the source code
 const WIFI_PASSWORD: &str = ""; //env!("FAN_CONTROL_WIFI_PASSWORD");
+
+//TODO make configurable
+const MQTT_BROKER_ADDRESS: &str = "homeassistant.local";
+
+//TODO make configurable
+const MQTT_BROKER_PORT: u16 = 1883;
+
+//TODO make configurable
+/// The broker IP address can be configured manually. It will be used instead of the [MQTT_BROKER_ADDRESS]
+/// if it is set as it does not require DNS resolution.
+const MQTT_BROKER_IP_ADDRESS: Option<IpAddress> = None;
+
+//TODO make configurable
+const MQTT_BROKER_USERNAME: &str = "";
+
+//TODO make configurable
+const MQTT_BROKER_PASSWORD: &[u8] = b"";
+
+//TODO make configurable
+/// Prefix is "homeassistant", but it can be changed in home assistant configuration
+const DISCOVERY_TOPIC: &str = "homeassistant/fan/testfan/config";
 
 #[embassy_executor::task]
 async fn net_task(stack: &'static Stack<cyw43::NetDriver<'static>>) -> ! {
     stack.run().await
 }
 
-async fn setup_tls(spawner: Spawner, net_device: NetDriver<'static>, mut control: Control<'_>) {
-    let mut rng = RoscRng;
-    let configuration = Config::dhcpv4(Default::default());
-    // Use static IP configuration instead of DHCP
-    //let config = embassy_net::Config::ipv4_static(embassy_net::StaticConfigV4 {
-    //    address: Ipv4Cidr::new(Ipv4Address::new(192, 168, 69, 2), 24),
-    //    dns_servers: Vec::new(),
-    //    gateway: Some(Ipv4Address::new(192, 168, 69, 1)),
-    //});
+enum State {
+    Connecting,
+    Connected,
+}
 
-    // Generate random seed
-    let seed = rng.next_u64();
+enum MqttMessage {
+    Publish {},
+    Subscribe,
+}
 
-    // Initialize network stack
+type StateSignal = Signal<CriticalSectionRawMutex, State>;
+static STATE: StateSignal = StateSignal::new();
+
+enum MqttError {
+    WriteConnectError(connect::WriteError),
+    WriteError(tcp::Error),
+    FlushError(tcp::Error),
+    ReadError(tcp::Error),
+    ReadPacketError(mqtt::ReadError),
+    ConnectError(mqtt::ConnectErrorReasonCode),
+    WriteSubscribeError(subscribe::WriteError),
+    UnexpectedPacketType(Packet),
+    WritePublishError(publish::WriteError),
+}
+async fn mqtt_send<'a>(
+    mut writer: TcpWriter<'a>,
+    receiver: channel::Receiver<'a, NoopRawMutex, MqttMessage, 8>,
+) -> Result<(), MqttError> {
+    // Check if we are already connected
+    let state = STATE.try_take();
+
+    // No experience how big this buffer should be
+    let mut send_buffer = [0; 256];
+    let state = if let Some(state) = state {
+        state
+    } else {
+        // Connect
+
+        // Send MQTT connect packet
+        let packet = Connect {
+            client_identifier: "testfan",
+            username: MQTT_BROKER_USERNAME,
+            password: MQTT_BROKER_PASSWORD,
+            keep_alive_seconds: 60,
+        };
+
+        let mut offset = 0;
+        packet
+            .write(&mut send_buffer, &mut offset)
+            .map_err(MqttError::WriteConnectError)?;
+
+        writer
+            .write_all(&send_buffer[..offset])
+            .await
+            .map_err(MqttError::WriteError)?;
+
+        // Responses are read by receive future/task
+        STATE.signal(State::Connecting);
+
+        State::Connecting
+    };
+
+    // Wait for response from reader that we are connected
+    // while  STATE.wait().await
+    // let state = while let state @ State::Connected = STATE.wait().await {}
+    let state = loop {
+        let state = STATE.wait().await;
+        match state {
+            State::Connected => break state,
+            State::Connecting => continue,
+        }
+    };
+
+    // Wait for messages that instruct us to send data
+
+    let message = receiver.receive().await;
+    match message {
+        MqttMessage::Publish {} => core::todo!(),
+        MqttMessage::Subscribe => core::todo!(),
+    }
+
+    Ok(())
+}
+
+async fn mqtt_receive<'a>(reader: TcpReader<'a>) {}
+
+async fn mqtt_task(
+    spawner: Spawner,
+    net_device: NetDriver<'static>,
+    control: &mut Control<'static>,
+) -> () {
     static STACK: StaticCell<Stack<NetDriver<'static>>> = StaticCell::new();
     static RESOURCES: StaticCell<StackResources<5>> = StaticCell::new();
+    let configuration = Config::dhcpv4(Default::default());
+    let mut random = RoscRng;
+    let seed = random.next_u64();
+    // Initialize network stack
     let stack = &*STACK.init(Stack::new(
         net_device,
         configuration,
@@ -158,53 +238,232 @@ async fn setup_tls(spawner: Spawner, net_device: NetDriver<'static>, mut control
 
     unwrap!(spawner.spawn(net_task(stack)));
 
-    // Try to join the network
+    // Join Wi-Fi network
     loop {
-        // Can also use join_open to join open networks
         match control.join_wpa2(WIFI_NETWORK, WIFI_PASSWORD).await {
-            Ok(()) => break,
-            Err(error) => info!("Error joining network. Failed with status: {}", error.status),
+            Ok(_) => break,
+            Err(error) => info!("Error joining Wi-Fi network with status: {}", error.status),
         }
     }
 
+    // Wait for DHCP
     info!("Waiting for DHCP");
-    // Waiting for DHCP is not necessary when using a static IP address
     while !stack.is_config_up() {
         Timer::after_millis(100).await;
     }
+
     info!("DHCP is up");
 
     info!("Waiting for link up");
     while !stack.is_link_up() {
-        Timer::after_millis(100).await;
+        Timer::after_millis(500).await;
     }
+
     info!("Link is up");
 
     info!("Waiting for stack to be up");
     stack.wait_config_up().await;
     info!("Stack is up");
 
+    let state = StateSignal::new();
+
     // Now we can use it
+    // loop {
+    let channel = Channel::<NoopRawMutex, MqttMessage, 8>::new();
+    let sender = channel.sender();
+    let receiver = channel.receiver();
+    let client_state = TcpClientState::<1, 1024, 1024>::new();
+    let mut receive_buffer = [0; 1024];
+    let mut send_buffer = [0; 1024];
+    let mut socket = TcpSocket::new(stack, &mut receive_buffer, &mut send_buffer);
 
-    loop {
-        // Buffer to receive data
-        let mut rx_buffer = [0; 8_192];
-        let mut tls_read_buffer = [0; 16_640];
-        let mut tls_write_buffer = [0; 16_640];
+    let dns_client = DnsSocket::new(stack);
 
-        let client_state = TcpClientState::<1, 1024, 1024>::new();
-        let tcp_client = TcpClient::new(stack, &client_state);
+    // Get home assistant MQTT broker IP address
+    let address = loop {
+        //TODO support IPv6
+        let result = dns_client.query(MQTT_BROKER_ADDRESS, DnsQueryType::A).await;
 
-        let dns_client = embassy_net::dns::DnsSocket::new(stack);
-        //TODO consider increasing security by including a pre shared key otherwise this is
-        // vulnerable to man in the middle attacks
-        let tls_configuration = TlsConfig::new(
-            seed,
-            &mut tls_read_buffer,
-            &mut tls_write_buffer,
-            TlsVerify::None,
+        let mut addresses = match result {
+            Ok(addresses) => addresses,
+            Err(error) => {
+                info!(
+                    "Error resolving Home Assistant MQTT broker IP address: {:?}",
+                    error
+                );
+                // Exponential backoff doesn't seem necessary here
+                // Maybe the current installation of Home Assistant is in the process of
+                // being set up and the entry is not yet available
+                Timer::after_millis(500).await;
+                continue;
+            }
+        };
+
+        if addresses.is_empty() {
+            info!("No addresses found for Home Assistant MQTT broker");
+            Timer::after_millis(500).await;
+            continue;
+        }
+
+        break addresses.swap_remove(0);
+    };
+
+    // let address = SocketAddr::new(address, MQTT_BROKER_PORT);
+    let endpoint = IpEndpoint::new(address, MQTT_BROKER_PORT);
+    // Connect
+    while let Err(error) = socket.connect(endpoint).await {
+        info!(
+            "Error connecting to Home Assistant MQTT broker: {:?}",
+            error
         );
+        Timer::after_millis(500).await;
     }
+
+    // }
+}
+
+async fn mqtt_routine<'a>(mut socket: TcpSocket<'a>) -> Result<(), MqttError> {
+    // No experience how big this buffer should be
+    let mut send_buffer = [0; 256];
+    // Send MQTT connect packet
+    let packet = Connect {
+        client_identifier: "testfan",
+        username: MQTT_BROKER_USERNAME,
+        password: MQTT_BROKER_PASSWORD,
+        keep_alive_seconds: 60,
+    };
+
+    let mut offset = 0;
+    packet
+        .write(&mut send_buffer, &mut offset)
+        .map_err(MqttError::WriteConnectError)?;
+
+    socket
+        .write_all(&send_buffer[..offset])
+        .await
+        .map_err(MqttError::WriteError)?;
+    socket.flush().await.map_err(MqttError::FlushError)?;
+
+    // Wait for connection acknowledgement
+    let mut receive_buffer = [0; 1024];
+    let bytes_read = socket
+        .read(&mut receive_buffer)
+        .await
+        .map_err(MqttError::ReadError)?;
+    let packet = Packet::read(&receive_buffer[..bytes_read]).map_err(MqttError::ReadPacketError)?;
+
+    match packet {
+        Packet::ConnectAcknowledgement(acknowledgement) => {
+            if let ConnectReasonCode::ErrorCode(error_code) = acknowledgement.connect_reason_code {
+                return Err(MqttError::ConnectError(error_code));
+            }
+        }
+        unexpected => {
+            // Unexpected packet type -> disconnect
+            info!("Unexpected packet");
+            return Err(MqttError::UnexpectedPacketType(unexpected));
+        }
+    }
+
+    // Subscribe to home assistant topics
+    // Before sending discovery packet
+    let subscriptions = [
+        Subscription {
+            topic_filter: "testfan/on/set",
+            options: mqtt::subscribe::Options::new(
+                QualityOfService::AtMostOnceDelivery,
+                false,
+                false,
+                mqtt::subscribe::RetainHandling::DoNotSend,
+            ),
+        },
+        Subscription {
+            topic_filter: "testfan/speed/percentage",
+            options: mqtt::subscribe::Options::new(
+                QualityOfService::AtMostOnceDelivery,
+                false,
+                false,
+                mqtt::subscribe::RetainHandling::DoNotSend,
+            ),
+        },
+    ];
+
+    //TODO packet identifier management
+    let packet = Subscribe {
+        subscriptions,
+        packet_identifier: 42,
+    };
+
+    offset = 0;
+    packet
+        .write(&mut send_buffer, &mut offset)
+        .map_err(MqttError::WriteSubscribeError)?;
+    socket
+        .write_all(&send_buffer[..offset])
+        .await
+        .map_err(MqttError::WriteError)?;
+    socket.flush().await.map_err(MqttError::FlushError)?;
+
+    // Read subscribe acknowledgement
+    let bytes_read = socket
+        .read(&mut receive_buffer)
+        .await
+        .map_err(MqttError::ReadError)?;
+
+    let packet = Packet::read(&receive_buffer[..bytes_read]).map_err(MqttError::ReadPacketError)?;
+    match packet {
+        Packet::SubscribeAcknowledgement(_acknowledgement) => {
+            // Ignoring acknowledgement errors for now as their information is only useful for debugging currently
+        }
+        unexpected => {
+            // Unexpected packet type -> disconnect
+            info!("Unexpected packet");
+            return Err(MqttError::UnexpectedPacketType(unexpected));
+        }
+    }
+    
+    //TODO listen for publishes to topics from here on out
+
+    // Send discovery packet
+    // Configuration is like the YAML configuration that would be added in Home Assistant but as JSON
+    // Command topic: The MQTT topic to publish commands to change the state of the fan
+    //TODO set firmware version from Cargo.toml package version
+    //TODO think about setting hardware version, support url, and manufacturer
+    //TODO create single home assistant device with multiple entities for sensors in fan and the bypass
+    //TODO add diagnostic entity like IP address
+    //TODO availability topic
+    // Using abbreviations to save space of binary and on the wire (haven't measured effect though...)
+    // name -> name
+    // uniq_id -> unique_id
+    // stat_t -> state_topic
+    // cmd_t -> command_topic
+    // pct_stat_t -> percentage_state_topic
+    // pct_cmd_t -> percentage_command_topic
+    // spd_rng_max -> speed_range_max
+    // Don't need to set speed_range_min because it is 1 by default
+    //TODO remove whitespace at compile time through macro, build script or const fn
+    const DISCOVERY_PAYLOAD: &[u8] = br#"{
+        "name": "Fan",
+        "uniq_id": "testfan",
+        "stat_t": "testfan/on/state",
+        "cmd_t": "testfan/on/set",
+        "pct_stat_t": "testfan/speed/percentage_state",
+        "pct_cmd_t": "testfan/speed/percentage",
+        "spd_rng_max": 64000
+    }"#;
+
+    const DISCOVERY_PUBLISH: Publish = Publish {
+        topic_name: DISCOVERY_TOPIC,
+        payload: DISCOVERY_PAYLOAD,
+    };
+    
+    DISCOVERY_PUBLISH.write(&mut send_buffer, &mut offset).map_err(MqttError::WritePublishError)?;
+
+    socket.write_all(&send_buffer[..offset]).await.map_err(MqttError::WriteError)?;
+    socket.flush().await.map_err(MqttError::FlushError)?;
+    
+    
+    Ok(())
 }
 
 #[embassy_executor::main]
@@ -224,15 +483,13 @@ async fn main(spawner: Spawner) {
         ..
     } = embassy_rp::init(Default::default());
 
-    let mut control = gain_control(spawner, pin_23, pin_25, pio0, dma_ch0, pin_24, pin_29).await;
+    let (net_device, mut control) =
+        gain_control(spawner, pin_23, pin_25, pio0, dma_ch0, pin_24, pin_29).await;
     // UART things
     // PIN_4 seems to refer to GP4 on the Pico W pinout
     let mut driver_enable = Output::new(pin_4, Level::Low);
     //TODO read up on interrupts
     let mut uart = Uart::new_blocking(uart0, pin_12, pin_13, fan::get_configuration());
-
-    let on_duration = Duration::from_secs(1);
-    let off_duration = Duration::from_secs(1);
 
     // Send signal test button
     let mut button = Input::new(pin_18, Pull::Up);

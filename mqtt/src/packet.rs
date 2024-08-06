@@ -133,11 +133,11 @@ pub(super) fn create_publish(topic_name: &str, payload: &[u8]) -> Vec<u8> {
 
 pub(super) enum QualityOfService {
     /// At most once delivery or 0
-    AtMostOnceDelivery,
+    AtMostOnceDelivery = 0x00,
     /// At least once delivery or 1
-    AtLeastOnceDelivery,
+    AtLeastOnceDelivery = 0x01,
     /// Exactly once delivery or 2
-    ExactlyOnceDelivery,
+    ExactlyOnceDelivery = 0x02,
 }
 
 impl QualityOfService {

@@ -20,7 +20,7 @@ pub(crate) fn get_configuration() -> uart::Config {
 
 pub(crate) const MAX_SET_POINT: u16 = 64_000;
 
-#[derive(Default, Format)]
+#[derive(Default, Format, Debug)]
 pub(crate) enum State {
     #[default]
     Off,
