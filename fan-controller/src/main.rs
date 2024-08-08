@@ -26,7 +26,7 @@ use embassy_sync::channel::Channel;
 use embassy_sync::mutex::Mutex;
 use embassy_sync::pubsub::PubSubChannel;
 use embassy_sync::signal::Signal;
-use embassy_time::{Duration, Timer};
+use embassy_time::{Duration, Instant, Ticker, Timer};
 use embedded_io_async::{Read, Write};
 use embedded_nal_async::{AddrType, Dns, SocketAddr, TcpConnect};
 use rand::RngCore;
@@ -39,6 +39,7 @@ use crate::mqtt::{connect, publish, subscribe};
 use crate::mqtt::{Packet, QualityOfService};
 use crate::mqtt::connect::Connect;
 use crate::mqtt::connect_acknowledgement::ConnectReasonCode;
+use crate::mqtt::ping_request::PingRequest;
 use crate::mqtt::publish::Publish;
 use crate::mqtt::subscribe::{Subscribe, Subscription};
 
@@ -128,18 +129,13 @@ const MQTT_BROKER_PASSWORD: &[u8] = b"";
 const DISCOVERY_TOPIC: &str = "homeassistant/fan/testfan/config";
 
 #[embassy_executor::task]
-async fn net_task(stack: &'static Stack<cyw43::NetDriver<'static>>) -> ! {
+async fn network_task(stack: &'static Stack<NetDriver<'static>>) -> ! {
     stack.run().await
 }
 
 enum State {
     Connecting,
     Connected,
-}
-
-enum MqttMessage {
-    Publish {},
-    Subscribe,
 }
 
 type StateSignal = Signal<CriticalSectionRawMutex, State>;
@@ -153,67 +149,8 @@ enum MqttError {
     ReadPacketError(mqtt::ReadError),
     ConnectError(mqtt::ConnectErrorReasonCode),
     WriteSubscribeError(subscribe::WriteError),
-    UnexpectedPacketType(Packet),
+    UnexpectedPacketType(u8),
     WritePublishError(publish::WriteError),
-}
-async fn mqtt_send<'a>(
-    mut writer: TcpWriter<'a>,
-    receiver: channel::Receiver<'a, NoopRawMutex, MqttMessage, 8>,
-) -> Result<(), MqttError> {
-    // Check if we are already connected
-    let state = STATE.try_take();
-
-    // No experience how big this buffer should be
-    let mut send_buffer = [0; 256];
-    let state = if let Some(state) = state {
-        state
-    } else {
-        // Connect
-
-        // Send MQTT connect packet
-        let packet = Connect {
-            client_identifier: "testfan",
-            username: MQTT_BROKER_USERNAME,
-            password: MQTT_BROKER_PASSWORD,
-            keep_alive_seconds: 60,
-        };
-
-        let mut offset = 0;
-        packet
-            .write(&mut send_buffer, &mut offset)
-            .map_err(MqttError::WriteConnectError)?;
-
-        writer
-            .write_all(&send_buffer[..offset])
-            .await
-            .map_err(MqttError::WriteError)?;
-
-        // Responses are read by receive future/task
-        STATE.signal(State::Connecting);
-
-        State::Connecting
-    };
-
-    // Wait for response from reader that we are connected
-    // while  STATE.wait().await
-    // let state = while let state @ State::Connected = STATE.wait().await {}
-    let state = loop {
-        let state = STATE.wait().await;
-        match state {
-            State::Connected => break state,
-            State::Connecting => continue,
-        }
-    };
-
-    // Wait for messages that instruct us to send data
-
-    let message = receiver.receive().await;
-    match message {
-        MqttMessage::Publish {} => core::todo!(),
-        MqttMessage::Subscribe => core::todo!(),
-    }
-
-    Ok(())
 }
 
 async fn mqtt_receive<'a>(reader: TcpReader<'a>) {}
@@ -236,7 +173,7 @@ async fn mqtt_task(
         seed,
     ));
 
-    unwrap!(spawner.spawn(net_task(stack)));
+    unwrap!(spawner.spawn(network_task(stack)));
 
     // Join Wi-Fi network
     loop {
@@ -269,9 +206,6 @@ async fn mqtt_task(
 
     // Now we can use it
     // loop {
-    let channel = Channel::<NoopRawMutex, MqttMessage, 8>::new();
-    let sender = channel.sender();
-    let receiver = channel.receiver();
     let client_state = TcpClientState::<1, 1024, 1024>::new();
     let mut receive_buffer = [0; 1024];
     let mut send_buffer = [0; 1024];
@@ -322,6 +256,178 @@ async fn mqtt_task(
     // }
 }
 
+enum PublishReceiveError {
+    ReadError(tcp::Error),
+    ReadPacketError(mqtt::ReadError),
+}
+async fn listen_for_publishes(
+    mut reader: TcpReader<'_>,
+    mut buffer: [u8; 1024],
+) -> Result<(), PublishReceiveError> {
+    loop {
+        // Should read at least one byte
+        let bytes_read = reader
+            .read(&mut buffer)
+            .await
+            .map_err(PublishReceiveError::ReadError)?;
+
+        let packet =
+            Packet::read(&buffer[..bytes_read]).map_err(PublishReceiveError::ReadPacketError)?;
+        match packet {
+            //TODO handle disconnect packet
+            packet @ Packet::ConnectAcknowledgement(_)
+            | packet @ Packet::SubscribeAcknowledgement(_) => {
+                warn!("Received unexpected packet type: {}", packet.get_type());
+            }
+            Packet::Publish(publish) => {
+                info!("Received publish: {:?}", publish);
+                // This part is not MQTT and application specific
+                match publish.topic_name {
+                    "testfan/speed/percentage" => {
+                        let payload = match core::str::from_utf8(&publish.payload) {
+                            Ok(payload) => payload,
+                            Err(error) => {
+                                warn!("Expected percentage_command_topic payload (speed percentage) to be a valid UTF-8 string with a number");
+                                continue;
+                            }
+                        };
+
+                        // And then to an integer...
+                        let set_point = payload.parse::<u16>();
+                        let set_point = match set_point {
+                            Ok(set_point) => set_point,
+                            Err(error) => {
+                                warn!("Expected speed percentage to be a number string. Payload is: {}", payload);
+                                continue;
+                            }
+                        };
+
+                        let Ok(setting) = FanSetting::new(set_point) else {
+                            warn!(
+                                "Setting fan speed out of bounds. Not accepting new setting: {}",
+                                set_point
+                            );
+                            continue;
+                        };
+
+                        //TODO confirm there was no error on the modbus side
+                        MODBUS_SIGNAL.signal(setting);
+                    }
+                    "testfan/on/set" => {
+                        let payload = match core::str::from_utf8(publish.payload) {
+                            Ok(payload) => payload,
+                            Err(error) => {
+                                warn!(
+                                    "Expected command_topic payload to be a valid UTF-8 string with either \"ON\" or \"OFF\". Payload is: {}",
+                                    publish.payload
+                                );
+                                continue;
+                            }
+                        };
+
+                        match payload {
+                            "ON" => {
+                                //TODO set to last known state before off
+                                println!("Turning on");
+                            }
+                            "OFF" => {
+                                println!("Turning off");
+                                MODBUS_SIGNAL.signal(FanSetting::ZERO);
+                            }
+                            unknown => {
+                                warn!(
+                                    "Expected either \"ON\" or \"OFF\" but received: {}",
+                                    unknown
+                                );
+                            }
+                        }
+                    }
+                    unknown => {
+                        warn!(
+                            "Unexpected topic: {} with payload: {}",
+                            publish.topic_name, publish.payload
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+async fn send_discovery_and_keep_alive(
+    mut writer: TcpWriter<'_>,
+    mut send_buffer: [u8; 256],
+    mut keep_alive: Ticker,
+) -> Result<(), MqttError> {
+    // Send discovery packet
+    // Configuration is like the YAML configuration that would be added in Home Assistant but as JSON
+    // Command topic: The MQTT topic to publish commands to change the state of the fan
+    //TODO set firmware version from Cargo.toml package version
+    //TODO think about setting hardware version, support url, and manufacturer
+    //TODO create single home assistant device with multiple entities for sensors in fan and the bypass
+    //TODO add diagnostic entity like IP address
+    //TODO availability topic
+    //TODO remove whitespace at compile time through macro, build script or const fn
+
+    // Using abbreviations to save space of binary and on the wire (haven't measured effect though...)
+    // name -> name
+    // uniq_id -> unique_id
+    // stat_t -> state_topic
+    // cmd_t -> command_topic
+    // pct_stat_t -> percentage_state_topic
+    // pct_cmd_t -> percentage_command_topic
+    // spd_rng_max -> speed_range_max
+    // Don't need to set speed_range_min because it is 1 by default
+    const DISCOVERY_PAYLOAD: &[u8] = br#"{
+        "name": "Fan",
+        "uniq_id": "testfan",
+        "stat_t": "testfan/on/state",
+        "cmd_t": "testfan/on/set",
+        "pct_stat_t": "testfan/speed/percentage_state",
+        "pct_cmd_t": "testfan/speed/percentage",
+        "spd_rng_max": 64000
+    }"#;
+
+    const DISCOVERY_PUBLISH: Publish = Publish {
+        topic_name: DISCOVERY_TOPIC,
+        payload: DISCOVERY_PAYLOAD,
+    };
+
+    let mut offset = 0;
+    DISCOVERY_PUBLISH
+        .write(&mut send_buffer, &mut offset)
+        .map_err(MqttError::WritePublishError)?;
+
+    writer
+        .write_all(&send_buffer[..offset])
+        .await
+        .map_err(MqttError::WriteError)?;
+    writer.flush().await.map_err(MqttError::FlushError)?;
+
+    keep_alive.reset();
+    // No acknowledgement to read for quality of service 0
+
+    loop {
+        keep_alive.next().await;
+        // Send keep alive ping request
+        PingRequest.write(&mut send_buffer, &mut offset);
+        writer
+            .write_all(&send_buffer[..offset])
+            .await
+            .map_err(MqttError::WriteError)?;
+        writer.flush().await.map_err(MqttError::FlushError)?;
+        //TODO read ping response or disconnect after "a reasonable amount of time"
+    }
+}
+
+const KEEP_ALIVE: Duration = Duration::from_secs(60);
+const _: () = {
+    // Check if the representation as u16 is correct
+    let seconds = KEEP_ALIVE.as_secs() as u16;
+
+    core::assert!(seconds == 60);
+};
+
 async fn mqtt_routine<'a>(mut socket: TcpSocket<'a>) -> Result<(), MqttError> {
     // No experience how big this buffer should be
     let mut send_buffer = [0; 256];
@@ -330,7 +436,7 @@ async fn mqtt_routine<'a>(mut socket: TcpSocket<'a>) -> Result<(), MqttError> {
         client_identifier: "testfan",
         username: MQTT_BROKER_USERNAME,
         password: MQTT_BROKER_PASSWORD,
-        keep_alive_seconds: 60,
+        keep_alive_seconds: KEEP_ALIVE.as_secs() as u16,
     };
 
     let mut offset = 0;
@@ -361,9 +467,13 @@ async fn mqtt_routine<'a>(mut socket: TcpSocket<'a>) -> Result<(), MqttError> {
         unexpected => {
             // Unexpected packet type -> disconnect
             info!("Unexpected packet");
-            return Err(MqttError::UnexpectedPacketType(unexpected));
+            return Err(MqttError::UnexpectedPacketType(unexpected.get_type()));
         }
     }
+
+    // Start keep alive after connect acknowledgement?
+    //TODO use keep alive interval received from server in connect acknowledgement
+    let mut keep_alive = Ticker::every(KEEP_ALIVE);
 
     // Subscribe to home assistant topics
     // Before sending discovery packet
@@ -395,6 +505,7 @@ async fn mqtt_routine<'a>(mut socket: TcpSocket<'a>) -> Result<(), MqttError> {
     };
 
     offset = 0;
+    let mut last_send = Instant::now();
     packet
         .write(&mut send_buffer, &mut offset)
         .map_err(MqttError::WriteSubscribeError)?;
@@ -403,6 +514,7 @@ async fn mqtt_routine<'a>(mut socket: TcpSocket<'a>) -> Result<(), MqttError> {
         .await
         .map_err(MqttError::WriteError)?;
     socket.flush().await.map_err(MqttError::FlushError)?;
+    keep_alive.reset();
 
     // Read subscribe acknowledgement
     let bytes_read = socket
@@ -418,52 +530,186 @@ async fn mqtt_routine<'a>(mut socket: TcpSocket<'a>) -> Result<(), MqttError> {
         unexpected => {
             // Unexpected packet type -> disconnect
             info!("Unexpected packet");
-            return Err(MqttError::UnexpectedPacketType(unexpected));
+
+            return Err(MqttError::UnexpectedPacketType(unexpected.get_type()));
         }
     }
-    
+
     //TODO listen for publishes to topics from here on out
+    let (reader, writer) = socket.split();
 
-    // Send discovery packet
-    // Configuration is like the YAML configuration that would be added in Home Assistant but as JSON
-    // Command topic: The MQTT topic to publish commands to change the state of the fan
-    //TODO set firmware version from Cargo.toml package version
-    //TODO think about setting hardware version, support url, and manufacturer
-    //TODO create single home assistant device with multiple entities for sensors in fan and the bypass
-    //TODO add diagnostic entity like IP address
-    //TODO availability topic
-    // Using abbreviations to save space of binary and on the wire (haven't measured effect though...)
-    // name -> name
-    // uniq_id -> unique_id
-    // stat_t -> state_topic
-    // cmd_t -> command_topic
-    // pct_stat_t -> percentage_state_topic
-    // pct_cmd_t -> percentage_command_topic
-    // spd_rng_max -> speed_range_max
-    // Don't need to set speed_range_min because it is 1 by default
-    //TODO remove whitespace at compile time through macro, build script or const fn
-    const DISCOVERY_PAYLOAD: &[u8] = br#"{
-        "name": "Fan",
-        "uniq_id": "testfan",
-        "stat_t": "testfan/on/state",
-        "cmd_t": "testfan/on/set",
-        "pct_stat_t": "testfan/speed/percentage_state",
-        "pct_cmd_t": "testfan/speed/percentage",
-        "spd_rng_max": 64000
-    }"#;
+    let (send_result, listen_result) = join(
+        send_discovery_and_keep_alive(writer, send_buffer, keep_alive),
+        listen_for_publishes(reader, receive_buffer),
+    )
+    .await;
 
-    const DISCOVERY_PUBLISH: Publish = Publish {
-        topic_name: DISCOVERY_TOPIC,
-        payload: DISCOVERY_PAYLOAD,
-    };
-    
-    DISCOVERY_PUBLISH.write(&mut send_buffer, &mut offset).map_err(MqttError::WritePublishError)?;
-
-    socket.write_all(&send_buffer[..offset]).await.map_err(MqttError::WriteError)?;
-    socket.flush().await.map_err(MqttError::FlushError)?;
-    
-    
     Ok(())
+}
+#[derive(Debug)]
+struct FanSetting(u16);
+#[derive(Debug)]
+
+struct SetPointOutOfBoundsError;
+
+impl FanSetting {
+    const ZERO: Self = Self(0);
+    const fn new(set_point: u16) -> Result<Self, SetPointOutOfBoundsError> {
+        if set_point > fan::MAX_SET_POINT {
+            return Err(SetPointOutOfBoundsError);
+        }
+
+        Ok(Self(set_point))
+    }
+
+    const fn get(&self) -> u16 {
+        self.0
+    }
+}
+
+static MODBUS_SIGNAL: Signal<CriticalSectionRawMutex, FanSetting> = Signal::new();
+
+/// Controls the fans through the MAX845 and modbus communication
+/// Waits for [MODBUS_SIGNAL] to be signalled to change the fan speed
+#[embassy_executor::task]
+async fn modbus_task(pin_4: PIN_4, uart0: UART0, pin_12: PIN_12, pin_13: PIN_13) {
+    // UART things
+    // PIN_4 seems to refer to GP4 on the Pico W pinout
+    let mut driver_enable = Output::new(pin_4, Level::Low);
+    let mut uart = Uart::new_blocking(uart0, pin_12, pin_13, fan::get_configuration());
+
+    loop {
+        // Wait for settings change
+        let setting = MODBUS_SIGNAL.wait().await;
+        // Send update through UART to MAX845 to modbus fans
+        // Form message to fan 1
+        let set_point = setting.get();
+        let mut message: [u8; 8] = [
+            // Device address fan 1
+            fan::address::FAN_1,
+            // Modbus function code
+            modbus::function_code::WRITE_SINGLE_REGISTER,
+            // Holding register address
+            fan::holding_registers::REFERENCE_SET_POINT[0],
+            fan::holding_registers::REFERENCE_SET_POINT[1],
+            // Value to set
+            (set_point >> 8) as u8,
+            set_point as u8,
+            // CRC is set later
+            0,
+            0,
+        ];
+
+        let checksum = modbus::CRC.checksum(&message[..6]).to_be_bytes();
+
+        // They come out reversed (or is us using to_be_bytes reversed?)
+        message[6] = checksum[1];
+        message[7] = checksum[0];
+
+        info!("Sending message to fan 1: {:?}", message);
+
+        // Set pin setting DE (driver enable) to on (high) on the MAX845 to send data
+        driver_enable.set_high();
+        let result = uart.blocking_write(&message);
+        info!("uart result: {:?}", result);
+
+        // Before closing we need to flush the buffer to ensure that all data is written
+        let result = uart.blocking_flush();
+
+        // Wait to not cut off last byte when turning off driver enable
+        Timer::after(Duration::from_micros(190)).await;
+
+        // Close sending data to enable receiving data
+        driver_enable.set_low();
+
+        // Read response from fan 1
+        let mut response_buffer: [u8; 8] = [0; 8];
+        let response = uart.blocking_read(&mut response_buffer);
+        info!("response from fan 1: {:?} {:?}", response, response_buffer);
+        //TODO validate response from fan 1
+
+        /// Messsage delay between modbus messages in microseconds
+        const MESSAGE_DELAY: u64 = modbus::get_message_delay(fan::BAUD_RATE);
+        Timer::after_micros(MESSAGE_DELAY).await;
+
+        // Form message to fan 2
+        // Update the fan address and therefore the CRC
+        // Keep speed as both fans should be running at the same speed
+        message[0] = fan::address::FAN_2;
+        let checksum = modbus::CRC.checksum(&message[..6]).to_be_bytes();
+        message[6] = checksum[1];
+        message[7] = checksum[0];
+        info!("sending message to fan 2: {:?}", message);
+
+        // Set pin setting DE (driver enable) to on (high) on the MAX845 to send data
+        driver_enable.set_high();
+
+        let result = uart.blocking_write(&message);
+        info!("uart result: {:?}", result);
+
+        // Before closing we need to flush the buffer to ensure that all data is written
+        let result = uart.blocking_flush();
+        info!("uart flush result: {:?}", result);
+
+        // In addition to flushing we need to wait for some time before turning off data in on the
+        // MAX845 because we might be too fast and cut off the last byte or more. (This happened)
+        // I saw someone using 120 microseconds (https://youtu.be/i46jdhvRej4?t=886). This number
+        // is based on trial and error. Don't feel bad to change it if it doesn't work.
+        Timer::after(Duration::from_micros(190)).await;
+
+        // Close sending data to enable receiving data
+        driver_enable.set_low();
+        //TODO validate response from fan 2
+
+        // Read response from fan 2
+        let response = uart.blocking_read(&mut response_buffer);
+        info!("response from fan 2: {:?} {:?}", response, response_buffer);
+    }
+}
+
+/// This task handles inputs from physical buttons to change the fan speed
+#[embassy_executor::task]
+async fn input_task(pin_18: PIN_18) {
+    // The button just rotates through fan settings. This is because we currently only have one button
+    // Will probably use something more advanced in the future
+    let mut button = Input::new(pin_18, Pull::Up);
+
+    let mut fan_state = fan::State::default();
+    //TODO debounce
+    loop {
+        // Falling edge for our button -> button down (pressing down
+        // Rising edge for our button -> button up (letting go after press)
+        // Act on press as there is delay between pressing and letting go and it feels snappier
+        button.wait_for_falling_edge().await;
+
+        // Advance to next fan state
+        // Could make this a state machine with phantom data, but chose not to as long as it is this simple
+        fan_state = match fan_state {
+            fan::State::Off => fan::State::Low,
+            fan::State::Low => fan::State::Medium,
+            fan::State::Medium => fan::State::High,
+            fan::State::High => fan::State::Off,
+        };
+
+        // Setting values low on purpose for testing
+        let set_point = match fan_state {
+            fan::State::Off => 0,
+            // 10%
+            fan::State::Low => fan::MAX_SET_POINT / 10,
+            // 25%
+            fan::State::Medium => fan::MAX_SET_POINT / 4,
+            // 50%
+            fan::State::High => fan::MAX_SET_POINT / 2,
+        };
+
+        // Send signal to change fan speed
+        let Ok(setting) = FanSetting::new(set_point) else {
+            warn!("Setting fan speed out of bounds. Not accepting new setting");
+            continue;
+        };
+
+        MODBUS_SIGNAL.signal(setting);
+    }
 }
 
 #[embassy_executor::main]
@@ -607,5 +853,21 @@ async fn main(spawner: Spawner) {
         info!("response from fan 2: {:?} {:?}", response, response_buffer);
 
         control.gpio_set(0, false).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    // The tests don't run on the embedded target, so we need to import the std crate
+    extern crate std;
+    use super::*;
+
+    /// These are important hardcoded values I want to make sure are not changed accidentally
+    #[test]
+    fn setting_does_not_exceed_max_set_point() {
+        assert_eq!(fan::MAX_SET_POINT, 64_000);
+        assert_eq!(FanSetting::new(64_000), Ok(FanSetting(64_000)));
+        assert_eq!(FanSetting::new(64_000 + 1), Err(SetPointOutOfBoundsError));
+        assert_eq!(FanSetting::new(u16::MAX), Err(SetPointOutOfBoundsError));
     }
 }

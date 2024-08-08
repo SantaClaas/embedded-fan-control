@@ -307,7 +307,7 @@ async fn receive_publish(stream: &mut TcpStream) -> Result<Publish, ReadPublishE
         return Err(ReadPublishError::UnexpectedPacketType(type_and_flags >> 4));
     }
 
-    // Flags matter here but we ignore them for now
+    // Flags matter here
     // let is_re_delivery = (type_and_flags & 0b0000_1000) != 0;
     let quality_of_service_level = (type_and_flags & 0b0000_0110) >> 1;
     if quality_of_service_level > 0 {

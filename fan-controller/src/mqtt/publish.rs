@@ -1,6 +1,13 @@
-use crate::mqtt::variable_byte_integer;
-use crate::mqtt::variable_byte_integer::VariableByteIntegerEncodeError;
+use core::str::Utf8Error;
 
+use defmt::Format;
+
+use crate::mqtt::variable_byte_integer;
+use crate::mqtt::variable_byte_integer::{
+    VariableByteIntegerDecodeError, VariableByteIntegerEncodeError,
+};
+
+#[derive(Format)]
 pub(crate) struct Publish<'a> {
     pub(crate) topic_name: &'a str,
     pub(crate) payload: &'a [u8],
@@ -9,9 +16,16 @@ pub(crate) struct Publish<'a> {
 pub(crate) enum WriteError {
     VariableByteIntegerError(VariableByteIntegerEncodeError),
 }
+pub(crate) enum ReadError {
+    /// The quality of service level is not supported and can't be ignored.
+    UnsupportedQualityOfServiceLevel(u8),
+    VariableByteIntegerError(VariableByteIntegerDecodeError),
+    ZeroLengthTopicName,
+    InvalidTopicName(Utf8Error),
+}
 
 impl<'a> Publish<'a> {
-    const TYPE: u8 = 3;
+    pub(crate) const TYPE: u8 = 3;
 
     pub(crate) fn write(&self, buffer: &mut [u8], offset: &mut usize) -> Result<(), WriteError> {
         // Fixed header
@@ -51,5 +65,55 @@ impl<'a> Publish<'a> {
         }
 
         Ok(())
+    }
+
+    pub(crate) fn read(flags: u8, buffer: &'a [u8]) -> Result<Self, ReadError> {
+        // let is_re_delivery = (flags & 0b0000_1000) != 0;
+        let quality_of_service_level = (flags & 0b0000_0110) >> 1;
+        if quality_of_service_level > 0 {
+            // This changes the layout of the packet and adds a packet identifier
+            // which we don't expect right now
+            return Err(ReadError::UnsupportedQualityOfServiceLevel(
+                quality_of_service_level,
+            ));
+        }
+
+        // Ignore retain flag as it should only matter for packets send to the server
+        // let is_retain = (flags & 0b0000_0001) != 0;
+
+        let mut offset = 0;
+        let remaining_length = variable_byte_integer::decode(buffer, &mut offset)
+            .map_err(ReadError::VariableByteIntegerError)?;
+        //TODO check lengths
+
+        // Variable header
+        let topic_length = ((buffer[offset] as u16) << 8) | buffer[offset + 1] as u16;
+        offset += 2;
+        if topic_length == 0 {
+            return Err(ReadError::ZeroLengthTopicName);
+        }
+
+        let topic_name = core::str::from_utf8(&buffer[offset..offset + topic_length as usize])
+            .map_err(ReadError::InvalidTopicName)?;
+        //TODO validate topic name does not contain MQTT wildcard characters
+        offset += topic_length as usize;
+
+        // Properties
+        let properties_length = variable_byte_integer::decode(buffer, &mut offset)
+            .map_err(ReadError::VariableByteIntegerError)?;
+
+        // Ignore properties for now
+        offset += properties_length;
+
+        // Payload
+        let payload_length = remaining_length - offset;
+
+        //TODO validate there is enough space left in the buffer
+        let payload = &buffer[offset..offset + payload_length];
+
+        Ok(Publish {
+            topic_name,
+            payload,
+        })
     }
 }
