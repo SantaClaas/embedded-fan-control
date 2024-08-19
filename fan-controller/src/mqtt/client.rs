@@ -185,12 +185,14 @@ impl<'a> MqttReceiver<'a> {
 
 mod runner {
     use crate::mqtt::connect::Connect;
+    use crate::mqtt::connect_acknowledgement::{ConnectAcknowledgement, ConnectReasonCode};
     use crate::mqtt::packet::{FromPublish, Packet};
     use crate::mqtt::{connect, packet, ConnectErrorReasonCode};
+    use defmt::warn;
     use embassy_net::tcp;
     use embassy_net::tcp::{TcpReader, TcpSocket, TcpWriter};
     use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
-    use embassy_sync::pubsub::{PubSubChannel, Publisher, Subscriber};
+    use embassy_sync::pubsub::{PubSubChannel, Publisher, Subscriber, WaitResult};
     use embassy_time::{with_timeout, Duration, TimeoutError};
 
     type ReceiveResult<T> = Result<Packet<T>, ReceiveError>;
@@ -201,7 +203,7 @@ mod runner {
         channel: PubSubChannel<CriticalSectionRawMutex, ReceiveResult<T>, 8, 1, 1>,
     }
 
-    #[derive(Clone)]
+    #[derive(Clone, Debug)]
     enum ReceiveError {
         ReadError(ReadError),
         DecodePacketError(packet::ReadError),
@@ -270,10 +272,7 @@ mod runner {
         WriteConnectError(connect::WriteError),
         TcpWriteError(tcp::Error),
         TcpFlushError(tcp::Error),
-        ReadError(ReadError),
-        DecodePacketError(super::ReadError),
-        /// Received invalid packet type. The server had to respond with a Connect Acknowledgement (CONNACK) packet but send another one instead
-        InvalidPacket(u8),
+        ReceiveError(ReceiveError),
         /// Received a connect acknowledgement with an error code
         ErrorCode(ConnectErrorReasonCode),
     }
@@ -345,7 +344,37 @@ mod runner {
                 return Err((ConnectError::TcpFlushError(error)));
             }
 
-            defmt::todo!()
+            // Wait for connect acknowledgement
+            // Discard all messages before the connect acknowledgement
+            // The server has to send a connect acknowledgement before sending any other packet
+            // TCP should ensure the order of packets, so they should not arrive out of order
+            loop {
+                let result = self.subscriber.next_message().await;
+
+                match result {
+                    WaitResult::Lagged(missed_messages) => {
+                        warn!(
+                            "Missed {} messages while waiting for connect acknowledgement: ",
+                            missed_messages
+                        );
+                    }
+                    WaitResult::Message(result) => {
+                        let Packet::ConnectAcknowledgement(ConnectAcknowledgement {
+                            is_session_present: _,
+                            connect_reason_code,
+                        }) = result.map_err(ConnectError::ReceiveError)?
+                        else {
+                            continue;
+                        };
+
+                        if let ConnectReasonCode::ErrorCode(error_code) = connect_reason_code {
+                            return Err(ConnectError::ErrorCode(error_code));
+                        };
+
+                        return Ok(());
+                    }
+                }
+            }
         }
     }
 }
