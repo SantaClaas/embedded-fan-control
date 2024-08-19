@@ -234,18 +234,15 @@ mod runner {
 
         pub(crate) async fn run(mut self) -> ! {
             loop {
-                // let result: Result<&[u8], ReceiveError> = self.read().await.map_err(ReceiveError::ReadError);
-                // let bytes = match result {
-                //     Ok(bytes) => bytes,
-                //     Err(error) => {
-                //         self.publisher.publish(Err(error)).await;
-                //         continue;
-                //     }
-                // };
-
-                let read = self.tcp_receiver.read(&mut self.receive_buffer);
-                let bytes_read = with_timeout(self.timeout, read).await.unwrap().unwrap();
-                let bytes = &self.receive_buffer[..bytes_read];
+                let result: Result<&[u8], ReceiveError> =
+                    self.read().await.map_err(ReceiveError::ReadError);
+                let bytes = match result {
+                    Ok(bytes) => bytes,
+                    Err(error) => {
+                        self.publisher.publish(Err(error)).await;
+                        continue;
+                    }
+                };
 
                 let result = Packet::read(bytes);
 
