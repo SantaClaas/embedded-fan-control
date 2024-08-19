@@ -7,7 +7,7 @@ use crate::mqtt::variable_byte_integer::{
     VariableByteIntegerDecodeError, VariableByteIntegerEncodeError,
 };
 
-#[derive(Format)]
+#[derive(Format, Clone)]
 pub(crate) struct Publish<'a> {
     pub(crate) topic_name: &'a str,
     pub(crate) payload: &'a [u8],
@@ -16,6 +16,8 @@ pub(crate) struct Publish<'a> {
 pub(crate) enum WriteError {
     VariableByteIntegerError(VariableByteIntegerEncodeError),
 }
+
+#[derive(Debug, Clone)]
 pub(crate) enum ReadError {
     /// The quality of service level is not supported and can't be ignored.
     UnsupportedQualityOfServiceLevel(u8),

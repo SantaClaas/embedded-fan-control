@@ -2,24 +2,25 @@
 #![no_main]
 #![allow(warnings)]
 
+use core::ops::{Deref, DerefMut};
 use crc::{Crc, CRC_16_MODBUS};
 use cyw43::{Control, NetDriver};
 use cyw43_pio::PioSpi;
 use defmt::*;
 use embassy_executor::Spawner;
 use embassy_futures::join::join;
-use embassy_net::{Config, IpAddress, IpEndpoint, Stack, StackResources, tcp};
 use embassy_net::dns::{DnsQueryType, DnsSocket};
-use embassy_net::tcp::{TcpReader, TcpSocket, TcpWriter};
 use embassy_net::tcp::client::{TcpClient, TcpClientState};
-use embassy_rp::{bind_interrupts, dma, Peripheral, Peripherals, pio, uart};
+use embassy_net::tcp::{TcpReader, TcpSocket, TcpWriter};
+use embassy_net::{tcp, Config, IpAddress, IpEndpoint, Stack, StackResources};
 use embassy_rp::clocks::RoscRng;
 use embassy_rp::gpio::{Input, Level, Output, Pin, Pull};
 use embassy_rp::peripherals::{
     DMA_CH0, PIN_12, PIN_13, PIN_18, PIN_23, PIN_24, PIN_25, PIN_29, PIN_4, PIO0, UART0,
 };
-use embassy_rp::pio::{InterruptHandler, Pio, PioPin};
-use embassy_rp::uart::Uart;
+use embassy_rp::pio::{InterruptHandler as PioInterruptHandler, Pio, PioPin};
+use embassy_rp::uart::{InterruptHandler as UartInterruptHandler, Uart};
+use embassy_rp::{bind_interrupts, dma, pio, uart, Peripheral, Peripherals};
 use embassy_sync::blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex};
 use embassy_sync::channel;
 use embassy_sync::channel::Channel;
@@ -29,26 +30,33 @@ use embassy_sync::signal::Signal;
 use embassy_time::{Duration, Instant, Ticker, Timer};
 use embedded_io_async::{Read, Write};
 use embedded_nal_async::{AddrType, Dns, SocketAddr, TcpConnect};
+use mqtt::client::ConnectError;
 use rand::RngCore;
 use reqwless::client::{TlsConfig, TlsVerify};
 use static_cell::StaticCell;
 
 use {defmt_rtt as _, panic_probe as _};
 
-use crate::mqtt::{connect, publish, subscribe};
-use crate::mqtt::{Packet, QualityOfService};
+use crate::configuration::*;
 use crate::mqtt::connect::Connect;
 use crate::mqtt::connect_acknowledgement::ConnectReasonCode;
 use crate::mqtt::ping_request::PingRequest;
 use crate::mqtt::publish::Publish;
 use crate::mqtt::subscribe::{Subscribe, Subscription};
+use crate::mqtt::{connect, publish, subscribe};
+use crate::mqtt::QualityOfService;
+use fan::FanClient;
+use self::mqtt::packet;
+use self::mqtt::packet::Packet;
 
+mod configuration;
 mod fan;
 mod modbus;
 mod mqtt;
 
 bind_interrupts!(struct Irqs {
-    PIO0_IRQ_0 => InterruptHandler<PIO0>;
+    PIO0_IRQ_0 => PioInterruptHandler<PIO0>;
+    UART0_IRQ  => UartInterruptHandler<UART0>;
 });
 
 #[embassy_executor::task]
@@ -61,6 +69,10 @@ async fn wifi_task(
 ) -> ! {
     runner.run().await
 }
+
+#[derive(Clone, Copy)]
+enum Event {}
+static EVENT: PubSubChannel<CriticalSectionRawMutex, Event, 8, 4, 4> = PubSubChannel::new();
 
 async fn gain_control(
     spawner: Spawner,
@@ -99,67 +111,36 @@ async fn gain_control(
     (net_device, control)
 }
 
-//TODO make configurable
-/// Don't put credentials in the source code
-const WIFI_NETWORK: &str = ""; //  env!("FAN_CONTROL_WIFI_NETWORK");
-
-//TODO make configurable
-/// Don't put credentials in the source code
-const WIFI_PASSWORD: &str = ""; //env!("FAN_CONTROL_WIFI_PASSWORD");
-
-//TODO make configurable
-const MQTT_BROKER_ADDRESS: &str = "homeassistant.local";
-
-//TODO make configurable
-const MQTT_BROKER_PORT: u16 = 1883;
-
-//TODO make configurable
-/// The broker IP address can be configured manually. It will be used instead of the [MQTT_BROKER_ADDRESS]
-/// if it is set as it does not require DNS resolution.
-const MQTT_BROKER_IP_ADDRESS: Option<IpAddress> = None;
-
-//TODO make configurable
-const MQTT_BROKER_USERNAME: &str = "";
-
-//TODO make configurable
-const MQTT_BROKER_PASSWORD: &[u8] = b"";
-
-//TODO make configurable
-/// Prefix is "homeassistant", but it can be changed in home assistant configuration
-const DISCOVERY_TOPIC: &str = "homeassistant/fan/testfan/config";
-
 #[embassy_executor::task]
 async fn network_task(stack: &'static Stack<NetDriver<'static>>) -> ! {
     stack.run().await
 }
-
-enum State {
-    Connecting,
-    Connected,
-}
-
-type StateSignal = Signal<CriticalSectionRawMutex, State>;
-static STATE: StateSignal = StateSignal::new();
 
 enum MqttError {
     WriteConnectError(connect::WriteError),
     WriteError(tcp::Error),
     FlushError(tcp::Error),
     ReadError(tcp::Error),
-    ReadPacketError(mqtt::ReadError),
+    ReadPacketError(packet::ReadError),
     ConnectError(mqtt::ConnectErrorReasonCode),
     WriteSubscribeError(subscribe::WriteError),
     UnexpectedPacketType(u8),
     WritePublishError(publish::WriteError),
 }
 
-async fn mqtt_receive<'a>(reader: TcpReader<'a>) {}
-
+#[embassy_executor::task]
 async fn mqtt_task(
     spawner: Spawner,
-    net_device: NetDriver<'static>,
-    control: &mut Control<'static>,
+    pwr_pin: PIN_23,
+    cs_pin: PIN_25,
+    pio: PIO0,
+    dma: DMA_CH0,
+    dio: impl PioPin,
+    clk: impl PioPin,
 ) -> () {
+    let (net_device, mut control) =
+        gain_control(spawner, pwr_pin, cs_pin, pio, dma, dio, clk).await;
+
     static STACK: StaticCell<Stack<NetDriver<'static>>> = StaticCell::new();
     static RESOURCES: StaticCell<StackResources<5>> = StaticCell::new();
     let configuration = Config::dhcpv4(Default::default());
@@ -202,17 +183,14 @@ async fn mqtt_task(
     stack.wait_config_up().await;
     info!("Stack is up");
 
-    let state = StateSignal::new();
-
     // Now we can use it
-    // loop {
-    let client_state = TcpClientState::<1, 1024, 1024>::new();
     let mut receive_buffer = [0; 1024];
     let mut send_buffer = [0; 1024];
     let mut socket = TcpSocket::new(stack, &mut receive_buffer, &mut send_buffer);
 
     let dns_client = DnsSocket::new(stack);
 
+    info!("Resolving MQTT broker IP address");
     // Get home assistant MQTT broker IP address
     let address = loop {
         //TODO support IPv6
@@ -241,8 +219,9 @@ async fn mqtt_task(
 
         break addresses.swap_remove(0);
     };
+    info!("MQTT broker IP address resolved");
 
-    // let address = SocketAddr::new(address, MQTT_BROKER_PORT);
+    info!("Connecting to MQTT broker through TCP");
     let endpoint = IpEndpoint::new(address, MQTT_BROKER_PORT);
     // Connect
     while let Err(error) = socket.connect(endpoint).await {
@@ -252,14 +231,230 @@ async fn mqtt_task(
         );
         Timer::after_millis(500).await;
     }
+    info!("Connected to MQTT broker through TCP");
+    use mqtt::client::MqttClient;
+    let mut client = MqttClient::new(socket);
+    //TODO refactor this into a retry policy or of the sorts
+    let mut client = loop {
+        let result = client
+            .connect(MQTT_BROKER_USERNAME, MQTT_BROKER_PASSWORD, KEEP_ALIVE)
+            .await;
 
-    // }
+        match result {
+            Ok(client) => break client,
+            // Retry
+            Err((old_client, error)) => {
+                match error {
+                    error @ ConnectError::TcpFlushError(_)
+                    | error @ ConnectError::TcpWriteError(_)
+                    | error @ ConnectError::ReadError(_) => {
+                        info!(
+                            "Error connecting. Trying again ({:?})",
+                            Debug2Format(&error)
+                        );
+                        client = old_client;
+                        Timer::after_millis(500).await;
+                        continue;
+                    }
+
+                    // Disconnect on these errors. (Returning does drop the tcp socket)
+                    // This error is most likely on us and not recoverable.
+                    //TODO retry when configuration changed
+                    error @ ConnectError::WriteConnectError(_)
+                    | error @ ConnectError::ErrorCode(_)
+                    | error @ ConnectError::InvalidPacket(_)
+                    | error @ ConnectError::DecodePacketError(_) => {
+                        error!(
+                            "Unrecoverable error. Closing connection. {:?}",
+                            Debug2Format(&error)
+                        );
+                        return;
+                    }
+                }
+            }
+        }
+    };
+    const ARRAY_REPEAT_VALUE: Option<Subscription<'_>> = None;
+    let pending_subscriptions: [Option<Subscription>; 2] = [ARRAY_REPEAT_VALUE; 2];
+    let (mut receiver, writer) = client.split();
+    join(
+        async {
+            loop {
+                match receiver.receive().await {
+                    Ok(packet) => {
+                        info!("Received packet: {}", packet);
+
+                        match packet {
+                            Packet::Publish(publish) => {}
+                            Packet::SubscribeAcknowledgement(subscribe_acknowledgement) => {}
+                            other => continue,
+                        }
+                    }
+                    Err(error) => error!("Error receiving packet: {:?}", Debug2Format(&error)),
+                }
+            }
+        },
+        async { Timer::after_millis(3).await },
+    )
+    .await;
+
+    // Subscribe to home assistant topics
+    const SUBSCRIPTIONS: [Subscription; 2] = [
+        Subscription {
+            topic_filter: "testfan/on/set",
+            options: mqtt::subscribe::Options::new(
+                QualityOfService::AtMostOnceDelivery,
+                false,
+                false,
+                mqtt::subscribe::RetainHandling::DoNotSend,
+            ),
+        },
+        Subscription {
+            topic_filter: "testfan/speed/percentage",
+            options: mqtt::subscribe::Options::new(
+                QualityOfService::AtMostOnceDelivery,
+                false,
+                false,
+                mqtt::subscribe::RetainHandling::DoNotSend,
+            ),
+        },
+    ];
+
+    const SUBSCRIBE_PACKET: Subscribe<2> = Subscribe {
+        subscriptions: SUBSCRIPTIONS,
+        packet_identifier: 42,
+    };
 }
 
 enum PublishReceiveError {
     ReadError(tcp::Error),
-    ReadPacketError(mqtt::ReadError),
+    ReadPacketError(packet::ReadError),
 }
+async fn mqtt_routine<'a>(mut socket: TcpSocket<'a>) {
+    core::todo!()
+
+    // info!("Sending MQTT connect packet");
+    // // No experience how big this buffer should be
+    // let mut send_buffer = [0; 256];
+    // // Send MQTT connect packet
+    // let packet = Connect {
+    //     client_identifier: "testfan",
+    //     username: MQTT_BROKER_USERNAME,
+    //     password: MQTT_BROKER_PASSWORD,
+    //     keep_alive_seconds: KEEP_ALIVE.as_secs() as u16,
+    // };
+
+    // let mut offset = 0;
+    // packet
+    //     .write(&mut send_buffer, &mut offset)
+    //     .map_err(MqttError::WriteConnectError)?;
+
+    // socket
+    //     .write_all(&send_buffer[..offset])
+    //     .await
+    //     .map_err(MqttError::WriteError)?;
+    // socket.flush().await.map_err(MqttError::FlushError)?;
+
+    // info!("Sent MQTT connect packet");
+
+    // info!("Waiting for MQTT connect acknowledgement");
+
+    // // Wait for connection acknowledgement
+    // let mut receive_buffer = [0; 1024];
+    // let bytes_read = socket
+    //     .read(&mut receive_buffer)
+    //     .await
+    //     .map_err(MqttError::ReadError)?;
+    // let packet = Packet::read(&receive_buffer[..bytes_read]).map_err(MqttError::ReadPacketError)?;
+
+    // match packet {
+    //     Packet::ConnectAcknowledgement(acknowledgement) => {
+    //         if let ConnectReasonCode::ErrorCode(error_code) = acknowledgement.connect_reason_code {
+    //             return Err(MqttError::ConnectError(error_code));
+    //         }
+    //     }
+    //     unexpected => {
+    //         // Unexpected packet type -> disconnect
+    //         info!("Unexpected packet");
+    //         return Err(MqttError::UnexpectedPacketType(unexpected.get_type()));
+    //     }
+    // }
+
+    // // Start keep alive after connect acknowledgement?
+    // //TODO use keep alive interval received from server in connect acknowledgement
+    // let mut keep_alive = Ticker::every(KEEP_ALIVE);
+
+    // // Subscribe to home assistant topics
+    // // Before sending discovery packet
+    // let subscriptions = [
+    //     Subscription {
+    //         topic_filter: "testfan/on/set",
+    //         options: mqtt::subscribe::Options::new(
+    //             QualityOfService::AtMostOnceDelivery,
+    //             false,
+    //             false,
+    //             mqtt::subscribe::RetainHandling::DoNotSend,
+    //         ),
+    //     },
+    //     Subscription {
+    //         topic_filter: "testfan/speed/percentage",
+    //         options: mqtt::subscribe::Options::new(
+    //             QualityOfService::AtMostOnceDelivery,
+    //             false,
+    //             false,
+    //             mqtt::subscribe::RetainHandling::DoNotSend,
+    //         ),
+    //     },
+    // ];
+
+    // //TODO packet identifier management
+    // let packet = Subscribe {
+    //     subscriptions,
+    //     packet_identifier: 42,
+    // };
+
+    // offset = 0;
+    // let mut last_send = Instant::now();
+    // packet
+    //     .write(&mut send_buffer, &mut offset)
+    //     .map_err(MqttError::WriteSubscribeError)?;
+    // socket
+    //     .write_all(&send_buffer[..offset])
+    //     .await
+    //     .map_err(MqttError::WriteError)?;
+    // socket.flush().await.map_err(MqttError::FlushError)?;
+    // keep_alive.reset();
+
+    // // Read subscribe acknowledgement
+    // let bytes_read = socket
+    //     .read(&mut receive_buffer)
+    //     .await
+    //     .map_err(MqttError::ReadError)?;
+
+    // let packet = Packet::read(&receive_buffer[..bytes_read]).map_err(MqttError::ReadPacketError)?;
+    // match packet {
+    //     Packet::SubscribeAcknowledgement(_acknowledgement) => {
+    //         // Ignoring acknowledgement errors for now as their information is only useful for debugging currently
+    //     }
+    //     unexpected => {
+    //         // Unexpected packet type -> disconnect
+    //         info!("Unexpected packet");
+
+    //         return Err(MqttError::UnexpectedPacketType(unexpected.get_type()));
+    //     }
+    // }
+
+    // //TODO listen for publishes to topics from here on out
+    // let (reader, writer) = socket.split();
+
+    // let (send_result, listen_result) = join(
+    //     send_discovery_and_keep_alive(writer, send_buffer, keep_alive),
+    //     listen_for_publishes(reader, receive_buffer),
+    // )
+    // .await;
+    // Ok(())
+}
+
 async fn listen_for_publishes(
     mut reader: TcpReader<'_>,
     mut buffer: [u8; 1024],
@@ -311,7 +506,7 @@ async fn listen_for_publishes(
                         };
 
                         //TODO confirm there was no error on the modbus side
-                        MODBUS_SIGNAL.signal(setting);
+                        // MODBUS_SIGNAL.signal(setting);
                     }
                     "testfan/on/set" => {
                         let payload = match core::str::from_utf8(publish.payload) {
@@ -332,7 +527,7 @@ async fn listen_for_publishes(
                             }
                             "OFF" => {
                                 println!("Turning off");
-                                MODBUS_SIGNAL.signal(FanSetting::ZERO);
+                                // MODBUS_SIGNAL.signal(FanSetting::ZERO);
                             }
                             unknown => {
                                 warn!(
@@ -419,133 +614,6 @@ async fn send_discovery_and_keep_alive(
         //TODO read ping response or disconnect after "a reasonable amount of time"
     }
 }
-
-const KEEP_ALIVE: Duration = Duration::from_secs(60);
-const _: () = {
-    // Check if the representation as u16 is correct
-    let seconds = KEEP_ALIVE.as_secs() as u16;
-
-    core::assert!(seconds == 60);
-};
-
-async fn mqtt_routine<'a>(mut socket: TcpSocket<'a>) -> Result<(), MqttError> {
-    // No experience how big this buffer should be
-    let mut send_buffer = [0; 256];
-    // Send MQTT connect packet
-    let packet = Connect {
-        client_identifier: "testfan",
-        username: MQTT_BROKER_USERNAME,
-        password: MQTT_BROKER_PASSWORD,
-        keep_alive_seconds: KEEP_ALIVE.as_secs() as u16,
-    };
-
-    let mut offset = 0;
-    packet
-        .write(&mut send_buffer, &mut offset)
-        .map_err(MqttError::WriteConnectError)?;
-
-    socket
-        .write_all(&send_buffer[..offset])
-        .await
-        .map_err(MqttError::WriteError)?;
-    socket.flush().await.map_err(MqttError::FlushError)?;
-
-    // Wait for connection acknowledgement
-    let mut receive_buffer = [0; 1024];
-    let bytes_read = socket
-        .read(&mut receive_buffer)
-        .await
-        .map_err(MqttError::ReadError)?;
-    let packet = Packet::read(&receive_buffer[..bytes_read]).map_err(MqttError::ReadPacketError)?;
-
-    match packet {
-        Packet::ConnectAcknowledgement(acknowledgement) => {
-            if let ConnectReasonCode::ErrorCode(error_code) = acknowledgement.connect_reason_code {
-                return Err(MqttError::ConnectError(error_code));
-            }
-        }
-        unexpected => {
-            // Unexpected packet type -> disconnect
-            info!("Unexpected packet");
-            return Err(MqttError::UnexpectedPacketType(unexpected.get_type()));
-        }
-    }
-
-    // Start keep alive after connect acknowledgement?
-    //TODO use keep alive interval received from server in connect acknowledgement
-    let mut keep_alive = Ticker::every(KEEP_ALIVE);
-
-    // Subscribe to home assistant topics
-    // Before sending discovery packet
-    let subscriptions = [
-        Subscription {
-            topic_filter: "testfan/on/set",
-            options: mqtt::subscribe::Options::new(
-                QualityOfService::AtMostOnceDelivery,
-                false,
-                false,
-                mqtt::subscribe::RetainHandling::DoNotSend,
-            ),
-        },
-        Subscription {
-            topic_filter: "testfan/speed/percentage",
-            options: mqtt::subscribe::Options::new(
-                QualityOfService::AtMostOnceDelivery,
-                false,
-                false,
-                mqtt::subscribe::RetainHandling::DoNotSend,
-            ),
-        },
-    ];
-
-    //TODO packet identifier management
-    let packet = Subscribe {
-        subscriptions,
-        packet_identifier: 42,
-    };
-
-    offset = 0;
-    let mut last_send = Instant::now();
-    packet
-        .write(&mut send_buffer, &mut offset)
-        .map_err(MqttError::WriteSubscribeError)?;
-    socket
-        .write_all(&send_buffer[..offset])
-        .await
-        .map_err(MqttError::WriteError)?;
-    socket.flush().await.map_err(MqttError::FlushError)?;
-    keep_alive.reset();
-
-    // Read subscribe acknowledgement
-    let bytes_read = socket
-        .read(&mut receive_buffer)
-        .await
-        .map_err(MqttError::ReadError)?;
-
-    let packet = Packet::read(&receive_buffer[..bytes_read]).map_err(MqttError::ReadPacketError)?;
-    match packet {
-        Packet::SubscribeAcknowledgement(_acknowledgement) => {
-            // Ignoring acknowledgement errors for now as their information is only useful for debugging currently
-        }
-        unexpected => {
-            // Unexpected packet type -> disconnect
-            info!("Unexpected packet");
-
-            return Err(MqttError::UnexpectedPacketType(unexpected.get_type()));
-        }
-    }
-
-    //TODO listen for publishes to topics from here on out
-    let (reader, writer) = socket.split();
-
-    let (send_result, listen_result) = join(
-        send_discovery_and_keep_alive(writer, send_buffer, keep_alive),
-        listen_for_publishes(reader, receive_buffer),
-    )
-    .await;
-
-    Ok(())
-}
 #[derive(Debug)]
 struct FanSetting(u16);
 #[derive(Debug)]
@@ -564,106 +632,6 @@ impl FanSetting {
 
     const fn get(&self) -> u16 {
         self.0
-    }
-}
-
-static MODBUS_SIGNAL: Signal<CriticalSectionRawMutex, FanSetting> = Signal::new();
-
-/// Controls the fans through the MAX845 and modbus communication
-/// Waits for [MODBUS_SIGNAL] to be signalled to change the fan speed
-#[embassy_executor::task]
-async fn modbus_task(pin_4: PIN_4, uart0: UART0, pin_12: PIN_12, pin_13: PIN_13) {
-    // UART things
-    // PIN_4 seems to refer to GP4 on the Pico W pinout
-    let mut driver_enable = Output::new(pin_4, Level::Low);
-    let mut uart = Uart::new_blocking(uart0, pin_12, pin_13, fan::get_configuration());
-
-    loop {
-        // Wait for settings change
-        let setting = MODBUS_SIGNAL.wait().await;
-        // Send update through UART to MAX845 to modbus fans
-        // Form message to fan 1
-        let set_point = setting.get();
-        let mut message: [u8; 8] = [
-            // Device address fan 1
-            fan::address::FAN_1,
-            // Modbus function code
-            modbus::function_code::WRITE_SINGLE_REGISTER,
-            // Holding register address
-            fan::holding_registers::REFERENCE_SET_POINT[0],
-            fan::holding_registers::REFERENCE_SET_POINT[1],
-            // Value to set
-            (set_point >> 8) as u8,
-            set_point as u8,
-            // CRC is set later
-            0,
-            0,
-        ];
-
-        let checksum = modbus::CRC.checksum(&message[..6]).to_be_bytes();
-
-        // They come out reversed (or is us using to_be_bytes reversed?)
-        message[6] = checksum[1];
-        message[7] = checksum[0];
-
-        info!("Sending message to fan 1: {:?}", message);
-
-        // Set pin setting DE (driver enable) to on (high) on the MAX845 to send data
-        driver_enable.set_high();
-        let result = uart.blocking_write(&message);
-        info!("uart result: {:?}", result);
-
-        // Before closing we need to flush the buffer to ensure that all data is written
-        let result = uart.blocking_flush();
-
-        // Wait to not cut off last byte when turning off driver enable
-        Timer::after(Duration::from_micros(190)).await;
-
-        // Close sending data to enable receiving data
-        driver_enable.set_low();
-
-        // Read response from fan 1
-        let mut response_buffer: [u8; 8] = [0; 8];
-        let response = uart.blocking_read(&mut response_buffer);
-        info!("response from fan 1: {:?} {:?}", response, response_buffer);
-        //TODO validate response from fan 1
-
-        /// Messsage delay between modbus messages in microseconds
-        const MESSAGE_DELAY: u64 = modbus::get_message_delay(fan::BAUD_RATE);
-        Timer::after_micros(MESSAGE_DELAY).await;
-
-        // Form message to fan 2
-        // Update the fan address and therefore the CRC
-        // Keep speed as both fans should be running at the same speed
-        message[0] = fan::address::FAN_2;
-        let checksum = modbus::CRC.checksum(&message[..6]).to_be_bytes();
-        message[6] = checksum[1];
-        message[7] = checksum[0];
-        info!("sending message to fan 2: {:?}", message);
-
-        // Set pin setting DE (driver enable) to on (high) on the MAX845 to send data
-        driver_enable.set_high();
-
-        let result = uart.blocking_write(&message);
-        info!("uart result: {:?}", result);
-
-        // Before closing we need to flush the buffer to ensure that all data is written
-        let result = uart.blocking_flush();
-        info!("uart flush result: {:?}", result);
-
-        // In addition to flushing we need to wait for some time before turning off data in on the
-        // MAX845 because we might be too fast and cut off the last byte or more. (This happened)
-        // I saw someone using 120 microseconds (https://youtu.be/i46jdhvRej4?t=886). This number
-        // is based on trial and error. Don't feel bad to change it if it doesn't work.
-        Timer::after(Duration::from_micros(190)).await;
-
-        // Close sending data to enable receiving data
-        driver_enable.set_low();
-        //TODO validate response from fan 2
-
-        // Read response from fan 2
-        let response = uart.blocking_read(&mut response_buffer);
-        info!("response from fan 2: {:?} {:?}", response, response_buffer);
     }
 }
 
@@ -708,10 +676,20 @@ async fn input_task(pin_18: PIN_18) {
             continue;
         };
 
-        MODBUS_SIGNAL.signal(setting);
+        let mut fans = FANS.lock().await;
+        let Some(fan) = fans.deref_mut() else {
+            warn!("No fan client found");
+            continue;
+        };
+        
+        fan.set_set_point(set_point).await;
+        
+        
     }
 }
 
+type Fans = Mutex<CriticalSectionRawMutex, Option<FanClient<'static, UART0, PIN_4>>>;
+static FANS: Fans = Mutex::new(None);
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
     let Peripherals {
@@ -719,6 +697,8 @@ async fn main(spawner: Spawner) {
         PIN_25: pin_25,
         PIO0: pio0,
         DMA_CH0: dma_ch0,
+        DMA_CH1: dma_ch1,
+        DMA_CH2: dma_ch2,
         PIN_24: pin_24,
         PIN_29: pin_29,
         PIN_4: pin_4,
@@ -729,136 +709,27 @@ async fn main(spawner: Spawner) {
         ..
     } = embassy_rp::init(Default::default());
 
-    let (net_device, mut control) =
-        gain_control(spawner, pin_23, pin_25, pio0, dma_ch0, pin_24, pin_29).await;
-    // UART things
-    // PIN_4 seems to refer to GP4 on the Pico W pinout
-    let mut driver_enable = Output::new(pin_4, Level::Low);
-    //TODO read up on interrupts
-    let mut uart = Uart::new_blocking(uart0, pin_12, pin_13, fan::get_configuration());
+    // UART
 
-    // Send signal test button
-    let mut button = Input::new(pin_18, Pull::Up);
-    // Could make this a state machine with phantom data
-    let mut fan_state = fan::State::default();
-
-    loop {
-        // Falling edge for our button -> button down (pressing down
-        // Rising edge for our button -> button up (letting go after press)
-        // Act on press as there is delay between pressing and letting go and it feels snappier
-        button.wait_for_falling_edge().await;
-        // Advance to next fan state
-        fan_state = match fan_state {
-            fan::State::Off => fan::State::Low,
-            fan::State::Low => fan::State::Medium,
-            fan::State::Medium => fan::State::High,
-            fan::State::High => fan::State::Off,
-        };
-
-        info!("fan state: {:?}", fan_state);
-
-        // Setting values low on purpose for testing
-        let set_point = match fan_state {
-            fan::State::Off => 0,
-            // 10%
-            fan::State::Low => fan::MAX_SET_POINT / 10,
-            // 25%
-            fan::State::Medium => fan::MAX_SET_POINT / 4,
-            // 50%
-            fan::State::High => fan::MAX_SET_POINT / 2,
-        }
-        .to_be_bytes();
-
-        control.gpio_set(0, true).await;
-        // Form message to fan 1
-        let mut message: [u8; 8] = [
-            // Device address fan 1
-            fan::address::FAN_1,
-            // Modbus function code
-            modbus::function_code::WRITE_SINGLE_REGISTER,
-            // Holding register address
-            fan::holding_registers::REFERENCE_SET_POINT[0],
-            fan::holding_registers::REFERENCE_SET_POINT[1],
-            // Value to set
-            set_point[0],
-            set_point[1],
-            // CRC set later
-            0,
-            0,
-        ];
-
-        let checksum = modbus::CRC.checksum(&message[..6]).to_be_bytes();
-
-        // They come out reversed (or is us using to_be_bytes reversed?)
-        message[6] = checksum[1];
-        message[7] = checksum[0];
-
-        info!("Sending message to fan 1: {:?}", message);
-
-        // Set pin setting DE (driver enable) to on (high) on the MAX845 to send data
-        driver_enable.set_high();
-        let result = uart.blocking_write(&message);
-        info!("uart result: {:?}", result);
-
-        // Before closing we need to flush the buffer to ensure that all data is written
-        let result = uart.blocking_flush();
-
-        // Wait to not cut off MAX845 last byte
-        Timer::after(Duration::from_micros(190)).await;
-
-        // Close sending data to enable receiving data
-        driver_enable.set_low();
-
-        // Read response from fan 1
-        let mut response_buffer: [u8; 8] = [0; 8];
-        let response = uart.blocking_read(&mut response_buffer);
-        info!("response from fan 1: {:?} {:?}", response, response_buffer);
-        //TODO validate response from fan 1
-
-        /// Messsage delay between modbus messages in microseconds
-        const MESSAGE_DELAY: u64 = modbus::get_message_delay(fan::BAUD_RATE);
-        Timer::after_micros(MESSAGE_DELAY).await;
-
-        // Form message to fan 2
-        // Update the fan address and therefore the CRC
-        // Keep speed as both fans should be running at the same speed
-        message[0] = fan::address::FAN_2;
-        let checksum = modbus::CRC.checksum(&message[..6]).to_be_bytes();
-        message[6] = checksum[1];
-        message[7] = checksum[0];
-        info!("sending message to fan 2: {:?}", message);
-
-        // Set pin setting DE (driver enable) to on (high) on the MAX845 to send data
-        driver_enable.set_high();
-
-        let result = uart.blocking_write(&message);
-        info!("uart result: {:?}", result);
-
-        // Before closing we need to flush the buffer to ensure that all data is written
-        let result = uart.blocking_flush();
-        info!("uart flush result: {:?}", result);
-
-        // In addition to flushing we need to wait for some time before turning off data in on the
-        // MAX845 because we might be too fast and cut off the last byte or more. (This happened)
-        // I saw someone using 120 microseconds (https://youtu.be/i46jdhvRej4?t=886). This number
-        // is based on trial and error. Don't feel bad to change it if it doesn't work.
-        Timer::after(Duration::from_micros(190)).await;
-
-        // Close sending data to enable receiving data
-        driver_enable.set_low();
-        //TODO validate response from fan 2
-
-        // Read response from fan 2
-        let response = uart.blocking_read(&mut response_buffer);
-        info!("response from fan 2: {:?} {:?}", response, response_buffer);
-
-        control.gpio_set(0, false).await;
+    let client = FanClient::new(uart0, pin_12, pin_13, Irqs, dma_ch1, dma_ch2, pin_4);
+    // Inner scope to drop the guard after assigning
+    {
+        *(FANS.lock().await) = Some(client);
     }
+
+    // Button input task waits for button presses and send according signals to the modbus task
+    unwrap!(spawner.spawn(input_task(pin_18)));
+    // The MQTT task waits for publishes from MQTT and sends them to the modbus task.
+    // It also sends updates from the modbus task that happen through button inputs to MQTT
+    unwrap!(spawner.spawn(mqtt_task(
+        spawner, pin_23, pin_25, pio0, dma_ch0, pin_24, pin_29
+    )));
 }
 
 #[cfg(test)]
 mod tests {
     // The tests don't run on the embedded target, so we need to import the std crate
+
     extern crate std;
     use super::*;
 

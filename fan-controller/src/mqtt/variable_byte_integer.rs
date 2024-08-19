@@ -50,7 +50,7 @@ pub(super) fn encode(
     Ok(())
 }
 
-#[derive(Debug)]
+#[derive(Debug, Format, Clone)]
 pub(super) enum VariableByteIntegerDecodeError {
     MalformedVariableByteIntegerError,
     /// The buffer does not contain enough bytes to read the remaining length

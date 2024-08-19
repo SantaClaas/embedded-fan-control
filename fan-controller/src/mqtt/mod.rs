@@ -4,24 +4,20 @@
 use defmt::Format;
 use embedded_io_async::Write;
 
-use connect_acknowledgement::ConnectAcknowledgement;
-
 use crate::mqtt::connect::Connect;
-use crate::mqtt::publish::Publish;
-use crate::mqtt::subscribe::Subscribe;
-use crate::mqtt::subscribe_acknowledgement::{
-    SubscribeAcknowledgement, SubscribeAcknowledgementError,
-};
 use crate::mqtt::variable_byte_integer::VariableByteIntegerDecodeError;
 
+pub(crate) mod client;
 pub(crate) mod connect;
 pub(crate) mod connect_acknowledgement;
+pub(crate) mod packet;
 pub(crate) mod ping_request;
 pub(crate) mod publish;
 pub(crate) mod subscribe;
 mod subscribe_acknowledgement;
 mod variable_byte_integer;
 
+#[derive(Debug, Format, Clone)]
 pub(super) enum ConnectErrorReasonCode {
     UnspecifiedError = 0x80,
     MalformedPacket = 0x81,
@@ -46,6 +42,7 @@ pub(super) enum ConnectErrorReasonCode {
     ConnectionRateExceeded = 0x9F,
 }
 
+#[derive(Debug, Clone)]
 pub struct UnknownConnectErrorReasonCode(u8);
 
 pub(super) enum QualityOfService {
@@ -67,79 +64,8 @@ impl QualityOfService {
     }
 }
 
+#[derive(Debug, Clone)]
 enum ReadConnectAcknowledgementError {
     InvalidReasonCode(UnknownConnectErrorReasonCode),
     InvalidPropertiesLength(VariableByteIntegerDecodeError),
-}
-
-pub(super) enum ReadError {
-    /// The packet type is not supported. This can happen if there is a packet received that is
-    /// only intended for the broker and not the client. Or the packet type is not yet implemented.
-    UnsupportedPacketType(u8),
-    UnexpectedPacketType(u8),
-    MissingBytes(usize),
-    InvalidRemainingLength(VariableByteIntegerDecodeError),
-    ConnectAcknowledgementError(ReadConnectAcknowledgementError),
-    PublishError(publish::ReadError),
-    SubscribeAcknowledgementError(SubscribeAcknowledgementError),
-}
-
-pub(super) enum Packet<'a> {
-    ConnectAcknowledgement(ConnectAcknowledgement),
-    SubscribeAcknowledgement(SubscribeAcknowledgement),
-    Publish(Publish<'a>),
-}
-
-impl<'a> Packet<'a> {
-    pub(super) fn read(buffer: &[u8]) -> Result<Packet, ReadError> {
-        // Fixed header
-        let packet_type = buffer[0] >> 4;
-        let flags = buffer[0] & 0b0000_1111;
-        let mut offset = 2;
-        let remaining_length = variable_byte_integer::decode(buffer, &mut offset)
-            .map_err(ReadError::InvalidRemainingLength)?;
-
-        if buffer.len() < offset + remaining_length {
-            return Err(ReadError::MissingBytes(
-                buffer.len() - offset - remaining_length,
-            ));
-        }
-        let variable_header_and_payload = &buffer[offset..offset + remaining_length];
-
-        match packet_type {
-            Connect::TYPE => Err(ReadError::UnsupportedPacketType(packet_type)),
-            ConnectAcknowledgement::TYPE => {
-                let connect_acknowledgement =
-                    ConnectAcknowledgement::read(variable_header_and_payload)
-                        .map_err(ReadError::ConnectAcknowledgementError)?;
-
-                Ok(Packet::ConnectAcknowledgement(connect_acknowledgement))
-            }
-            Publish::TYPE => {
-                let publish = Publish::read(flags, variable_header_and_payload)
-                    .map_err(ReadError::PublishError)?;
-
-                Ok(Packet::Publish(publish))
-            }
-            // N doesn't matter here
-            Subscribe::<2>::TYPE => Err(ReadError::UnsupportedPacketType(packet_type)),
-            SubscribeAcknowledgement::TYPE => {
-                let subscribe_acknowledgement =
-                    SubscribeAcknowledgement::read(variable_header_and_payload)
-                        .map_err(ReadError::SubscribeAcknowledgementError)?;
-
-                Ok(Packet::SubscribeAcknowledgement(subscribe_acknowledgement))
-            }
-
-            unexpected => Err(ReadError::UnexpectedPacketType(unexpected)),
-        }
-    }
-
-    pub(crate) const fn get_type(&self) -> u8 {
-        match self {
-            Packet::ConnectAcknowledgement(_) => ConnectAcknowledgement::TYPE,
-            Packet::SubscribeAcknowledgement(_) => SubscribeAcknowledgement::TYPE,
-            Packet::Publish(_) => Publish::TYPE,
-        }
-    }
 }

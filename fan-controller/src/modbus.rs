@@ -1,6 +1,4 @@
-use crate::fan;
 use crc::{Crc, CRC_16_MODBUS};
-
 pub(super) mod function_code {
     pub const READ_HOLDING_REGISTER: u8 = 0x03;
     pub const READ_INPUT_REGISTER: u8 = 0x04;
@@ -31,3 +29,4 @@ pub(super) const fn get_message_delay(baud_rate: u32) -> u64 {
     // Round up as it is better to wait longer than too short
     MICROSECONDS_FOR_BITS.div_ceil(baud_rate as u64)
 }
+

@@ -1,7 +1,9 @@
 use crate::mqtt::{
     ConnectErrorReasonCode, ReadConnectAcknowledgementError, UnknownConnectErrorReasonCode,
 };
+use defmt::Format;
 
+#[derive(Format, Clone)]
 pub(crate) struct ConnectAcknowledgement {
     pub(crate) is_session_present: bool,
     pub(crate) connect_reason_code: ConnectReasonCode,
@@ -31,6 +33,7 @@ impl ConnectAcknowledgement {
     }
 }
 
+#[derive(Format, Clone)]
 pub(crate) enum ConnectReasonCode {
     Success,
     ErrorCode(ConnectErrorReasonCode),
