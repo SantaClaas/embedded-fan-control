@@ -7,14 +7,6 @@ use core::marker::PhantomData;
 use embassy_net::tcp::{self, TcpReader, TcpSocket, TcpWriter};
 use embassy_time::{with_timeout, Duration, TimeoutError};
 
-pub(crate) struct MqttClient<'a, S> {
-    _state: PhantomData<S>,
-    socket: TcpSocket<'a>,
-    // No experience how big this buffer should be
-    send_buffer: [u8; 256],
-    receive_buffer: [u8; 1024],
-    timeout: Duration,
-}
 pub(crate) struct NotConnected;
 pub(crate) struct Connected;
 
@@ -37,6 +29,14 @@ pub(crate) enum ReadError {
     Timeout(TimeoutError),
 }
 
+pub(crate) struct MqttClient<'a, S> {
+    _state: PhantomData<S>,
+    socket: TcpSocket<'a>,
+    // No experience how big this buffer should be
+    send_buffer: [u8; 256],
+    receive_buffer: [u8; 1024],
+    timeout: Duration,
+}
 impl<'a, S> MqttClient<'a, S> {
     async fn read(&mut self) -> Result<&[u8], ReadError> {
         let read = self.socket.read(&mut self.receive_buffer);
@@ -49,7 +49,7 @@ impl<'a, S> MqttClient<'a, S> {
     }
 }
 
-impl<'a, T> MqttClient<'a, NotConnected> where T : FromPublish {
+impl<'a> MqttClient<'a, NotConnected> {
     pub(crate) const fn new(socket: TcpSocket<'a>) -> Self {
         Self {
             socket,
@@ -61,12 +61,15 @@ impl<'a, T> MqttClient<'a, NotConnected> where T : FromPublish {
     }
 
     /// The server must not send any data before send
-    pub(crate) async fn connect(
+    pub(crate) async fn connect<T>(
         mut self,
         username: &str,
         password: &[u8],
         keep_alive: Duration,
-    ) -> Result<MqttClient<'a, Connected>, (Self, ConnectError)> {
+    ) -> Result<MqttClient<'a, Connected>, (Self, ConnectError)>
+    where
+        T: FromPublish,
+    {
         // Send MQTT connect packet
         let packet = Connect {
             client_identifier: "testfan",
@@ -111,7 +114,7 @@ impl<'a, T> MqttClient<'a, NotConnected> where T : FromPublish {
             return Err((self, ConnectError::ErrorCode(error_code)));
         }
 
-        Ok(MqttClient {
+        Ok(MqttClient::<Connected> {
             socket: self.socket,
             _state: PhantomData,
             send_buffer: self.send_buffer,
@@ -166,7 +169,10 @@ impl<'a> MqttReceiver<'a> {
         Ok(&self.receive_buffer[..bytes_read])
     }
 
-    pub(crate) async fn receive(&mut self) -> Result<Packet, ReceiveError> {
+    pub(crate) async fn receive<T>(&mut self) -> Result<Packet<T>, ReceiveError>
+    where
+        T: FromPublish,
+    {
         let result = self.read().await;
         let bytes = match result {
             Ok(bytes) => bytes,
@@ -179,7 +185,7 @@ impl<'a> MqttReceiver<'a> {
 
 mod runner {
     use crate::mqtt::connect::Connect;
-    use crate::mqtt::packet::Packet;
+    use crate::mqtt::packet::{FromPublish, Packet};
     use crate::mqtt::{connect, packet, ConnectErrorReasonCode};
     use embassy_net::tcp;
     use embassy_net::tcp::{TcpReader, TcpSocket, TcpWriter};
@@ -187,9 +193,12 @@ mod runner {
     use embassy_sync::pubsub::{PubSubChannel, Publisher, Subscriber};
     use embassy_time::{with_timeout, Duration, TimeoutError};
 
-    type ReceiveResult<'a> = Result<Packet<'a>, ReceiveError>;
-    struct State<'a> {
-        channel: PubSubChannel<CriticalSectionRawMutex, ReceiveResult<'a>, 8, 1, 1>,
+    type ReceiveResult<T> = Result<Packet<T>, ReceiveError>;
+    struct State<T>
+    where
+        T: FromPublish + Clone,
+    {
+        channel: PubSubChannel<CriticalSectionRawMutex, ReceiveResult<T>, 8, 1, 1>,
     }
 
     #[derive(Clone)]
@@ -198,15 +207,21 @@ mod runner {
         DecodePacketError(packet::ReadError),
     }
 
-    struct MqttRunner<'a> {
+    struct MqttRunner<'a, T>
+    where
+        T: FromPublish + Clone,
+    {
         tcp_receiver: TcpReader<'a>,
         /// Publisher to send received packets to the client that waits for them
-        publisher: Publisher<'a, CriticalSectionRawMutex, ReceiveResult<'a>, 8, 1, 1>,
+        publisher: Publisher<'a, CriticalSectionRawMutex, ReceiveResult<T>, 8, 1, 1>,
         receive_buffer: [u8; 1024],
         timeout: Duration,
     }
 
-    impl<'a> MqttRunner<'a> {
+    impl<'a, T> MqttRunner<'a, T>
+    where
+        T: FromPublish + Clone,
+    {
         pub(self) async fn read(&mut self) -> Result<&[u8], ReadError> {
             let read = self.tcp_receiver.read(&mut self.receive_buffer);
             let bytes_read = with_timeout(self.timeout, read)
@@ -229,8 +244,7 @@ mod runner {
                 // };
 
                 let read = self.tcp_receiver.read(&mut self.receive_buffer);
-                let bytes_read = with_timeout(self.timeout, read)
-                    .await.unwrap().unwrap();
+                let bytes_read = with_timeout(self.timeout, read).await.unwrap().unwrap();
                 let bytes = &self.receive_buffer[..bytes_read];
 
                 let result = Packet::read(bytes);
@@ -238,7 +252,9 @@ mod runner {
                 match result {
                     Ok(packet) => self.publisher.publish(Ok(packet)).await,
                     Err(error) => {
-                        self.publisher.publish(Err(ReceiveError::DecodePacketError(error))).await;
+                        self.publisher
+                            .publish(Err(ReceiveError::DecodePacketError(error)))
+                            .await;
                         continue;
                     }
                 }
@@ -265,17 +281,26 @@ mod runner {
         ErrorCode(ConnectErrorReasonCode),
     }
 
-    struct MqttClient<'a> {
-        subscriber: Subscriber<'a, CriticalSectionRawMutex, ReceiveResult<'a>, 8, 1, 1>,
+    struct MqttClient<'a, T>
+    where
+        T: FromPublish + Clone,
+    {
+        subscriber: Subscriber<'a, CriticalSectionRawMutex, ReceiveResult<T>, 8, 1, 1>,
         tcp_writer: TcpWriter<'a>,
         send_buffer: [u8; 256],
     }
 
-    impl<'a> MqttClient<'a> {
+    impl<'a, T> MqttClient<'a, T>
+    where
+        T: FromPublish + Clone,
+    {
         pub fn new(
-            state: &'a State<'a>,
+            state: &'a State<T>,
             mut socket: &'a mut TcpSocket<'a>,
-        ) -> (MqttRunner<'a>, Self) {
+        ) -> (MqttRunner<'a, T>, Self)
+        where
+            T: FromPublish + Clone,
+        {
             let (reader, writer) = socket.split();
             //TODO handle out of subscribers/publishers error
             let publisher = state.channel.publisher().unwrap();

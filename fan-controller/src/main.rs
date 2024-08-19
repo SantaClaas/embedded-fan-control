@@ -37,17 +37,18 @@ use static_cell::StaticCell;
 
 use {defmt_rtt as _, panic_probe as _};
 
+use self::mqtt::packet;
+use self::mqtt::packet::Packet;
 use crate::configuration::*;
 use crate::mqtt::connect::Connect;
 use crate::mqtt::connect_acknowledgement::ConnectReasonCode;
+use crate::mqtt::packet::FromPublish;
 use crate::mqtt::ping_request::PingRequest;
 use crate::mqtt::publish::Publish;
 use crate::mqtt::subscribe::{Subscribe, Subscription};
-use crate::mqtt::{connect, publish, subscribe};
 use crate::mqtt::QualityOfService;
+use crate::mqtt::{connect, publish, subscribe};
 use fan::FanClient;
-use self::mqtt::packet;
-use self::mqtt::packet::Packet;
 
 mod configuration;
 mod fan;
@@ -237,7 +238,7 @@ async fn mqtt_task(
     //TODO refactor this into a retry policy or of the sorts
     let mut client = loop {
         let result = client
-            .connect(MQTT_BROKER_USERNAME, MQTT_BROKER_PASSWORD, KEEP_ALIVE)
+            .connect::<()>(MQTT_BROKER_USERNAME, MQTT_BROKER_PASSWORD, KEEP_ALIVE)
             .await;
 
         match result {
@@ -280,7 +281,7 @@ async fn mqtt_task(
     join(
         async {
             loop {
-                match receiver.receive().await {
+                match receiver.receive::<()>().await {
                     Ok(packet) => {
                         info!("Received packet: {}", packet);
 
@@ -455,10 +456,13 @@ async fn mqtt_routine<'a>(mut socket: TcpSocket<'a>) {
     // Ok(())
 }
 
-async fn listen_for_publishes(
+async fn listen_for_publishes<T>(
     mut reader: TcpReader<'_>,
     mut buffer: [u8; 1024],
-) -> Result<(), PublishReceiveError> {
+) -> Result<(), PublishReceiveError>
+where
+    T: FromPublish,
+{
     loop {
         // Should read at least one byte
         let bytes_read = reader
@@ -467,7 +471,7 @@ async fn listen_for_publishes(
             .map_err(PublishReceiveError::ReadError)?;
 
         let packet =
-            Packet::read(&buffer[..bytes_read]).map_err(PublishReceiveError::ReadPacketError)?;
+            Packet::<T>::read(&buffer[..bytes_read]).map_err(PublishReceiveError::ReadPacketError)?;
         match packet {
             //TODO handle disconnect packet
             packet @ Packet::ConnectAcknowledgement(_)
@@ -475,75 +479,75 @@ async fn listen_for_publishes(
                 warn!("Received unexpected packet type: {}", packet.get_type());
             }
             Packet::Publish(publish) => {
-                info!("Received publish: {:?}", publish);
+                info!("Received publish");
                 // This part is not MQTT and application specific
-                match publish.topic_name {
-                    "testfan/speed/percentage" => {
-                        let payload = match core::str::from_utf8(&publish.payload) {
-                            Ok(payload) => payload,
-                            Err(error) => {
-                                warn!("Expected percentage_command_topic payload (speed percentage) to be a valid UTF-8 string with a number");
-                                continue;
-                            }
-                        };
-
-                        // And then to an integer...
-                        let set_point = payload.parse::<u16>();
-                        let set_point = match set_point {
-                            Ok(set_point) => set_point,
-                            Err(error) => {
-                                warn!("Expected speed percentage to be a number string. Payload is: {}", payload);
-                                continue;
-                            }
-                        };
-
-                        let Ok(setting) = FanSetting::new(set_point) else {
-                            warn!(
-                                "Setting fan speed out of bounds. Not accepting new setting: {}",
-                                set_point
-                            );
-                            continue;
-                        };
-
-                        //TODO confirm there was no error on the modbus side
-                        // MODBUS_SIGNAL.signal(setting);
-                    }
-                    "testfan/on/set" => {
-                        let payload = match core::str::from_utf8(publish.payload) {
-                            Ok(payload) => payload,
-                            Err(error) => {
-                                warn!(
-                                    "Expected command_topic payload to be a valid UTF-8 string with either \"ON\" or \"OFF\". Payload is: {}",
-                                    publish.payload
-                                );
-                                continue;
-                            }
-                        };
-
-                        match payload {
-                            "ON" => {
-                                //TODO set to last known state before off
-                                println!("Turning on");
-                            }
-                            "OFF" => {
-                                println!("Turning off");
-                                // MODBUS_SIGNAL.signal(FanSetting::ZERO);
-                            }
-                            unknown => {
-                                warn!(
-                                    "Expected either \"ON\" or \"OFF\" but received: {}",
-                                    unknown
-                                );
-                            }
-                        }
-                    }
-                    unknown => {
-                        warn!(
-                            "Unexpected topic: {} with payload: {}",
-                            publish.topic_name, publish.payload
-                        );
-                    }
-                }
+                // match publish.topic_name {
+                //     "testfan/speed/percentage" => {
+                //         let payload = match core::str::from_utf8(&publish.payload) {
+                //             Ok(payload) => payload,
+                //             Err(error) => {
+                //                 warn!("Expected percentage_command_topic payload (speed percentage) to be a valid UTF-8 string with a number");
+                //                 continue;
+                //             }
+                //         };
+                // 
+                //         // And then to an integer...
+                //         let set_point = payload.parse::<u16>();
+                //         let set_point = match set_point {
+                //             Ok(set_point) => set_point,
+                //             Err(error) => {
+                //                 warn!("Expected speed percentage to be a number string. Payload is: {}", payload);
+                //                 continue;
+                //             }
+                //         };
+                // 
+                //         let Ok(setting) = FanSetting::new(set_point) else {
+                //             warn!(
+                //                 "Setting fan speed out of bounds. Not accepting new setting: {}",
+                //                 set_point
+                //             );
+                //             continue;
+                //         };
+                // 
+                //         //TODO confirm there was no error on the modbus side
+                //         // MODBUS_SIGNAL.signal(setting);
+                //     }
+                //     "testfan/on/set" => {
+                //         let payload = match core::str::from_utf8(publish.payload) {
+                //             Ok(payload) => payload,
+                //             Err(error) => {
+                //                 warn!(
+                //                     "Expected command_topic payload to be a valid UTF-8 string with either \"ON\" or \"OFF\". Payload is: {}",
+                //                     publish.payload
+                //                 );
+                //                 continue;
+                //             }
+                //         };
+                // 
+                //         match payload {
+                //             "ON" => {
+                //                 //TODO set to last known state before off
+                //                 println!("Turning on");
+                //             }
+                //             "OFF" => {
+                //                 println!("Turning off");
+                //                 // MODBUS_SIGNAL.signal(FanSetting::ZERO);
+                //             }
+                //             unknown => {
+                //                 warn!(
+                //                     "Expected either \"ON\" or \"OFF\" but received: {}",
+                //                     unknown
+                //                 );
+                //             }
+                //         }
+                //     }
+                //     unknown => {
+                //         warn!(
+                //             "Unexpected topic: {} with payload: {}",
+                //             publish.topic_name, publish.payload
+                //         );
+                //     }
+                // }
             }
         }
     }
@@ -681,10 +685,8 @@ async fn input_task(pin_18: PIN_18) {
             warn!("No fan client found");
             continue;
         };
-        
+
         fan.set_set_point(set_point).await;
-        
-        
     }
 }
 

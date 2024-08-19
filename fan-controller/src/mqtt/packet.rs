@@ -97,3 +97,10 @@ where
 pub(crate) trait FromPublish {
     fn from_publish(publish: Publish) -> Self;
 }
+
+/// Temporary just for testing. TODO remove
+impl FromPublish for () {
+    fn from_publish(publish: Publish) -> Self {
+        ()
+    }
+}
