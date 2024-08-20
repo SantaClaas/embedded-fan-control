@@ -1,6 +1,6 @@
 use core::str::Utf8Error;
 
-use defmt::Format;
+use defmt::{write, Debug2Format, Format, Formatter};
 
 use crate::mqtt::variable_byte_integer;
 use crate::mqtt::variable_byte_integer::{
@@ -24,6 +24,25 @@ pub(crate) enum ReadError {
     VariableByteIntegerError(VariableByteIntegerDecodeError),
     ZeroLengthTopicName,
     InvalidTopicName(Utf8Error),
+}
+
+impl Format for ReadError {
+    fn format(&self, fmt: Formatter) {
+        match self {
+            ReadError::UnsupportedQualityOfServiceLevel(error) => {
+                write!(fmt, "Unsupported quality of service level: {}", error)
+            }
+            ReadError::VariableByteIntegerError(error) => {
+                write!(fmt, "Variable byte integer error: {}", error)
+            }
+            ReadError::ZeroLengthTopicName => {
+                write!(fmt, "Zero length topic name")
+            }
+            ReadError::InvalidTopicName(error) => {
+                write!(fmt, "Invalid topic name: {:?}", Debug2Format(error))
+            }
+        }
+    }
 }
 
 impl<'a> Publish<'a> {

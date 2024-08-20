@@ -2,7 +2,7 @@ use crate::mqtt::variable_byte_integer;
 use crate::mqtt::variable_byte_integer::VariableByteIntegerDecodeError;
 use defmt::Format;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Format)]
 pub(crate) enum SubscribeAcknowledgementError {
     InvalidPropertiesLength(VariableByteIntegerDecodeError),
 }
@@ -22,17 +22,17 @@ impl SubscribeAcknowledgement {
         //TODO stop ignoring properties
         //TODO check if topics are acknowledged
 
-        // offset += properties_length;
-        //
-        // // Payload
-        // // Reason code for each subscribed topic in the same order
-        // let mut topic_index = 0;
-        //
-        // loop {
-        //     let reason_code = buffer[offset];
-        //     offset += 1;
-        //
-        // }
+        offset += properties_length;
+        
+        // Payload
+        // Reason code for each subscribed topic in the same order
+        let mut topic_index = 0;
+        
+        loop {
+            let reason_code = buffer[offset];
+            offset += 1;
+        
+        }
 
         Ok(SubscribeAcknowledgement)
     }

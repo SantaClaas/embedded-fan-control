@@ -72,12 +72,12 @@ pub(crate) enum WriteError {
     RemainingLengthError(variable_byte_integer::VariableByteIntegerEncodeError),
 }
 
-pub(crate) struct Subscribe<'a, const N: usize> {
-    pub(crate) subscriptions: [Subscription<'a>; N],
+pub(crate) struct Subscribe<'a> {
+    pub(crate) subscriptions: &'a [Subscription<'a>],
     pub(crate) packet_identifier: u16,
 }
 
-impl<'a, const N: usize> Subscribe<'a, N> {
+impl<'a> Subscribe<'a> {
     pub(crate) const TYPE: u8 = 8;
     pub(crate) fn write(self, buffer: &mut [u8], offset: &mut usize) -> Result<(), WriteError> {
         let variable_header_length = size_of::<u16>() + size_of::<u8>();

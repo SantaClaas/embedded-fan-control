@@ -42,7 +42,7 @@ pub(super) enum ConnectErrorReasonCode {
     ConnectionRateExceeded = 0x9F,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Format)]
 pub struct UnknownConnectErrorReasonCode(u8);
 
 pub(super) enum QualityOfService {
@@ -64,7 +64,7 @@ impl QualityOfService {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Format)]
 enum ReadConnectAcknowledgementError {
     InvalidReasonCode(UnknownConnectErrorReasonCode),
     InvalidPropertiesLength(VariableByteIntegerDecodeError),

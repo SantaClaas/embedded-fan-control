@@ -321,8 +321,8 @@ async fn mqtt_task(
         },
     ];
 
-    const SUBSCRIBE_PACKET: Subscribe<2> = Subscribe {
-        subscriptions: SUBSCRIPTIONS,
+    const SUBSCRIBE_PACKET: Subscribe = Subscribe {
+        subscriptions: &SUBSCRIPTIONS,
         packet_identifier: 42,
     };
 }
@@ -470,8 +470,8 @@ where
             .await
             .map_err(PublishReceiveError::ReadError)?;
 
-        let packet =
-            Packet::<T>::read(&buffer[..bytes_read]).map_err(PublishReceiveError::ReadPacketError)?;
+        let packet = Packet::<T>::read(&buffer[..bytes_read])
+            .map_err(PublishReceiveError::ReadPacketError)?;
         match packet {
             //TODO handle disconnect packet
             packet @ Packet::ConnectAcknowledgement(_)
@@ -490,7 +490,7 @@ where
                 //                 continue;
                 //             }
                 //         };
-                // 
+                //
                 //         // And then to an integer...
                 //         let set_point = payload.parse::<u16>();
                 //         let set_point = match set_point {
@@ -500,7 +500,7 @@ where
                 //                 continue;
                 //             }
                 //         };
-                // 
+                //
                 //         let Ok(setting) = FanSetting::new(set_point) else {
                 //             warn!(
                 //                 "Setting fan speed out of bounds. Not accepting new setting: {}",
@@ -508,7 +508,7 @@ where
                 //             );
                 //             continue;
                 //         };
-                // 
+                //
                 //         //TODO confirm there was no error on the modbus side
                 //         // MODBUS_SIGNAL.signal(setting);
                 //     }
@@ -523,7 +523,7 @@ where
                 //                 continue;
                 //             }
                 //         };
-                // 
+                //
                 //         match payload {
                 //             "ON" => {
                 //                 //TODO set to last known state before off

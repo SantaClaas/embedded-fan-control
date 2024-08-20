@@ -9,7 +9,7 @@ use crate::mqtt::variable_byte_integer::VariableByteIntegerDecodeError;
 use crate::mqtt::{publish, variable_byte_integer, ReadConnectAcknowledgementError};
 use defmt::Format;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Format)]
 pub(crate) enum ReadError {
     /// The packet type is not supported. This can happen if there is a packet received that is
     /// only intended for the broker and not the client. Or the packet type is not yet implemented.
@@ -71,8 +71,7 @@ where
                 let packet = T::from_publish(publish);
                 Ok(Packet::Publish(packet))
             }
-            // N doesn't matter here
-            Subscribe::<2>::TYPE => Err(ReadError::UnsupportedPacketType(packet_type)),
+            Subscribe::TYPE => Err(ReadError::UnsupportedPacketType(packet_type)),
             SubscribeAcknowledgement::TYPE => {
                 let subscribe_acknowledgement =
                     SubscribeAcknowledgement::read(variable_header_and_payload)

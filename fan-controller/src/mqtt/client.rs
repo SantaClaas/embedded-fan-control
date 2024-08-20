@@ -187,13 +187,15 @@ mod runner {
     use crate::mqtt::connect::Connect;
     use crate::mqtt::connect_acknowledgement::{ConnectAcknowledgement, ConnectReasonCode};
     use crate::mqtt::packet::{FromPublish, Packet};
-    use crate::mqtt::{connect, packet, ConnectErrorReasonCode};
-    use defmt::warn;
+    use crate::mqtt::subscribe::{Subscribe, Subscription};
+    use crate::mqtt::subscribe_acknowledgement::SubscribeAcknowledgement;
+    use crate::mqtt::{connect, packet, subscribe, ConnectErrorReasonCode};
+    use defmt::{warn, Format};
     use embassy_net::tcp;
     use embassy_net::tcp::{TcpReader, TcpSocket, TcpWriter};
     use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
     use embassy_sync::pubsub::{PubSubChannel, Publisher, Subscriber, WaitResult};
-    use embassy_time::{with_timeout, Duration, TimeoutError};
+    use embassy_time::{with_deadline, with_timeout, Duration, Instant, TimeoutError};
 
     type ReceiveResult<T> = Result<Packet<T>, ReceiveError>;
     struct State<T>
@@ -203,7 +205,7 @@ mod runner {
         channel: PubSubChannel<CriticalSectionRawMutex, ReceiveResult<T>, 8, 1, 1>,
     }
 
-    #[derive(Clone, Debug)]
+    #[derive(Clone, Debug, Format)]
     enum ReceiveError {
         ReadError(ReadError),
         DecodePacketError(packet::ReadError),
@@ -261,7 +263,7 @@ mod runner {
         }
     }
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, Format)]
     pub(crate) enum ReadError {
         TcpReadError(tcp::Error),
         Timeout(TimeoutError),
@@ -275,6 +277,14 @@ mod runner {
         ReceiveError(ReceiveError),
         /// Received a connect acknowledgement with an error code
         ErrorCode(ConnectErrorReasonCode),
+        Timeout(TimeoutError),
+    }
+
+    pub(crate) enum SubscribeError {
+        WriteSubscribeError(subscribe::WriteError),
+        TcpWriteError(tcp::Error),
+        TcpFlushError(tcp::Error),
+        Timeout(TimeoutError),
     }
 
     struct MqttClient<'a, T>
@@ -284,6 +294,7 @@ mod runner {
         subscriber: Subscriber<'a, CriticalSectionRawMutex, ReceiveResult<T>, 8, 1, 1>,
         tcp_writer: TcpWriter<'a>,
         send_buffer: [u8; 256],
+        timeout: Duration,
     }
 
     impl<'a, T> MqttClient<'a, T>
@@ -301,18 +312,20 @@ mod runner {
             //TODO handle out of subscribers/publishers error
             let publisher = state.channel.publisher().unwrap();
             let subscriber = state.channel.subscriber().unwrap();
+            let timeout = Duration::from_secs(5);
 
             (
                 MqttRunner {
                     publisher,
                     tcp_receiver: reader,
                     receive_buffer: [0; 1024],
-                    timeout: Duration::from_secs(5),
+                    timeout: timeout.clone(),
                 },
                 Self {
                     subscriber,
                     tcp_writer: writer,
                     send_buffer: [0; 256],
+                    timeout,
                 },
             )
         }
@@ -331,6 +344,7 @@ mod runner {
                 keep_alive_seconds: keep_alive.as_secs() as u16,
             };
 
+            // Send
             let mut offset = 0;
             if let Err(error) = packet.write(&mut self.send_buffer, &mut offset) {
                 return Err((ConnectError::WriteConnectError(error)));
@@ -344,12 +358,21 @@ mod runner {
                 return Err((ConnectError::TcpFlushError(error)));
             }
 
+            // Receive
+
             // Wait for connect acknowledgement
             // Discard all messages before the connect acknowledgement
             // The server has to send a connect acknowledgement before sending any other packet
-            // TCP should ensure the order of packets, so they should not arrive out of order
+            // TCP should ensure the order of packets (afaik), so they should not arrive out of order
+            // Using a deadline because the loop could be run multiple times
+            let deadline = Instant::now() + self.timeout;
             loop {
-                let result = self.subscriber.next_message().await;
+                let result = with_deadline(deadline, self.subscriber.next_message()).await;
+
+                let result = match result {
+                    Ok(result) => result,
+                    Err(error) => return Err(ConnectError::Timeout(error)),
+                };
 
                 match result {
                     WaitResult::Lagged(missed_messages) => {
@@ -375,6 +398,75 @@ mod runner {
                     }
                 }
             }
+        }
+
+        pub(crate) async fn subscribe<'s>(
+            &mut self,
+            subscriptions: &[Subscription<'s>],
+        ) -> Result<(), SubscribeError> {
+            //TODO add packet identifier management when there can be more than one subscribe in flight
+            // That requires a non-mutable reference on self though. Which means putting the tcp writer behind a channel or mutex(?)
+            let packet = Subscribe {
+                subscriptions,
+                packet_identifier: 42,
+            };
+
+            // Send
+            let mut offset = 0;
+            if let Err(error) = packet.write(&mut self.send_buffer, &mut offset) {
+                return Err((SubscribeError::WriteSubscribeError(error)));
+            };
+
+            if let Err(error) = self.tcp_writer.write(&self.send_buffer[..offset]).await {
+                return Err((SubscribeError::TcpWriteError(error)));
+            }
+
+            if let Err(error) = self.tcp_writer.flush().await {
+                return Err((SubscribeError::TcpFlushError(error)));
+            }
+
+            // Receive
+            let deadline = Instant::now() + self.timeout;
+            loop {
+                let result = with_deadline(deadline, self.subscriber.next_message()).await;
+
+                let result = match result {
+                    Ok(result) => result,
+                    Err(error) => return Err(SubscribeError::Timeout(error)),
+                };
+
+                match result {
+                    WaitResult::Lagged(missed_messages) => {
+                        warn!(
+                            "Missed {} messages while waiting for subscribe acknowledgement: ",
+                            missed_messages
+                        );
+                    }
+                    WaitResult::Message(result) => {
+                        // Ignoring all errors because we don't know if they were as a result of
+                        // sending the subscribe packet
+                        let packet = match result {
+                            Err(error) => {
+                                warn!(
+                                    "Error while waiting for subscribe acknowledgement: {:?}",
+                                    error
+                                );
+                                continue;
+                            }
+                            Ok(packet) => packet,
+                        };
+
+                        // Ignore all messages not intended for us
+                        let Packet::SubscribeAcknowledgement(SubscribeAcknowledgement {
+                            //TODO how to pass arbitrary amount of subscribe topics back?
+                                                             }) = packet else {
+                            continue;
+                        };
+                    }
+                }
+            }
+
+            defmt::todo!()
         }
     }
 }
