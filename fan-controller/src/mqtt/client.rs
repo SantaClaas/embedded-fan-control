@@ -185,24 +185,48 @@ impl<'a> MqttReceiver<'a> {
 
 mod runner {
     use crate::mqtt::connect::Connect;
-    use crate::mqtt::connect_acknowledgement::{ConnectAcknowledgement, ConnectReasonCode};
+    use crate::mqtt::connect_acknowledgement::ConnectReasonCode;
     use crate::mqtt::packet::{FromPublish, Packet};
-    use crate::mqtt::subscribe::{Subscribe, Subscription};
-    use crate::mqtt::subscribe_acknowledgement::SubscribeAcknowledgement;
     use crate::mqtt::{connect, packet, subscribe, ConnectErrorReasonCode};
     use defmt::{warn, Format};
+    use embassy_futures::select::{select, Either};
     use embassy_net::tcp;
     use embassy_net::tcp::{TcpReader, TcpSocket, TcpWriter};
     use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
-    use embassy_sync::pubsub::{PubSubChannel, Publisher, Subscriber, WaitResult};
-    use embassy_time::{with_deadline, with_timeout, Duration, Instant, TimeoutError};
+    use embassy_sync::channel::{Channel, Receiver, Sender};
+    use embassy_time::{with_timeout, Duration, TimeoutError};
 
-    type ReceiveResult<T> = Result<Packet<T>, ReceiveError>;
-    struct State<T>
+    mod message {
+        use crate::mqtt::packet::{FromPublish, Packet};
+
+        pub(super) enum Outgoing<'a> {
+            Connect {
+                client_identifier: &'a str,
+                username: &'a str,
+                password: &'a [u8],
+            },
+        }
+
+        pub(super) enum Incoming<T>
+        where
+            T: FromPublish,
+        {
+            Packet(Packet<T>),
+        }
+    }
+
+    enum Response {
+        ConnectAcknowledgement {
+            connect_reason_code: ConnectReasonCode,
+        },
+    }
+
+    struct State<'ch, T>
     where
-        T: FromPublish + Clone,
+        T: FromPublish,
     {
-        channel: PubSubChannel<CriticalSectionRawMutex, ReceiveResult<T>, 8, 1, 1>,
+        incoming: Channel<CriticalSectionRawMutex, message::Incoming<T>, 8>,
+        outgoing: Channel<CriticalSectionRawMutex, message::Outgoing<'ch>, 8>,
     }
 
     #[derive(Clone, Debug, Format)]
@@ -213,18 +237,21 @@ mod runner {
 
     struct MqttRunner<'a, T>
     where
-        T: FromPublish + Clone,
+        T: FromPublish,
     {
         tcp_receiver: TcpReader<'a>,
-        /// Publisher to send received packets to the client that waits for them
-        publisher: Publisher<'a, CriticalSectionRawMutex, ReceiveResult<T>, 8, 1, 1>,
+        /// Subscribe to messages to be sent from the client (like an actor handle)
+        outgoing: Receiver<'a, CriticalSectionRawMutex, message::Outgoing<'a>, 8>,
+        incoming: Sender<'a, CriticalSectionRawMutex, message::Incoming<T>, 8>,
         receive_buffer: [u8; 1024],
+        send_buffer: [u8; 256],
         timeout: Duration,
+        tcp_writer: TcpWriter<'a>,
     }
 
     impl<'a, T> MqttRunner<'a, T>
     where
-        T: FromPublish + Clone,
+        T: FromPublish,
     {
         pub(self) async fn read(&mut self) -> Result<&[u8], ReadError> {
             let read = self.tcp_receiver.read(&mut self.receive_buffer);
@@ -238,25 +265,74 @@ mod runner {
 
         pub(crate) async fn run(mut self) -> ! {
             loop {
-                let result: Result<&[u8], ReceiveError> =
-                    self.read().await.map_err(ReceiveError::ReadError);
-                let bytes = match result {
-                    Ok(bytes) => bytes,
-                    Err(error) => {
-                        self.publisher.publish(Err(error)).await;
-                        continue;
-                    }
-                };
 
-                let result = Packet::read(bytes);
-
+                let result = select(
+                    self.outgoing.receive(),
+                    self.tcp_receiver.read(&mut self.receive_buffer),
+                )
+                .await;
                 match result {
-                    Ok(packet) => self.publisher.publish(Ok(packet)).await,
-                    Err(error) => {
-                        self.publisher
-                            .publish(Err(ReceiveError::DecodePacketError(error)))
-                            .await;
-                        continue;
+                    Either::First(message) => {
+                        match message {
+                            message::Outgoing::Connect {
+                                client_identifier,
+                                username,
+                                password,
+                            } => {
+                                let packet = Connect {
+                                    client_identifier,
+                                    username,
+                                    password,
+                                    //TODO validate seconds < u16::MAX
+                                    keep_alive_seconds: self.timeout.as_secs() as u16,
+                                };
+
+                                let mut offset = 0;
+                                if let Err(error) = packet.write(&mut self.send_buffer, &mut offset)
+                                {
+                                    //TODO handle error
+                                    warn!("Error encoding connect packet: {:?}", error);
+                                    continue;
+                                };
+
+                                if let Err(error) =
+                                    self.tcp_writer.write(&self.send_buffer[..offset]).await
+                                {
+                                    //TODO handle error
+                                    warn!("Error writing connect packet: {:?}", error);
+                                    continue;
+                                }
+
+                                if let Err(error) = self.tcp_writer.flush().await {
+                                    //TODO handle error
+                                    warn!("Error flushing connect packet: {:?}", error);
+                                    continue;
+                                }
+                            }
+                        }
+                    }
+                    Either::Second(result) => {
+                        let bytes_read = match result {
+                            Ok(bytes_read) => bytes_read,
+                            Err(error) => {
+                                //TODO handle error
+                                warn!("Error reading from TCP: {:?}", error);
+                                continue;
+                            }
+                        };
+
+                        let result = Packet::<T>::read(&self.receive_buffer[..bytes_read]);
+                        let packet = match result {
+                            Ok(packet) => packet,
+                            Err(error) => {
+                                //TODO handle error
+                                warn!("Error decoding packet: {:?}", error);
+                                continue;
+                            }
+                        };
+
+                        let message = message::Incoming::Packet(packet);
+                        self.incoming.send(message).await;
                     }
                 }
             }
@@ -289,184 +365,68 @@ mod runner {
 
     struct MqttClient<'a, T>
     where
-        T: FromPublish + Clone,
+        T: FromPublish,
     {
-        subscriber: Subscriber<'a, CriticalSectionRawMutex, ReceiveResult<T>, 8, 1, 1>,
-        tcp_writer: TcpWriter<'a>,
-        send_buffer: [u8; 256],
         timeout: Duration,
+        /// Publisher for sending messages to the runner to execute
+        outgoing: Sender<'a, CriticalSectionRawMutex, message::Outgoing<'a>, 8>,
+        incoming: Receiver<'a, CriticalSectionRawMutex, message::Incoming<T>, 8>,
     }
 
     impl<'a, T> MqttClient<'a, T>
     where
-        T: FromPublish + Clone,
+        T: FromPublish,
     {
         pub fn new(
-            state: &'a State<T>,
+            state: &'a State<'a, T>,
             mut socket: &'a mut TcpSocket<'a>,
-        ) -> (MqttRunner<'a, T>, Self)
-        where
-            T: FromPublish + Clone,
-        {
+        ) -> (MqttRunner<'a, T>, Self) {
             let (reader, writer) = socket.split();
             //TODO handle out of subscribers/publishers error
-            let publisher = state.channel.publisher().unwrap();
-            let subscriber = state.channel.subscriber().unwrap();
+            let send_incoming = state.incoming.sender();
+            let receive_incoming = state.incoming.receiver();
+            let send_outgoing = state.outgoing.sender();
+            let receive_outgoing = state.outgoing.receiver();
+
             let timeout = Duration::from_secs(5);
 
             (
                 MqttRunner {
-                    publisher,
+                    incoming: send_incoming,
+                    outgoing: receive_outgoing,
                     tcp_receiver: reader,
                     receive_buffer: [0; 1024],
+                    send_buffer: [0; 256],
                     timeout: timeout.clone(),
+                    tcp_writer: writer,
                 },
                 Self {
-                    subscriber,
-                    tcp_writer: writer,
-                    send_buffer: [0; 256],
                     timeout,
+                    incoming: receive_incoming,
+                    outgoing: send_outgoing,
                 },
             )
         }
 
-        pub(crate) async fn connect(
-            &mut self,
-            username: &str,
-            password: &[u8],
-            keep_alive: Duration,
-        ) -> Result<(), ConnectError> {
-            // Send MQTT connect packet
-            let packet = Connect {
-                client_identifier: "testfan",
+        pub async fn connect(
+            &self,
+            client_identifier: &'a str,
+            username: &'a str,
+            password: &'a [u8],
+        ) {
+            let message = message::Outgoing::Connect {
+                client_identifier,
                 username,
                 password,
-                keep_alive_seconds: keep_alive.as_secs() as u16,
             };
 
-            // Send
-            let mut offset = 0;
-            if let Err(error) = packet.write(&mut self.send_buffer, &mut offset) {
-                return Err((ConnectError::WriteConnectError(error)));
-            };
-
-            if let Err(error) = self.tcp_writer.write(&self.send_buffer[..offset]).await {
-                return Err((ConnectError::TcpWriteError(error)));
-            }
-
-            if let Err(error) = self.tcp_writer.flush().await {
-                return Err((ConnectError::TcpFlushError(error)));
-            }
-
-            // Receive
+            self.outgoing.send(message).await;
 
             // Wait for connect acknowledgement
             // Discard all messages before the connect acknowledgement
             // The server has to send a connect acknowledgement before sending any other packet
             // TCP should ensure the order of packets (afaik), so they should not arrive out of order
             // Using a deadline because the loop could be run multiple times
-            let deadline = Instant::now() + self.timeout;
-            loop {
-                let result = with_deadline(deadline, self.subscriber.next_message()).await;
-
-                let result = match result {
-                    Ok(result) => result,
-                    Err(error) => return Err(ConnectError::Timeout(error)),
-                };
-
-                match result {
-                    WaitResult::Lagged(missed_messages) => {
-                        warn!(
-                            "Missed {} messages while waiting for connect acknowledgement: ",
-                            missed_messages
-                        );
-                    }
-                    WaitResult::Message(result) => {
-                        let Packet::ConnectAcknowledgement(ConnectAcknowledgement {
-                            is_session_present: _,
-                            connect_reason_code,
-                        }) = result.map_err(ConnectError::ReceiveError)?
-                        else {
-                            continue;
-                        };
-
-                        if let ConnectReasonCode::ErrorCode(error_code) = connect_reason_code {
-                            return Err(ConnectError::ErrorCode(error_code));
-                        };
-
-                        return Ok(());
-                    }
-                }
-            }
-        }
-
-        pub(crate) async fn subscribe<'s>(
-            &mut self,
-            subscriptions: &[Subscription<'s>],
-        ) -> Result<(), SubscribeError> {
-            //TODO add packet identifier management when there can be more than one subscribe in flight
-            // That requires a non-mutable reference on self though. Which means putting the tcp writer behind a channel or mutex(?)
-            let packet = Subscribe {
-                subscriptions,
-                packet_identifier: 42,
-            };
-
-            // Send
-            let mut offset = 0;
-            if let Err(error) = packet.write(&mut self.send_buffer, &mut offset) {
-                return Err((SubscribeError::WriteSubscribeError(error)));
-            };
-
-            if let Err(error) = self.tcp_writer.write(&self.send_buffer[..offset]).await {
-                return Err((SubscribeError::TcpWriteError(error)));
-            }
-
-            if let Err(error) = self.tcp_writer.flush().await {
-                return Err((SubscribeError::TcpFlushError(error)));
-            }
-
-            // Receive
-            let deadline = Instant::now() + self.timeout;
-            loop {
-                let result = with_deadline(deadline, self.subscriber.next_message()).await;
-
-                let result = match result {
-                    Ok(result) => result,
-                    Err(error) => return Err(SubscribeError::Timeout(error)),
-                };
-
-                match result {
-                    WaitResult::Lagged(missed_messages) => {
-                        warn!(
-                            "Missed {} messages while waiting for subscribe acknowledgement: ",
-                            missed_messages
-                        );
-                    }
-                    WaitResult::Message(result) => {
-                        // Ignoring all errors because we don't know if they were as a result of
-                        // sending the subscribe packet
-                        let packet = match result {
-                            Err(error) => {
-                                warn!(
-                                    "Error while waiting for subscribe acknowledgement: {:?}",
-                                    error
-                                );
-                                continue;
-                            }
-                            Ok(packet) => packet,
-                        };
-
-                        // Ignore all messages not intended for us
-                        let Packet::SubscribeAcknowledgement(SubscribeAcknowledgement {
-                            //TODO how to pass arbitrary amount of subscribe topics back?
-                                                             }) = packet else {
-                            continue;
-                        };
-                    }
-                }
-            }
-
-            defmt::todo!()
         }
     }
 }
