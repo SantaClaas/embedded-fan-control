@@ -185,7 +185,7 @@ impl<'a> MqttReceiver<'a> {
 
 mod runner {
     use crate::mqtt::connect::Connect;
-    use crate::mqtt::connect_acknowledgement::ConnectReasonCode;
+    use crate::mqtt::connect_acknowledgement::{ConnectAcknowledgement, ConnectReasonCode};
     use crate::mqtt::packet::{FromPublish, Packet};
     use crate::mqtt::{connect, packet, subscribe, ConnectErrorReasonCode};
     use defmt::{warn, Format};
@@ -194,9 +194,11 @@ mod runner {
     use embassy_net::tcp::{TcpReader, TcpSocket, TcpWriter};
     use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
     use embassy_sync::channel::{Channel, Receiver, Sender};
-    use embassy_time::{with_timeout, Duration, TimeoutError};
+    use embassy_time::{with_deadline, with_timeout, Duration, Instant, TimeoutError};
+    use crate::mqtt::client::Connected;
 
     mod message {
+        use crate::mqtt::connect_acknowledgement::ConnectReasonCode;
         use crate::mqtt::packet::{FromPublish, Packet};
 
         pub(super) enum Outgoing<'a> {
@@ -211,7 +213,8 @@ mod runner {
         where
             T: FromPublish,
         {
-            Packet(Packet<T>),
+            ConnectAcknowledgement(ConnectReasonCode),
+            Publish(T),
         }
     }
 
@@ -265,7 +268,6 @@ mod runner {
 
         pub(crate) async fn run(mut self) -> ! {
             loop {
-
                 let result = select(
                     self.outgoing.receive(),
                     self.tcp_receiver.read(&mut self.receive_buffer),
@@ -331,8 +333,21 @@ mod runner {
                             }
                         };
 
-                        let message = message::Incoming::Packet(packet);
-                        self.incoming.send(message).await;
+                        match packet {
+                            Packet::ConnectAcknowledgement(ConnectAcknowledgement {
+                                connect_reason_code,
+                                is_session_present: _,
+                            }) => {
+                                let message =
+                                    message::Incoming::ConnectAcknowledgement(connect_reason_code);
+                                self.incoming.send(message).await;
+                                continue;
+                            }
+
+                            //TODO
+                            Packet::SubscribeAcknowledgement(_) => {}
+                            Packet::Publish(_) => {}
+                        }
                     }
                 }
             }
@@ -413,7 +428,7 @@ mod runner {
             client_identifier: &'a str,
             username: &'a str,
             password: &'a [u8],
-        ) {
+        ) -> Result<(), ConnectError> {
             let message = message::Outgoing::Connect {
                 client_identifier,
                 username,
@@ -427,6 +442,25 @@ mod runner {
             // The server has to send a connect acknowledgement before sending any other packet
             // TCP should ensure the order of packets (afaik), so they should not arrive out of order
             // Using a deadline because the loop could be run multiple times
+            let deadline = Instant::now() + self.timeout;
+            loop {
+                let result = with_deadline(deadline, self.incoming.receive()).await;
+                let message = match result {
+                    Ok(message) => message,
+                    Err(error) => {
+                        //TODO handle error
+                        warn!("Timed out receiving connect acknowledgement: {:?}", error);
+                        return Err(ConnectError::Timeout(error));
+                    }
+                };
+                match message {
+                    message::Incoming::ConnectAcknowledgement(reason_code) => return match reason_code {
+                        ConnectReasonCode::Success => Ok(()),
+                        ConnectReasonCode::ErrorCode(error_code) => Err(ConnectError::ErrorCode(error_code)),
+                    },
+                    _other => continue,
+                };
+            }
         }
     }
 }
