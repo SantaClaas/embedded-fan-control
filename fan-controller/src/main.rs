@@ -281,8 +281,8 @@ async fn mqtt_task(
     use mqtt::task;
     let packet = Connect {
         client_identifier: "testfan",
-        username: configuration::MQTT_BROKER_USERNAME,
-        password: configuration::MQTT_BROKER_PASSWORD,
+        username: configuration::MQTT_BROKER_CREDENTIALS.username,
+        password: configuration::MQTT_BROKER_CREDENTIALS.password,
         keep_alive_seconds: configuration::KEEP_ALIVE.as_secs() as u16,
     };
 

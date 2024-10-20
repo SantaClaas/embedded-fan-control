@@ -3,14 +3,14 @@ use embassy_time::Duration;
 
 //TODO make configurable
 /// Don't put credentials in the source code
-pub(crate) const WIFI_NETWORK: &str = ""; //  env!("FAN_CONTROL_WIFI_NETWORK");
+pub(crate) const WIFI_NETWORK: &str = env!("FAN_CONTROL_WIFI_NETWORK");
 
 //TODO make configurable
 /// Don't put credentials in the source code
-pub(crate) const WIFI_PASSWORD: &str = ""; //env!("FAN_CONTROL_WIFI_PASSWORD");
+pub(crate) const WIFI_PASSWORD: &str = env!("FAN_CONTROL_WIFI_PASSWORD");
 
 //TODO make configurable
-pub(crate) const MQTT_BROKER_ADDRESS: &str = "homeassistant.local";
+pub(crate) const MQTT_BROKER_ADDRESS: &str = "homeassistant";
 
 //TODO make configurable
 pub(crate) const MQTT_BROKER_PORT: u16 = 1883;
@@ -21,10 +21,18 @@ pub(crate) const MQTT_BROKER_PORT: u16 = 1883;
 pub(crate) const MQTT_BROKER_IP_ADDRESS: Option<IpAddress> = None;
 
 //TODO make configurable
-pub(crate) const MQTT_BROKER_USERNAME: &str = "";
+/// Set in Homeassitant under Settings > People > Users Tab. Not to be confused with the People tab.
+/// The Users Tab might only be visible in advanced mode as administrator.
+/// A separate account is recommended for each device.
+pub(crate) struct MqttBrokerCredentials<'a> {
+    pub(crate) username: &'a str,
+    pub(crate) password: &'a [u8],
+}
 
-//TODO make configurable
-pub(crate) const MQTT_BROKER_PASSWORD: &[u8] = b"";
+pub(crate) const MQTT_BROKER_CREDENTIALS: MqttBrokerCredentials = MqttBrokerCredentials {
+    username: "fancontroller",
+    password: b"test",
+};
 
 //TODO make configurable
 /// Prefix is "homeassistant", but it can be changed in home assistant configuration
