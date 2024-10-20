@@ -387,7 +387,7 @@ async fn mqtt_task(
     }
 
     static PING_RESPONSE: Signal<CriticalSectionRawMutex, PingResponse> = Signal::new();
-    /// Callback handler for [listen](crate::listen)
+    /// Callback handler for pings received when listening
     async fn handle_ping_response(ping_response: PingResponse) {
         info!("Received ping response");
         PING_RESPONSE.signal(ping_response);

@@ -6,7 +6,7 @@ const PORT_NAME: &str = "/dev/cu.usbserial-150";
 
 fn open_serial_port() -> serialport::Result<Box<dyn SerialPort>> {
     serialport::new(PORT_NAME, 19_200)
-        .timeout(Duration::from_secs(120))
+        .timeout(Duration::from_secs(60 * 5))
         .data_bits(DataBits::Eight)
         .stop_bits(StopBits::One)
         .parity(Parity::Even)
@@ -47,6 +47,15 @@ async fn main() -> serialport::Result<()> {
             "message {count} - bytes_read: ({:?}) {:?} {:#b} {:#b} ",
             bytes_read, buffer, buffer[0], buffer[1]
         );
+
+        // Wait as the fan would wait too
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        // Echo
+        let result = port.write(&buffer[..bytes_read]);
+        println!("Echoed message back {:?}", result);
+        let result = port.flush();
+        println!("Flushed message back {:?}", result);
+
         // let inverse: Vec<u8> = buffer.iter().map(|byte| byte.to_be()).collect::<Vec<u8>>();
         // println!("message {count} - inverse: {:?}", inverse);
         count += 1;

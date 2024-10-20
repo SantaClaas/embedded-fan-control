@@ -3,7 +3,7 @@
 
 use crate::modbus;
 use cortex_m::prelude::_embedded_hal_serial_Write;
-use defmt::{info, Format};
+use defmt::{error, info, Format};
 use embassy_rp::dma::Channel;
 use embassy_rp::gpio::{Level, Output, Pin};
 use embassy_rp::interrupt::typelevel::Binding;
@@ -71,7 +71,7 @@ impl<'a, UART: uart::Instance, PIN: Pin> FanClient<'a, UART, PIN> {
         if set_point > MAX_SET_POINT {
             return;
         }
-        
+
         // Send update through UART to MAX845 to modbus fans
         // Form message to fan 1
         let mut message: [u8; 8] = [
@@ -100,12 +100,13 @@ impl<'a, UART: uart::Instance, PIN: Pin> FanClient<'a, UART, PIN> {
         // Set pin setting DE (driver enable) to on (high) on the MAX845 to send data
         self.driver_enable.set_high();
         let result = self.uart.write(&message).await;
-        info!("uart result: {:?}", result);
+        info!("uart write result: {:?}", result);
 
         // Before closing we need to flush the buffer to ensure that all data is written
-        let result = self.uart.flush();
+        // This requires blocking or we get a WouldBlock error. I don't understand why (TODO)
+        let result = self.uart.blocking_flush();
         if let Err(error) = result {
-            info!("uart flush error");
+            error!("uart flush error");
         }
 
         // Wait to avoid cutting off last byte when turning off driver enable
@@ -116,6 +117,7 @@ impl<'a, UART: uart::Instance, PIN: Pin> FanClient<'a, UART, PIN> {
 
         // Read response from fan 1
         let mut response_buffer: [u8; 8] = [0; 8];
+        info!("Waiting for response from fan 1");
         let response = self.uart.read(&mut response_buffer).await;
         info!("response from fan 1: {:?} {:?}", response, response_buffer);
         //TODO validate response from fan 1
@@ -139,7 +141,7 @@ impl<'a, UART: uart::Instance, PIN: Pin> FanClient<'a, UART, PIN> {
         info!("uart result: {:?}", result);
 
         // Before closing we need to flush the buffer to ensure that all data is written
-        let result = self.uart.flush();
+        let result = self.uart.blocking_flush();
         if let Err(error) = result {
             info!("uart flush error");
         }
