@@ -2,14 +2,16 @@
 #![no_main]
 #![allow(warnings)]
 
-use core::future::Future;
-use core::ops::{Deref, DerefMut};
+use core::future::{poll_fn, Future};
+use core::ops::{Deref, DerefMut, Sub};
+use core::pin::pin;
+use core::task::Poll;
 use crc::{Crc, CRC_16_MODBUS};
 use cyw43::{Control, NetDriver};
 use cyw43_pio::PioSpi;
 use defmt::*;
 use embassy_executor::Spawner;
-use embassy_futures::join::join;
+use embassy_futures::join::{join, join3};
 use embassy_net::dns::{DnsQueryType, DnsSocket};
 use embassy_net::tcp::client::{TcpClient, TcpClientState};
 use embassy_net::tcp::{TcpReader, TcpSocket, TcpWriter};
@@ -25,10 +27,11 @@ use embassy_rp::{bind_interrupts, dma, pio, uart, Peripheral, Peripherals};
 use embassy_sync::blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex};
 use embassy_sync::channel;
 use embassy_sync::channel::Channel;
-use embassy_sync::mutex::Mutex;
+use embassy_sync::mutex::{Mutex, MutexGuard, TryLockError};
 use embassy_sync::pubsub::PubSubChannel;
 use embassy_sync::signal::Signal;
-use embassy_time::{Duration, Instant, Ticker, Timer};
+use embassy_sync::waitqueue::AtomicWaker;
+use embassy_time::{with_deadline, with_timeout, Duration, Instant, Ticker, TimeoutError, Timer};
 use embedded_io_async::{Read, Write};
 use embedded_nal_async::{AddrType, Dns, SocketAddr, TcpConnect};
 use mqtt::client::ConnectError;
@@ -41,14 +44,16 @@ use {defmt_rtt as _, panic_probe as _};
 use self::mqtt::packet;
 use self::mqtt::packet::Packet;
 use crate::async_callback::AsyncCallback;
-use crate::configuration::*;
 use crate::mqtt::client::runner::State;
 use crate::mqtt::connect::Connect;
 use crate::mqtt::connect_acknowledgement::ConnectReasonCode;
-use crate::mqtt::packet::{get_parts, FromPublish};
+use crate::mqtt::packet::{get_parts, FromPublish, FromSubscribeAcknowledgement};
 use crate::mqtt::ping_request::PingRequest;
+use crate::mqtt::ping_response::PingResponse;
 use crate::mqtt::publish::Publish;
 use crate::mqtt::subscribe::{Subscribe, Subscription};
+use crate::mqtt::subscribe_acknowledgement::SubscribeAcknowledgement;
+use crate::mqtt::task::{send, Encode};
 use crate::mqtt::QualityOfService;
 use crate::mqtt::{connect, publish, subscribe};
 use fan::FanClient;
@@ -75,9 +80,45 @@ async fn wifi_task(
     runner.run().await
 }
 
+#[embassy_executor::task]
+async fn network_task(stack: &'static Stack<NetDriver<'static>>) -> ! {
+    stack.run().await
+}
+
 #[derive(Clone, Copy)]
 enum Event {}
 static EVENT: PubSubChannel<CriticalSectionRawMutex, Event, 8, 4, 4> = PubSubChannel::new();
+async fn trigger_event(mutex: &Mutex<CriticalSectionRawMutex, Option<u32>>) {
+    let mut round = 0;
+    loop {
+        Timer::after_secs(3).await;
+        let mut mutex = mutex.lock().await;
+        *mutex = Some(round);
+        round += 1;
+    }
+}
+
+async fn wait_for_event(mutex: &Mutex<CriticalSectionRawMutex, Option<u32>>) {
+    loop {
+        let value = poll_fn(|context| match mutex.try_lock() {
+            Ok(guard) => match *guard {
+                None => Poll::Pending,
+                Some(value) => Poll::Ready(value),
+            },
+            Err(_error) => Poll::Pending,
+        })
+        .await;
+
+        info!("Got value {}", value);
+    }
+}
+async fn how_to() {
+    let mutex = Mutex::<CriticalSectionRawMutex, Option<u32>>::new(None);
+
+    let f1 = trigger_event(&mutex);
+    let f2 = wait_for_event(&mutex);
+    join(f1, f2).await;
+}
 
 async fn gain_control(
     spawner: Spawner,
@@ -116,21 +157,16 @@ async fn gain_control(
     (net_device, control)
 }
 
-#[embassy_executor::task]
-async fn network_task(stack: &'static Stack<NetDriver<'static>>) -> ! {
-    stack.run().await
-}
-
 enum MqttError {
-    WriteConnectError(connect::WriteError),
+    WriteConnectError(connect::EncodeError),
     WriteError(tcp::Error),
     FlushError(tcp::Error),
     ReadError(tcp::Error),
     ReadPacketError(packet::ReadError),
     ConnectError(mqtt::ConnectErrorReasonCode),
-    WriteSubscribeError(subscribe::WriteError),
+    WriteSubscribeError(subscribe::EncodeError),
     UnexpectedPacketType(u8),
-    WritePublishError(publish::WriteError),
+    WritePublishError(publish::EncodeError),
 }
 
 #[embassy_executor::task]
@@ -163,7 +199,10 @@ async fn mqtt_task(
 
     // Join Wi-Fi network
     loop {
-        match control.join_wpa2(WIFI_NETWORK, WIFI_PASSWORD).await {
+        match control
+            .join_wpa2(configuration::WIFI_NETWORK, configuration::WIFI_PASSWORD)
+            .await
+        {
             Ok(_) => break,
             Err(error) => info!("Error joining Wi-Fi network with status: {}", error.status),
         }
@@ -199,7 +238,9 @@ async fn mqtt_task(
     // Get home assistant MQTT broker IP address
     let address = loop {
         //TODO support IPv6
-        let result = dns_client.query(MQTT_BROKER_ADDRESS, DnsQueryType::A).await;
+        let result = dns_client
+            .query(configuration::MQTT_BROKER_ADDRESS, DnsQueryType::A)
+            .await;
 
         let mut addresses = match result {
             Ok(addresses) => addresses,
@@ -227,7 +268,7 @@ async fn mqtt_task(
     info!("MQTT broker IP address resolved");
 
     info!("Connecting to MQTT broker through TCP");
-    let endpoint = IpEndpoint::new(address, MQTT_BROKER_PORT);
+    let endpoint = IpEndpoint::new(address, configuration::MQTT_BROKER_PORT);
     // Connect
     while let Err(error) = socket.connect(endpoint).await {
         info!(
@@ -243,7 +284,7 @@ async fn mqtt_task(
         client_identifier: "testfan",
         username: configuration::MQTT_BROKER_USERNAME,
         password: configuration::MQTT_BROKER_PASSWORD,
-        keep_alive_seconds: 60,
+        keep_alive_seconds: configuration::KEEP_ALIVE.as_secs() as u16,
     };
 
     info!("Establishing MQTT connection");
@@ -255,13 +296,58 @@ async fn mqtt_task(
 
     info!("Subscribing to MQTT topics");
 
+    //TODO yes static "global" state is bad, but I am still learning how to use wakers and polling
+    // with futures so this will be refactored when I made it work
+    /// Contains the status of the subscribe packets send out. The packet identifier represents the
+    /// index in the array
+    static ACKNOWLEDGEMENTS: Mutex<CriticalSectionRawMutex, [bool; 2]> = Mutex::new([false, false]);
+    /// The waker needs to be woken to complete the subscribe acknowledgement future.
+    /// The embassy documentation does not explain when to use [`AtomicWaker`] but I am assuming
+    /// it is useful for cases like this where I need to mutate a static.
+    static WAKER: AtomicWaker = AtomicWaker::new();
+    async fn handle_subscribe_acknowledgement<'f>(
+        acknowledgement: &'f SubscribeAcknowledgement<'f>,
+    ) {
+        info!("Received subscribe acknowledgement");
+        let mut acknowledgements = ACKNOWLEDGEMENTS.lock().await;
+        // Validate server sends a valid packet identifier or we get bamboozled and panic
+        let Some(value) = acknowledgements.get_mut(acknowledgement.packet_identifier as usize)
+        else {
+            warn!("Received subscribe acknowledgement for out of bounds packet identifier");
+            return;
+        };
+    }
+
+    async fn wait_for_acknowledgement<const PACKET_IDENTIFIER: u16>() {
+        //TODO if this function gets called multiple times it might never be woken up because there
+        // is only one waker and the other call of this function will lock the mutex. To solve this
+        // we could use structs from [embassy-sync::waitqueue] and/or a blocking mutex to remove the
+        // try_lock which is used because the lock function is async and we can not easily await here
+        poll_fn(|context| match ACKNOWLEDGEMENTS.try_lock() {
+            Ok(mut guard) => {
+                let packet = guard.get_mut(PACKET_IDENTIFIER as usize).unwrap();
+                if *packet {
+                    Poll::Ready(())
+                } else {
+                    // Waker needs to be overwritten on each poll. Read the Rust async book on wakers
+                    // for more details
+                    let waker = context.waker();
+                    WAKER.register(waker);
+                    Poll::Pending
+                }
+            }
+            Err(_error) => Poll::Pending,
+        })
+        .await;
+    }
+
     /// A handler that takes MQTT publishes and sets the fan settings accordingly
-    async fn handle_publish<'f>(topic_name: &'f str, payload: &'f [u8]) {
+    async fn handle_publish<'f>(publish: &'f Publish<'f>) {
         info!("Received publish");
         // This part is not MQTT and application specific
-        match topic_name {
+        match publish.topic_name {
             "testfan/speed/percentage" => {
-                let payload = match core::str::from_utf8(&payload) {
+                let payload = match core::str::from_utf8(publish.payload) {
                     Ok(payload) => payload,
                     Err(error) => {
                         warn!("Expected percentage_command_topic payload (speed percentage) to be a valid UTF-8 string with a number");
@@ -293,30 +379,95 @@ async fn mqtt_task(
                 let fans = FANS.lock().await;
             }
 
-            other => info!("Unexpected topic: {} with payload: {}", other, payload),
+            other => info!(
+                "Unexpected topic: {} with payload: {}",
+                other, publish.payload
+            ),
         }
     }
 
-    async fn listen_for_publish<'reader, F>(reader: &mut TcpReader<'reader>, on_publish: F)
-    where
-        F: for<'a> AsyncCallback<'a>,
+    static PING_RESPONSE: Signal<CriticalSectionRawMutex, PingResponse> = Signal::new();
+    /// Callback handler for [listen](crate::listen)
+    async fn handle_ping_response(ping_response: PingResponse) {
+        info!("Received ping response");
+        PING_RESPONSE.signal(ping_response);
+    }
+
+    async fn listen<'reader, FS, FP, FR, F>(
+        reader: &mut TcpReader<'reader>,
+        on_subscribe_acknowledgement: FS,
+        on_publish: FP,
+        on_ping_response: FR,
+    ) where
+        FS: for<'a> AsyncCallback<'a, SubscribeAcknowledgement<'a>>,
+        FP: for<'a> AsyncCallback<'a, Publish<'a>>,
+        FR: Fn(PingResponse) -> F,
+        F: Future<Output = ()>,
     {
         let mut buffer = [0; 1024];
         loop {
             let bytes_read = reader.read(&mut buffer).await.unwrap();
             let parts = get_parts(&buffer[..bytes_read]).unwrap();
-            if parts.r#type != Publish::TYPE {
-                continue;
+            match parts.r#type {
+                Publish::TYPE => {
+                    let publish =
+                        Publish::read(parts.flags, &parts.variable_header_and_payload).unwrap();
+
+                    on_publish.call(&publish).await;
+                }
+                SubscribeAcknowledgement::TYPE => {
+                    let subscribe_acknowledgement =
+                        SubscribeAcknowledgement::read(&parts.variable_header_and_payload).unwrap();
+
+                    on_subscribe_acknowledgement
+                        .call(&subscribe_acknowledgement)
+                        .await;
+                }
+
+                other => info!("Unsupported packet type {}", other),
             }
-
-            let publish = Publish::read(parts.flags, &parts.variable_header_and_payload).unwrap();
-
-            on_publish.call(publish.topic_name, publish.payload).await;
         }
     }
 
-    let (mut reader, writer) = socket.split();
-    listen_for_publish(&mut reader, handle_publish).await;
+    let (mut reader, mut writer) = socket.split();
+    // Future 1
+    let listen = listen(
+        &mut reader,
+        handle_subscribe_acknowledgement,
+        handle_publish,
+        handle_ping_response,
+    );
+
+    enum Message<'a> {
+        Subscribe(Subscribe<'a>),
+        Publish(Publish<'a>),
+    }
+
+    static OUTGOING: Channel<CriticalSectionRawMutex, Message, 8> = Channel::new();
+    /// The instant when the last packet was sent to determine when the next keep alive has to be sent
+    static LAST_PACKET: Signal<CriticalSectionRawMutex, Instant> = Signal::new();
+    async fn talk(writer: &Mutex<CriticalSectionRawMutex, TcpWriter<'_>>) {
+        loop {
+            let message = OUTGOING.receive().await;
+            let mut writer = writer.lock().await;
+            match message {
+                Message::Subscribe(subscribe) => {
+                    send(&mut *writer, subscribe).await.unwrap();
+                }
+                Message::Publish(publish) => {
+                    send(&mut *writer, publish).await.unwrap();
+                }
+            }
+
+            LAST_PACKET.signal(Instant::now());
+        }
+    }
+
+    // Using a mutex for the writer, so it can be shared between the task that sends messages (for
+    // subscribing and publishing fan speed updates) and the task that sends the keep alive ping
+    let writer = Mutex::<CriticalSectionRawMutex, TcpWriter<'_>>::new(writer);
+    // Future 2
+    let talk = talk(&writer);
 
     // Subscribe to home assistant topics
     const SUBSCRIPTIONS: [Subscription; 2] = [
@@ -339,6 +490,72 @@ async fn mqtt_task(
             ),
         },
     ];
+
+    async fn set_up_subscriptions<const PACKET_IDENTIFIER: u16>() {
+        let message = Message::Subscribe(Subscribe {
+            subscriptions: &SUBSCRIPTIONS,
+            //TODO free identifier management
+            packet_identifier: PACKET_IDENTIFIER,
+        });
+
+        OUTGOING.send(message).await;
+
+        wait_for_acknowledgement::<PACKET_IDENTIFIER>().await;
+    }
+
+    // Future 3
+    let set_up = set_up_subscriptions::<0>();
+
+    enum ClientState {
+        Disconnected,
+        Connected,
+        ConnectionLost,
+    }
+    static CLIENT_STATE: Signal<CriticalSectionRawMutex, ClientState> = Signal::new();
+
+    // Keep alive task
+    async fn keep_alive(writer: &Mutex<CriticalSectionRawMutex, TcpWriter<'_>>) {
+        // Send keep alive packets after connection with connect packet is established.
+        // Wait for a packet to be sent or the keep alive interval to time the wait out.
+        // If the keep alive timed the wait out, send a ping request packet.
+        // Else if a packet was sent, wait for the next packet to be sent with the keep alive
+        // interval as timeout.
+
+        let start = LAST_PACKET.try_take().unwrap_or(Instant::now());
+        let mut last_send = start;
+        loop {
+            // The server waits for 1.5 times the keep alive interval, so being off by a bit due to
+            // network, async overhead or the clock not being exactly precise is fine
+            let deadline = last_send + configuration::KEEP_ALIVE;
+            let result = with_deadline(deadline, LAST_PACKET.wait()).await;
+            match result {
+                Err(TimeoutError) => {
+                    let mut writer = writer.lock().await;
+                    // Send keep alive ping request
+                    send(&mut *writer, PingRequest).await.unwrap();
+                    // Keep alive is time from when the last packet was sent and not when the ping response
+                    // was received. Therefore, we need to reset it here
+                    last_send = Instant::now();
+
+                    // Wait for ping response
+                    if let Err(TimeoutError) =
+                        with_timeout(configuration::TIMEOUT, PING_RESPONSE.wait()).await
+                    {
+                        // Assume disconnect from server
+                        error!("Timeout waiting for ping response. Disconnecting");
+                        CLIENT_STATE.signal(ClientState::ConnectionLost);
+                        return;
+                    }
+                }
+                Ok(last_packet) => {
+                    last_send = last_packet;
+                }
+            }
+        }
+    }
+
+    //TODO cancel all tasks when client loses connection
+    // join3(listen, talk, set_up).await;
 }
 
 enum PublishReceiveError {
@@ -470,12 +687,13 @@ async fn mqtt_routine<'a>(mut socket: TcpSocket<'a>) {
     // Ok(())
 }
 
-async fn listen_for_publishes<T>(
+async fn listen_for_publishes<T, S>(
     mut reader: TcpReader<'_>,
     mut buffer: [u8; 1024],
 ) -> Result<(), PublishReceiveError>
 where
     T: FromPublish,
+    S: FromSubscribeAcknowledgement,
 {
     loop {
         // Should read at least one byte
@@ -484,7 +702,7 @@ where
             .await
             .map_err(PublishReceiveError::ReadError)?;
 
-        let packet = Packet::<T>::read(&buffer[..bytes_read])
+        let packet = Packet::<T, S>::read(&buffer[..bytes_read])
             .map_err(PublishReceiveError::ReadPacketError)?;
         match packet {
             //TODO handle disconnect packet
@@ -582,7 +800,7 @@ async fn send_discovery_and_keep_alive(
     //TODO availability topic
     //TODO remove whitespace at compile time through macro, build script or const fn
 
-    // Using abbreviations to save space of binary and on the wire (haven't measured effect though...)
+    // Using abbreviations to save space of binary and on the wire (haven't measured the effect though...)
     // name -> name
     // uniq_id -> unique_id
     // stat_t -> state_topic
@@ -602,7 +820,7 @@ async fn send_discovery_and_keep_alive(
     }"#;
 
     const DISCOVERY_PUBLISH: Publish = Publish {
-        topic_name: DISCOVERY_TOPIC,
+        topic_name: configuration::DISCOVERY_TOPIC,
         payload: DISCOVERY_PAYLOAD,
     };
 
@@ -623,7 +841,7 @@ async fn send_discovery_and_keep_alive(
     loop {
         keep_alive.next().await;
         // Send keep alive ping request
-        PingRequest.write(&mut send_buffer, &mut offset);
+        let _ = PingRequest.encode(&mut send_buffer, &mut offset);
         writer
             .write_all(&send_buffer[..offset])
             .await

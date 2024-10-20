@@ -37,12 +37,13 @@ pub(crate) struct PacketParts<'a> {
 /// contains the topic name and payload. This is to get around the problem that publish topic names
 /// and payloads can have a variable unknown length and are difficult to pass around with lifetimes.
 #[derive(Format)]
-pub(crate) enum Packet<T>
+pub(crate) enum Packet<T, S>
 where
     T: FromPublish,
+    S: FromSubscribeAcknowledgement,
 {
     ConnectAcknowledgement(ConnectAcknowledgement),
-    SubscribeAcknowledgement(SubscribeAcknowledgement),
+    SubscribeAcknowledgement(S),
     Publish(T),
 }
 
@@ -67,11 +68,12 @@ pub(crate) fn get_parts(buffer: &[u8]) -> Result<PacketParts, GetPartsError> {
     })
 }
 
-impl<T> Packet<T>
+impl<T, S> Packet<T, S>
 where
     T: FromPublish,
+    S: FromSubscribeAcknowledgement,
 {
-    pub(crate) fn read(buffer: &[u8]) -> Result<Packet<T>, ReadError> {
+    pub(crate) fn read(buffer: &[u8]) -> Result<Packet<T, S>, ReadError> {
         // Fixed header
 
         let parts = get_parts(buffer).map_err(ReadError::PartsError)?;
@@ -98,7 +100,7 @@ where
                     SubscribeAcknowledgement::read(parts.variable_header_and_payload)
                         .map_err(ReadError::SubscribeAcknowledgementError)?;
 
-                Ok(Packet::SubscribeAcknowledgement(subscribe_acknowledgement))
+                Ok(Packet::SubscribeAcknowledgement(S::from_subscribe_acknowledgement(subscribe_acknowledgement)))
             }
 
             unexpected => Err(ReadError::UnexpectedPacketType(unexpected)),
@@ -123,4 +125,8 @@ impl FromPublish for () {
     fn from_publish(publish: Publish) -> Self {
         ()
     }
+}
+
+pub(crate) trait FromSubscribeAcknowledgement {
+    fn from_subscribe_acknowledgement(subscribe_acknowledgement: SubscribeAcknowledgement) -> Self;
 }

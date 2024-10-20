@@ -14,9 +14,10 @@ pub(crate) mod packet;
 pub(crate) mod ping_request;
 pub(crate) mod publish;
 pub(crate) mod subscribe;
-mod subscribe_acknowledgement;
+pub(crate) mod subscribe_acknowledgement;
 mod variable_byte_integer;
 pub(crate) mod task;
+pub(crate) mod ping_response;
 
 #[derive(Debug, Format, Clone)]
 pub(super) enum ConnectErrorReasonCode {

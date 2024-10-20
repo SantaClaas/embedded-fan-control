@@ -30,6 +30,8 @@ pub(crate) const MQTT_BROKER_PASSWORD: &[u8] = b"";
 /// Prefix is "homeassistant", but it can be changed in home assistant configuration
 pub(crate) const DISCOVERY_TOPIC: &str = "homeassistant/fan/testfan/config";
 
+/// The keep alive interval defines the maximum time between messages sent to the broker.
+/// The broker will disconnect the client if no message is received within 1.5 times of the keep alive interval.
 pub(crate) const KEEP_ALIVE: Duration = Duration::from_secs(60);
 const _: () = {
     // Check if the representation as u16 is correct
@@ -37,3 +39,8 @@ const _: () = {
 
     core::assert!(seconds == 60);
 };
+
+/// The timeout not to be confused with the keep alive interval is used for packets that require a
+/// response packet from the broker. If the client does not receive a response within the timeout
+/// the client will stop waiting for a response which can lead to a disconnect or retry in some cases.
+pub(crate) const TIMEOUT: Duration = Duration::from_secs(5);

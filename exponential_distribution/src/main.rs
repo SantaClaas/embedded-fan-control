@@ -5,7 +5,12 @@ use plotlib::view::ContinuousView;
 use rand::Rng;
 use rand::rngs::ThreadRng;
 use rand_distr::num_traits::Pow;
-
+///! Just a silly idea to randomize the time between keep alive ping request packets for MQTT as the
+///! MQTT specification states that the client can send them at any time but should not exceed 
+///! the keep alive interval between packets. This might detect communication issues earlier in some
+///! cases, but it is also not the intention to spam the broker which is why the random distribution
+///! is exponential and should lean to the max keep alive value
+ 
 // Written by AI. Is this exponential distribution?
 fn exponential_random(random: &mut ThreadRng, max_value: f64, rate: f64) -> usize {
     let exp_sample = random.gen::<f64>();

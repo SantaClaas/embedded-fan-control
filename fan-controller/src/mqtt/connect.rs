@@ -1,7 +1,7 @@
-use defmt::Format;
 use crate::mqtt::task::Encode;
 use crate::mqtt::variable_byte_integer;
 use crate::mqtt::variable_byte_integer::VariableByteIntegerEncodeError;
+use defmt::Format;
 
 pub(crate) struct Connect<'a> {
     pub(crate) client_identifier: &'a str,
@@ -12,7 +12,9 @@ pub(crate) struct Connect<'a> {
 
 impl<'a> Connect<'a> {
     pub(crate) const TYPE: u8 = 1;
-    pub(crate) fn encode(&self, buffer: &mut [u8], offset: &mut usize) -> Result<(), WriteError> {
+
+    #[deprecated(note = "Use Encode trait")]
+    pub(crate) fn encode(&self, buffer: &mut [u8], offset: &mut usize) -> Result<(), EncodeError> {
         let remaining_length = 11
             + size_of::<u16>()
             + self.client_identifier.len()
@@ -23,7 +25,7 @@ impl<'a> Connect<'a> {
 
         let required_length = size_of_val(&Self::TYPE) + remaining_length;
         if required_length > buffer.len() - *offset {
-            return Err(WriteError::BufferTooSmall {
+            return Err(EncodeError::BufferTooSmall {
                 required: required_length,
                 available: buffer.len() - *offset,
             });
@@ -34,7 +36,7 @@ impl<'a> Connect<'a> {
         *offset += 1;
 
         variable_byte_integer::encode(remaining_length, buffer, offset)
-            .map_err(WriteError::WriteRemainingLengthError)?;
+            .map_err(EncodeError::WriteRemainingLengthError)?;
 
         // Variable header
         // Protocol name length
@@ -109,7 +111,7 @@ impl<'a> Connect<'a> {
 }
 
 impl Encode for Connect<'_> {
-    type Error = WriteError;
+    type Error = EncodeError;
 
     fn encode(&self, buffer: &mut [u8], offset: &mut usize) -> Result<(), Self::Error> {
         let remaining_length = 11
@@ -122,7 +124,7 @@ impl Encode for Connect<'_> {
 
         let required_length = size_of_val(&Self::TYPE) + remaining_length;
         if required_length > buffer.len() - *offset {
-            return Err(WriteError::BufferTooSmall {
+            return Err(EncodeError::BufferTooSmall {
                 required: required_length,
                 available: buffer.len() - *offset,
             });
@@ -133,7 +135,7 @@ impl Encode for Connect<'_> {
         *offset += 1;
 
         variable_byte_integer::encode(remaining_length, buffer, offset)
-            .map_err(WriteError::WriteRemainingLengthError)?;
+            .map_err(EncodeError::WriteRemainingLengthError)?;
 
         // Variable header
         // Protocol name length
@@ -208,7 +210,7 @@ impl Encode for Connect<'_> {
 }
 
 #[derive(Debug, Format)]
-pub(crate) enum WriteError {
+pub(crate) enum EncodeError {
     /// Client identifier + user name + password together are larger than [VariableByteInteger::MAX]
     DataTooLarge,
     /// The buffer does not contain enough empty space to write the packet

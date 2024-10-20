@@ -1,10 +1,11 @@
-use crate::mqtt::connect::Connect;
+use crate::mqtt::connect::{Connect, EncodeError};
 use crate::mqtt::connect_acknowledgement::{ConnectAcknowledgement, ConnectReasonCode};
 use crate::mqtt::packet::GetPartsError;
 use crate::mqtt::{packet, ConnectErrorReasonCode, ReadConnectAcknowledgementError};
 use defmt::{warn, Format};
 use embassy_net::tcp;
 use embassy_net::tcp::TcpSocket;
+use embedded_io_async::Write;
 
 ///! Tasks that need to be done to run MQTT
 ///! - Keep alive
@@ -14,17 +15,17 @@ pub(crate) trait Encode {
     fn encode(&self, buffer: &mut [u8], offset: &mut usize) -> Result<(), Self::Error>;
 }
 
-#[derive(Format)]
-enum SendError<T>
-where
-    T: Encode,
-{
-    EncodeError(T::Error),
+#[derive(Debug, Format)]
+pub(crate) enum SendError<T> {
+    EncodeError(T),
     SendError(tcp::Error),
     FlushError(tcp::Error),
 }
 
-async fn send<'a, T>(socket: &mut TcpSocket<'a>, packet: T) -> Result<(), SendError<T>>
+pub(crate) async fn send<'a, T>(
+    socket: &mut impl Write<Error = tcp::Error>,
+    packet: T,
+) -> Result<(), SendError<<T as Encode>::Error>>
 where
     T: Encode,
 {
@@ -42,8 +43,8 @@ where
 }
 
 #[derive(Format)]
-pub(crate) enum ConnectError<'a> {
-    SendError(SendError<Connect<'a>>),
+pub(crate) enum ConnectError {
+    SendError(SendError<EncodeError>),
     ReadError(tcp::Error),
     PartsError(GetPartsError),
     InvalidResponsePacketType(u8),
@@ -54,7 +55,7 @@ pub(crate) enum ConnectError<'a> {
 pub(crate) async fn connect<'a, 'b>(
     socket: &mut TcpSocket<'a>,
     packet: Connect<'b>,
-) -> Result<(), ConnectError<'b>> {
+) -> Result<(), ConnectError> {
     send(socket, packet)
         .await
         .map_err(ConnectError::SendError)?;
