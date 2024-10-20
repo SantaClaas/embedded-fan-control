@@ -64,12 +64,12 @@ pub(super) mod holding_registers {
     pub(crate) const REFERENCE_SET_POINT: [u8; 2] = 0xd001_u16.to_be_bytes();
 }
 
-pub(crate) struct FanClient<'a, UART: uart::Instance, PIN: Pin> {
+pub(crate) struct Client<'a, UART: uart::Instance, PIN: Pin> {
     uart: Uart<'a, UART, Async>,
     driver_enable: Output<'a, PIN>,
 }
 
-impl<'a, UART: uart::Instance, PIN: Pin> FanClient<'a, UART, PIN> {
+impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
     pub(crate) fn new(
         uart: impl Peripheral<P = UART> + 'a,
         tx: impl Peripheral<P = impl TxPin<UART>> + 'a,

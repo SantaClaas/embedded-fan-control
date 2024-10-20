@@ -56,7 +56,7 @@ use crate::mqtt::subscribe_acknowledgement::SubscribeAcknowledgement;
 use crate::mqtt::task::{send, Encode};
 use crate::mqtt::QualityOfService;
 use crate::mqtt::{connect, publish, subscribe};
-use fan::{FanClient, FanSetting};
+use fan::FanSetting;
 
 mod async_callback;
 mod configuration;
@@ -908,7 +908,7 @@ async fn input_task(pin_18: PIN_18) {
     }
 }
 
-type Fans = Mutex<CriticalSectionRawMutex, Option<FanClient<'static, UART0, PIN_4>>>;
+type Fans = Mutex<CriticalSectionRawMutex, Option<fan::Client<'static, UART0, PIN_4>>>;
 /// Use this to make calls to the fans through modbus
 static FANS: Fans = Mutex::new(None);
 #[embassy_executor::main]
@@ -932,7 +932,7 @@ async fn main(spawner: Spawner) {
 
     // UART
 
-    let client = FanClient::new(uart0, pin_12, pin_13, Irqs, dma_ch1, dma_ch2, pin_4);
+    let client = fan::Client::new(uart0, pin_12, pin_13, Irqs, dma_ch1, dma_ch2, pin_4);
     // Inner scope to drop the guard after assigning
     {
         *(FANS.lock().await) = Some(client);
