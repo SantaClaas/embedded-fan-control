@@ -50,7 +50,7 @@ where
 pub(crate) fn get_parts(buffer: &[u8]) -> Result<PacketParts, GetPartsError> {
     let packet_type = buffer[0] >> 4;
     let flags = buffer[0] & 0b0000_1111;
-    let mut offset = 2;
+    let mut offset = 1;
     let remaining_length = variable_byte_integer::decode(buffer, &mut offset)
         .map_err(GetPartsError::InvalidRemainingLength)?;
 
@@ -100,7 +100,9 @@ where
                     SubscribeAcknowledgement::read(parts.variable_header_and_payload)
                         .map_err(ReadError::SubscribeAcknowledgementError)?;
 
-                Ok(Packet::SubscribeAcknowledgement(S::from_subscribe_acknowledgement(subscribe_acknowledgement)))
+                Ok(Packet::SubscribeAcknowledgement(
+                    S::from_subscribe_acknowledgement(subscribe_acknowledgement),
+                ))
             }
 
             unexpected => Err(ReadError::UnexpectedPacketType(unexpected)),
