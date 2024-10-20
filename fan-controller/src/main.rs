@@ -56,7 +56,6 @@ use crate::mqtt::subscribe_acknowledgement::SubscribeAcknowledgement;
 use crate::mqtt::task::{send, Encode};
 use crate::mqtt::QualityOfService;
 use crate::mqtt::{connect, publish, subscribe};
-use fan::FanSetting;
 
 mod async_callback;
 mod configuration;
@@ -368,7 +367,7 @@ async fn mqtt_task(
                     }
                 };
 
-                let Ok(setting) = FanSetting::new(set_point) else {
+                let Ok(setting) = fan::Setting::new(set_point) else {
                     warn!(
                         "Setting fan speed out of bounds. Not accepting new setting: {}",
                         set_point
@@ -893,7 +892,7 @@ async fn input_task(pin_18: PIN_18) {
         };
 
         // Send signal to change fan speed
-        let Ok(setting) = FanSetting::new(set_point) else {
+        let Ok(setting) = fan::Setting::new(set_point) else {
             warn!("Setting fan speed out of bounds. Not accepting new setting");
             continue;
         };
@@ -958,8 +957,8 @@ mod tests {
     #[test]
     fn setting_does_not_exceed_max_set_point() {
         assert_eq!(fan::MAX_SET_POINT, 64_000);
-        assert_eq!(FanSetting::new(64_000), Ok(FanSetting(64_000)));
-        assert_eq!(FanSetting::new(64_000 + 1), Err(SetPointOutOfBoundsError));
-        assert_eq!(FanSetting::new(u16::MAX), Err(SetPointOutOfBoundsError));
+        assert_eq!(Setting::new(64_000), Ok(Setting(64_000)));
+        assert_eq!(Setting::new(64_000 + 1), Err(SetPointOutOfBoundsError));
+        assert_eq!(Setting::new(u16::MAX), Err(SetPointOutOfBoundsError));
     }
 }

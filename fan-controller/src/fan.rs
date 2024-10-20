@@ -26,12 +26,12 @@ pub(crate) fn get_configuration() -> uart::Config {
 pub(crate) const MAX_SET_POINT: u16 = 64_000;
 
 #[derive(Debug)]
-pub(crate) struct FanSetting(u16);
+pub(crate) struct Setting(u16);
 
 #[derive(Debug)]
 pub(crate) struct SetPointOutOfBoundsError;
 
-impl FanSetting {
+impl Setting {
     const ZERO: Self = Self(0);
     pub(crate) const fn new(set_point: u16) -> Result<Self, SetPointOutOfBoundsError> {
         if set_point > MAX_SET_POINT {
@@ -88,7 +88,7 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
         }
     }
 
-    pub(crate) async fn set_set_point(&mut self, FanSetting(set_point): FanSetting) {
+    pub(crate) async fn set_set_point(&mut self, Setting(set_point): Setting) {
         // Send update through UART to MAX845 to modbus fans
         // Form message to fan 1
         let mut message: [u8; 8] = [
