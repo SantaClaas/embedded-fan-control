@@ -186,7 +186,6 @@ impl<'a> MqttReceiver<'a> {
 }
 
 pub(crate) mod runner {
-    use crate::mqtt;
     use crate::mqtt::packet::connect::Connect;
     use crate::mqtt::packet::connect_acknowledgement::{ConnectAcknowledgement, ConnectReasonCode};
     use crate::mqtt::packet::subscribe::{Subscribe, Subscription};
@@ -194,6 +193,7 @@ pub(crate) mod runner {
     use crate::mqtt::packet::{connect, subscribe};
     use crate::mqtt::packet::{FromPublish, FromSubscribeAcknowledgement, Packet};
     use crate::mqtt::ConnectErrorReasonCode;
+    use crate::mqtt::{self, Encode};
     use defmt::{warn, Format};
     use embassy_futures::select::{select, Either};
     use embassy_net::tcp;
@@ -351,7 +351,8 @@ pub(crate) mod runner {
                                 };
 
                                 let mut offset = 0;
-                                if let Err(error) = packet.write(&mut self.send_buffer, &mut offset)
+                                if let Err(error) =
+                                    packet.encode(&mut self.send_buffer, &mut offset)
                                 {
                                     //TODO handle error
                                     warn!("Error encoding subscribe packet: {:?}", error);

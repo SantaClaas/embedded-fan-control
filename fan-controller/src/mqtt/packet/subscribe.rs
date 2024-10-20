@@ -83,67 +83,6 @@ pub(crate) struct Subscribe<'a> {
 
 impl<'a> Subscribe<'a> {
     pub(crate) const TYPE: u8 = 8;
-
-    #[deprecated(note = "Use Encode trait")]
-    pub(crate) fn write(self, buffer: &mut [u8], offset: &mut usize) -> Result<(), EncodeError> {
-        let variable_header_length = size_of::<u16>() + size_of::<u8>();
-
-        let payload_length = self.subscriptions.len() * size_of::<u16>()
-            + self
-                .subscriptions
-                .iter()
-                .map(|subscription| subscription.length())
-                .sum::<usize>();
-
-        let remaining_length = variable_header_length + payload_length;
-        let required_length = size_of_val(&Self::TYPE) + remaining_length;
-        if required_length > buffer.len() - *offset {
-            return Err(EncodeError::BufferTooSmall {
-                required: required_length,
-                available: buffer.len() - *offset,
-            });
-        }
-
-        buffer[*offset] = Self::TYPE << 4;
-        *offset += 1;
-
-        variable_byte_integer::encode(remaining_length, buffer, offset)
-            .map_err(EncodeError::RemainingLengthError)?;
-
-        // Variable header
-        // Packet Identifier
-        buffer[*offset] = (self.packet_identifier >> 8) as u8;
-        *offset += 1;
-
-        buffer[*offset] = self.packet_identifier as u8;
-        *offset += 1;
-
-        // Property length
-        // No properties supported for now so set to 0
-        buffer[*offset] = 0;
-        *offset += 1;
-
-        for subscription in self.subscriptions {
-            // Topic name length
-            let topic_name_length = subscription.topic_filter.len() as u16;
-            buffer[*offset] = (topic_name_length >> 8) as u8;
-            *offset += 1;
-            buffer[*offset] = topic_name_length as u8;
-            *offset += 1;
-
-            // Topic name
-            for byte in subscription.topic_filter.as_bytes() {
-                buffer[*offset] = *byte;
-                *offset += 1;
-            }
-
-            // Options
-            buffer[*offset] = subscription.options.0;
-            *offset += 1;
-        }
-
-        Ok(())
-    }
 }
 
 impl Encode for Subscribe<'_> {
