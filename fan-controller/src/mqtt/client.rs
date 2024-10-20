@@ -79,7 +79,7 @@ impl<'a> MqttClient<'a, NotConnected> {
         };
 
         let mut offset = 0;
-        if let Err(error) = packet.write(&mut self.send_buffer, &mut offset) {
+        if let Err(error) = packet.encode(&mut self.send_buffer, &mut offset) {
             return Err((self, ConnectError::WriteConnectError(error)));
         };
 
@@ -183,10 +183,12 @@ impl<'a> MqttReceiver<'a> {
     }
 }
 
-mod runner {
+pub(crate) mod runner {
     use crate::mqtt::connect::Connect;
     use crate::mqtt::connect_acknowledgement::{ConnectAcknowledgement, ConnectReasonCode};
     use crate::mqtt::packet::{FromPublish, Packet};
+    use crate::mqtt::subscribe::{Subscribe, Subscription};
+    use crate::mqtt::subscribe_acknowledgement::{SubscribeAcknowledgement, SubscribeErrorReasonCode, SubscribeReasonCode};
     use crate::mqtt::{connect, packet, subscribe, ConnectErrorReasonCode};
     use defmt::{warn, Format};
     use embassy_futures::select::{select, Either};
@@ -195,17 +197,22 @@ mod runner {
     use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
     use embassy_sync::channel::{Channel, Receiver, Sender};
     use embassy_time::{with_deadline, with_timeout, Duration, Instant, TimeoutError};
-    use crate::mqtt::client::Connected;
 
     mod message {
         use crate::mqtt::connect_acknowledgement::ConnectReasonCode;
-        use crate::mqtt::packet::{FromPublish, Packet};
+        use crate::mqtt::packet::FromPublish;
+        use crate::mqtt::subscribe::Subscription;
+        use crate::mqtt::subscribe_acknowledgement::SubscribeAcknowledgement;
 
         pub(super) enum Outgoing<'a> {
             Connect {
                 client_identifier: &'a str,
                 username: &'a str,
                 password: &'a [u8],
+            },
+            Subscribe {
+                subscriptions: &'a [Subscription<'a>],
+                packet_identifier: u16,
             },
         }
 
@@ -214,6 +221,7 @@ mod runner {
             T: FromPublish,
         {
             ConnectAcknowledgement(ConnectReasonCode),
+            SubscribeAcknowledgement(SubscribeAcknowledgement),
             Publish(T),
         }
     }
@@ -224,12 +232,24 @@ mod runner {
         },
     }
 
-    struct State<'ch, T>
+    pub(crate) struct State<'ch, T>
     where
         T: FromPublish,
     {
         incoming: Channel<CriticalSectionRawMutex, message::Incoming<T>, 8>,
         outgoing: Channel<CriticalSectionRawMutex, message::Outgoing<'ch>, 8>,
+    }
+    
+    impl<'ch, T> State<'ch, T>
+    where
+        T: FromPublish,
+    {
+        pub(crate) const fn new() -> Self {
+            Self {
+                incoming: Channel::new(),
+                outgoing: Channel::new(),
+            }
+        }
     }
 
     #[derive(Clone, Debug, Format)]
@@ -238,21 +258,21 @@ mod runner {
         DecodePacketError(packet::ReadError),
     }
 
-    struct MqttRunner<'a, T>
+    struct MqttRunner<'socket,'state, T>
     where
         T: FromPublish,
     {
-        tcp_receiver: TcpReader<'a>,
+        tcp_receiver: TcpReader<'socket>,
         /// Subscribe to messages to be sent from the client (like an actor handle)
-        outgoing: Receiver<'a, CriticalSectionRawMutex, message::Outgoing<'a>, 8>,
-        incoming: Sender<'a, CriticalSectionRawMutex, message::Incoming<T>, 8>,
+        outgoing: Receiver<'state, CriticalSectionRawMutex, message::Outgoing<'socket>, 8>,
+        incoming: Sender<'state, CriticalSectionRawMutex, message::Incoming<T>, 8>,
         receive_buffer: [u8; 1024],
         send_buffer: [u8; 256],
         timeout: Duration,
-        tcp_writer: TcpWriter<'a>,
+        tcp_writer: TcpWriter<'socket>,
     }
 
-    impl<'a, T> MqttRunner<'a, T>
+    impl<'socket,'state, T> MqttRunner<'socket,'state,  T>
     where
         T: FromPublish,
     {
@@ -266,7 +286,7 @@ mod runner {
             Ok(&self.receive_buffer[..bytes_read])
         }
 
-        pub(crate) async fn run(mut self) -> ! {
+        pub(crate) async fn run(&'socket mut self) -> ! {
             loop {
                 let result = select(
                     self.outgoing.receive(),
@@ -290,7 +310,7 @@ mod runner {
                                 };
 
                                 let mut offset = 0;
-                                if let Err(error) = packet.write(&mut self.send_buffer, &mut offset)
+                                if let Err(error) = packet.encode(&mut self.send_buffer, &mut offset)
                                 {
                                     //TODO handle error
                                     warn!("Error encoding connect packet: {:?}", error);
@@ -308,6 +328,38 @@ mod runner {
                                 if let Err(error) = self.tcp_writer.flush().await {
                                     //TODO handle error
                                     warn!("Error flushing connect packet: {:?}", error);
+                                    continue;
+                                }
+                            }
+                            message::Outgoing::Subscribe {
+                                subscriptions,
+                                packet_identifier,
+                            } => {
+                                //TODO packet identifier
+                                let packet = Subscribe {
+                                    subscriptions,
+                                    packet_identifier,
+                                };
+
+                                let mut offset = 0;
+                                if let Err(error) = packet.write(&mut self.send_buffer, &mut offset)
+                                {
+                                    //TODO handle error
+                                    warn!("Error encoding subscribe packet: {:?}", error);
+                                    continue;
+                                };
+
+                                if let Err(error) =
+                                    self.tcp_writer.write(&self.send_buffer[..offset]).await
+                                {
+                                    //TODO handle error
+                                    warn!("Error writing subscribe packet: {:?}", error);
+                                    continue;
+                                }
+
+                                if let Err(error) = self.tcp_writer.flush().await {
+                                    //TODO handle error
+                                    warn!("Error flushing subscribe packet: {:?}", error);
                                     continue;
                                 }
                             }
@@ -345,7 +397,12 @@ mod runner {
                             }
 
                             //TODO
-                            Packet::SubscribeAcknowledgement(_) => {}
+                            Packet::SubscribeAcknowledgement(acknowledgement) => {
+                                let message =
+                                    message::Incoming::SubscribeAcknowledgement(acknowledgement);
+                                self.incoming.send(message).await;
+                                continue;
+                            }
                             Packet::Publish(_) => {}
                         }
                     }
@@ -378,7 +435,7 @@ mod runner {
         Timeout(TimeoutError),
     }
 
-    struct MqttClient<'a, T>
+    pub(crate) struct MqttClient<'a, T>
     where
         T: FromPublish,
     {
@@ -388,14 +445,15 @@ mod runner {
         incoming: Receiver<'a, CriticalSectionRawMutex, message::Incoming<T>, 8>,
     }
 
-    impl<'a, T> MqttClient<'a, T>
+    impl<'state,'socket, T> MqttClient<'state,T>
     where
         T: FromPublish,
+        'state: 'socket,
     {
-        pub fn new(
-            state: &'a State<'a, T>,
-            mut socket: &'a mut TcpSocket<'a>,
-        ) -> (MqttRunner<'a, T>, Self) {
+        pub(crate) fn new(
+            state: &'state State<'state, T>,
+            mut socket: &'socket mut TcpSocket<'socket>,
+        ) -> (MqttRunner<'socket, 'state, T>, Self) {
             let (reader, writer) = socket.split();
             //TODO handle out of subscribers/publishers error
             let send_incoming = state.incoming.sender();
@@ -425,9 +483,9 @@ mod runner {
 
         pub async fn connect(
             &self,
-            client_identifier: &'a str,
-            username: &'a str,
-            password: &'a [u8],
+            client_identifier: &'state str,
+            username: &'state str,
+            password: &'state [u8],
         ) -> Result<(), ConnectError> {
             let message = message::Outgoing::Connect {
                 client_identifier,
@@ -454,12 +512,71 @@ mod runner {
                     }
                 };
                 match message {
-                    message::Incoming::ConnectAcknowledgement(reason_code) => return match reason_code {
-                        ConnectReasonCode::Success => Ok(()),
-                        ConnectReasonCode::ErrorCode(error_code) => Err(ConnectError::ErrorCode(error_code)),
-                    },
+                    message::Incoming::ConnectAcknowledgement(reason_code) => {
+                        return match reason_code {
+                            ConnectReasonCode::Success => Ok(()),
+                            ConnectReasonCode::ErrorCode(error_code) => {
+                                Err(ConnectError::ErrorCode(error_code))
+                            }
+                        }
+                    }
                     _other => continue,
                 };
+            }
+        }
+
+        pub async fn subscribe(
+            &self,
+            subscriptions: &'state [Subscription<'state>; 2],
+        ) -> Result<[Result<(), SubscribeErrorReasonCode>; 2], SubscribeError> {
+            //TODO manage packet identifier
+            let packet_identifier = 42;
+            let message = message::Outgoing::Subscribe {
+                subscriptions,
+                packet_identifier,
+            };
+            self.outgoing.send(message).await;
+
+            let deadline = Instant::now() + self.timeout;
+            loop {
+                let result = with_deadline(deadline, self.incoming.receive()).await;
+                let message = match result {
+                    Ok(message) => message,
+                    Err(error) => {
+                        //TODO handle error
+                        warn!("Timed out receiving subscribe acknowledgement: {:?}", error);
+                        return Err(SubscribeError::Timeout(error));
+                    }
+                };
+                let (identifier, reason_codes) = match message {
+                    message::Incoming::SubscribeAcknowledgement(SubscribeAcknowledgement {
+                        packet_identifier,
+                        reason_codes,
+                    }) => (packet_identifier, reason_codes),
+                    _other => continue,
+                };
+
+                if packet_identifier != identifier {
+                    continue;
+                }
+
+                //TODO don't assume we have 2 results
+                let mut results = [Ok(()), Ok(())];
+
+                // Write codes to results
+                for (index, code) in reason_codes.into_iter().enumerate() {
+                    if index >= results.len() {
+                        break;
+                    }
+                    
+                    let Some(SubscribeReasonCode::ErrorCode(code)) = code else {
+                        continue;
+                    };
+                    
+                    results[index] = Err(code);
+                }
+                
+                return Ok(results);
             }
         }
     }

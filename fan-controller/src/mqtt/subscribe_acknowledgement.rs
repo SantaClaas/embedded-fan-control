@@ -1,17 +1,40 @@
-use crate::mqtt::variable_byte_integer;
 use crate::mqtt::variable_byte_integer::VariableByteIntegerDecodeError;
-use defmt::Format;
+use crate::mqtt::{variable_byte_integer, QualityOfService};
+use defmt::{warn, Format};
 
 #[derive(Debug, Clone, Format)]
 pub(crate) enum SubscribeAcknowledgementError {
     InvalidPropertiesLength(VariableByteIntegerDecodeError),
 }
 
-#[derive(Format, Clone)]
-pub(crate) struct SubscribeAcknowledgement;
-impl SubscribeAcknowledgement {
+#[derive(Format)]
+pub(crate) enum SubscribeErrorReasonCode {
+    UnspecifiedError = 0x80,
+    ImplementationSpecificError = 0x83,
+    NotAuthorized = 0x87,
+    TopicFilterInvalid = 0x8F,
+    PacketIdentifierInUse = 0x91,
+    QuotaExceeded = 0x97,
+    SharedSubscriptionsNotSupported = 0x9E,
+    SubscriptionIdentifiersNotSupported = 0xA1,
+    WildcardSubscriptionsNotSupported = 0xA2,
+}
+
+#[derive(Format)]
+pub(crate) enum SubscribeReasonCode {
+    GrantedQualityOfService(QualityOfService),
+    ErrorCode(SubscribeErrorReasonCode),
+}
+
+#[derive(Format)]
+pub(crate) struct SubscribeAcknowledgement {
+    pub(crate) packet_identifier: u16,
+    /// Reason code for each subscribed topic in the same order
+    pub(crate) reason_codes: [Option<SubscribeReasonCode>; 2],
+}
+impl<'a> SubscribeAcknowledgement {
     pub(super) const TYPE: u8 = 9;
-    pub(crate) fn read(buffer: &[u8]) -> Result<Self, SubscribeAcknowledgementError> {
+    pub(crate) fn read(buffer: &'a [u8]) -> Result<Self, SubscribeAcknowledgementError> {
         // Variable header
         let packet_identifier: u16 = ((buffer[0] as u16) << 8) | buffer[1] as u16;
 
@@ -23,17 +46,62 @@ impl SubscribeAcknowledgement {
         //TODO check if topics are acknowledged
 
         offset += properties_length;
-        
+
+        const DEFAULT: Option<SubscribeReasonCode> = None;
+        let mut reason_codes = [DEFAULT; 2];
         // Payload
         // Reason code for each subscribed topic in the same order
-        let mut topic_index = 0;
-        
-        loop {
-            let reason_code = buffer[offset];
-            offset += 1;
-        
+        // let reason_codes = &buffer[offset..];
+        let mut index = 0;
+        while index < reason_codes.len() {
+            let Some(code) = buffer.get(offset + index) else {
+                break;
+            };
+
+            reason_codes[index] = Some(match code {
+                0x00 => SubscribeReasonCode::GrantedQualityOfService(
+                    QualityOfService::AtMostOnceDelivery,
+                ),
+                0x01 => SubscribeReasonCode::GrantedQualityOfService(
+                    QualityOfService::AtLeastOnceDelivery,
+                ),
+                0x02 => SubscribeReasonCode::GrantedQualityOfService(
+                    QualityOfService::ExactlyOnceDelivery,
+                ),
+                0x80 => SubscribeReasonCode::ErrorCode(SubscribeErrorReasonCode::UnspecifiedError),
+                0x83 => SubscribeReasonCode::ErrorCode(
+                    SubscribeErrorReasonCode::ImplementationSpecificError,
+                ),
+                0x87 => SubscribeReasonCode::ErrorCode(SubscribeErrorReasonCode::NotAuthorized),
+                0x8F => {
+                    SubscribeReasonCode::ErrorCode(SubscribeErrorReasonCode::TopicFilterInvalid)
+                }
+                0x91 => {
+                    SubscribeReasonCode::ErrorCode(SubscribeErrorReasonCode::PacketIdentifierInUse)
+                }
+                0x97 => SubscribeReasonCode::ErrorCode(SubscribeErrorReasonCode::QuotaExceeded),
+                0x9E => SubscribeReasonCode::ErrorCode(
+                    SubscribeErrorReasonCode::SharedSubscriptionsNotSupported,
+                ),
+                0xA1 => SubscribeReasonCode::ErrorCode(
+                    SubscribeErrorReasonCode::SubscriptionIdentifiersNotSupported,
+                ),
+                0xA2 => SubscribeReasonCode::ErrorCode(
+                    SubscribeErrorReasonCode::WildcardSubscriptionsNotSupported,
+                ),
+                other => {
+                    //TODO handle invalid reason code
+                    warn!("Invalid reason code: {:?}", other);
+                    break;
+                }
+            });
+            
+            index += 1;
         }
 
-        Ok(SubscribeAcknowledgement)
+        Ok(SubscribeAcknowledgement {
+            packet_identifier,
+            reason_codes,
+        })
     }
 }

@@ -2,6 +2,7 @@
 #![no_main]
 #![allow(warnings)]
 
+use core::future::Future;
 use core::ops::{Deref, DerefMut};
 use crc::{Crc, CRC_16_MODBUS};
 use cyw43::{Control, NetDriver};
@@ -39,10 +40,12 @@ use {defmt_rtt as _, panic_probe as _};
 
 use self::mqtt::packet;
 use self::mqtt::packet::Packet;
+use crate::async_callback::AsyncCallback;
 use crate::configuration::*;
+use crate::mqtt::client::runner::State;
 use crate::mqtt::connect::Connect;
 use crate::mqtt::connect_acknowledgement::ConnectReasonCode;
-use crate::mqtt::packet::FromPublish;
+use crate::mqtt::packet::{get_parts, FromPublish};
 use crate::mqtt::ping_request::PingRequest;
 use crate::mqtt::publish::Publish;
 use crate::mqtt::subscribe::{Subscribe, Subscription};
@@ -50,6 +53,7 @@ use crate::mqtt::QualityOfService;
 use crate::mqtt::{connect, publish, subscribe};
 use fan::FanClient;
 
+mod async_callback;
 mod configuration;
 mod fan;
 mod modbus;
@@ -233,71 +237,86 @@ async fn mqtt_task(
         Timer::after_millis(500).await;
     }
     info!("Connected to MQTT broker through TCP");
-    use mqtt::client::MqttClient;
-    let mut client = MqttClient::new(socket);
-    //TODO refactor this into a retry policy or of the sorts
-    let mut client = loop {
-        let result = client
-            .connect::<()>(MQTT_BROKER_USERNAME, MQTT_BROKER_PASSWORD, KEEP_ALIVE)
-            .await;
 
-        match result {
-            Ok(client) => break client,
-            // Retry
-            Err((old_client, error)) => {
-                match error {
-                    error @ ConnectError::TcpFlushError(_)
-                    | error @ ConnectError::TcpWriteError(_)
-                    | error @ ConnectError::ReadError(_) => {
-                        info!(
-                            "Error connecting. Trying again ({:?})",
-                            Debug2Format(&error)
-                        );
-                        client = old_client;
-                        Timer::after_millis(500).await;
-                        continue;
+    use mqtt::task;
+    let packet = Connect {
+        client_identifier: "testfan",
+        username: configuration::MQTT_BROKER_USERNAME,
+        password: configuration::MQTT_BROKER_PASSWORD,
+        keep_alive_seconds: 60,
+    };
+
+    info!("Establishing MQTT connection");
+    if let Err(error) = task::connect(&mut socket, packet).await {
+        warn!("Error connecting to MQTT broker: {:?}", error);
+        return;
+    };
+    info!("MQTT connection established");
+
+    info!("Subscribing to MQTT topics");
+
+    /// A handler that takes MQTT publishes and sets the fan settings accordingly
+    async fn handle_publish<'f>(topic_name: &'f str, payload: &'f [u8]) {
+        info!("Received publish");
+        // This part is not MQTT and application specific
+        match topic_name {
+            "testfan/speed/percentage" => {
+                let payload = match core::str::from_utf8(&payload) {
+                    Ok(payload) => payload,
+                    Err(error) => {
+                        warn!("Expected percentage_command_topic payload (speed percentage) to be a valid UTF-8 string with a number");
+                        return;
                     }
+                };
 
-                    // Disconnect on these errors. (Returning does drop the tcp socket)
-                    // This error is most likely on us and not recoverable.
-                    //TODO retry when configuration changed
-                    error @ ConnectError::WriteConnectError(_)
-                    | error @ ConnectError::ErrorCode(_)
-                    | error @ ConnectError::InvalidPacket(_)
-                    | error @ ConnectError::DecodePacketError(_) => {
-                        error!(
-                            "Unrecoverable error. Closing connection. {:?}",
-                            Debug2Format(&error)
+                // And then to an integer...
+                let set_point = payload.parse::<u16>();
+                let set_point = match set_point {
+                    Ok(set_point) => set_point,
+                    Err(error) => {
+                        warn!(
+                            "Expected speed percentage to be a number string. Payload is: {}",
+                            payload
                         );
                         return;
                     }
-                }
-            }
-        }
-    };
-    const ARRAY_REPEAT_VALUE: Option<Subscription<'_>> = None;
-    let pending_subscriptions: [Option<Subscription>; 2] = [ARRAY_REPEAT_VALUE; 2];
-    let (mut receiver, writer) = client.split();
-    join(
-        async {
-            loop {
-                match receiver.receive::<()>().await {
-                    Ok(packet) => {
-                        info!("Received packet: {}", packet);
+                };
 
-                        match packet {
-                            Packet::Publish(publish) => {}
-                            Packet::SubscribeAcknowledgement(subscribe_acknowledgement) => {}
-                            other => continue,
-                        }
-                    }
-                    Err(error) => error!("Error receiving packet: {:?}", Debug2Format(&error)),
-                }
+                let Ok(setting) = FanSetting::new(set_point) else {
+                    warn!(
+                        "Setting fan speed out of bounds. Not accepting new setting: {}",
+                        set_point
+                    );
+                    return;
+                };
+
+                let fans = FANS.lock().await;
             }
-        },
-        async { Timer::after_millis(3).await },
-    )
-    .await;
+
+            other => info!("Unexpected topic: {} with payload: {}", other, payload),
+        }
+    }
+
+    async fn listen_for_publish<'reader, F>(reader: &mut TcpReader<'reader>, on_publish: F)
+    where
+        F: for<'a> AsyncCallback<'a>,
+    {
+        let mut buffer = [0; 1024];
+        loop {
+            let bytes_read = reader.read(&mut buffer).await.unwrap();
+            let parts = get_parts(&buffer[..bytes_read]).unwrap();
+            if parts.r#type != Publish::TYPE {
+                continue;
+            }
+
+            let publish = Publish::read(parts.flags, &parts.variable_header_and_payload).unwrap();
+
+            on_publish.call(publish.topic_name, publish.payload).await;
+        }
+    }
+
+    let (mut reader, writer) = socket.split();
+    listen_for_publish(&mut reader, handle_publish).await;
 
     // Subscribe to home assistant topics
     const SUBSCRIPTIONS: [Subscription; 2] = [
@@ -320,11 +339,6 @@ async fn mqtt_task(
             ),
         },
     ];
-
-    const SUBSCRIBE_PACKET: Subscribe = Subscribe {
-        subscriptions: &SUBSCRIPTIONS,
-        packet_identifier: 42,
-    };
 }
 
 enum PublishReceiveError {
@@ -691,6 +705,7 @@ async fn input_task(pin_18: PIN_18) {
 }
 
 type Fans = Mutex<CriticalSectionRawMutex, Option<FanClient<'static, UART0, PIN_4>>>;
+/// Use this to make calls to the fans through modbus
 static FANS: Fans = Mutex::new(None);
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
@@ -723,9 +738,9 @@ async fn main(spawner: Spawner) {
     unwrap!(spawner.spawn(input_task(pin_18)));
     // The MQTT task waits for publishes from MQTT and sends them to the modbus task.
     // It also sends updates from the modbus task that happen through button inputs to MQTT
-    unwrap!(spawner.spawn(mqtt_task(
-        spawner, pin_23, pin_25, pio0, dma_ch0, pin_24, pin_29
-    )));
+    // unwrap!(spawner.spawn(mqtt_task(
+    //     spawner, pin_23, pin_25, pio0, dma_ch0, pin_24, pin_29
+    // )));
 }
 
 #[cfg(test)]

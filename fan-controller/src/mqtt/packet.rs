@@ -9,24 +9,34 @@ use crate::mqtt::variable_byte_integer::VariableByteIntegerDecodeError;
 use crate::mqtt::{publish, variable_byte_integer, ReadConnectAcknowledgementError};
 use defmt::Format;
 
+#[derive(Clone, Format, Debug)]
+pub(crate) enum GetPartsError {
+    InvalidRemainingLength(VariableByteIntegerDecodeError),
+    MissingBytes(usize),
+}
 #[derive(Debug, Clone, Format)]
 pub(crate) enum ReadError {
     /// The packet type is not supported. This can happen if there is a packet received that is
     /// only intended for the broker and not the client. Or the packet type is not yet implemented.
     UnsupportedPacketType(u8),
     UnexpectedPacketType(u8),
-    MissingBytes(usize),
-    InvalidRemainingLength(VariableByteIntegerDecodeError),
+    PartsError(GetPartsError),
     ConnectAcknowledgementError(ReadConnectAcknowledgementError),
     PublishError(publish::ReadError),
     SubscribeAcknowledgementError(SubscribeAcknowledgementError),
+}
+
+pub(crate) struct PacketParts<'a> {
+    pub(crate) r#type: u8,
+    pub(crate) flags: u8,
+    pub(crate) variable_header_and_payload: &'a [u8],
 }
 
 /// T is for users of this MQTT implementation to define as the publish packets they expect vary by
 /// application. The only requirement is that they can be created from a publish packet which
 /// contains the topic name and payload. This is to get around the problem that publish topic names
 /// and payloads can have a variable unknown length and are difficult to pass around with lifetimes.
-#[derive(Format, Clone)]
+#[derive(Format)]
 pub(crate) enum Packet<T>
 where
     T: FromPublish,
@@ -36,45 +46,56 @@ where
     Publish(T),
 }
 
+pub(crate) fn get_parts(buffer: &[u8]) -> Result<PacketParts, GetPartsError> {
+    let packet_type = buffer[0] >> 4;
+    let flags = buffer[0] & 0b0000_1111;
+    let mut offset = 2;
+    let remaining_length = variable_byte_integer::decode(buffer, &mut offset)
+        .map_err(GetPartsError::InvalidRemainingLength)?;
+
+    if buffer.len() < offset + remaining_length {
+        let missing_bytes = buffer.len() - offset - remaining_length;
+        return Err(GetPartsError::MissingBytes(missing_bytes));
+    }
+
+    let variable_header_and_payload = &buffer[offset..offset + remaining_length];
+
+    Ok(PacketParts {
+        r#type: packet_type,
+        flags,
+        variable_header_and_payload,
+    })
+}
+
 impl<T> Packet<T>
 where
     T: FromPublish,
 {
     pub(crate) fn read(buffer: &[u8]) -> Result<Packet<T>, ReadError> {
         // Fixed header
-        let packet_type = buffer[0] >> 4;
-        let flags = buffer[0] & 0b0000_1111;
-        let mut offset = 2;
-        let remaining_length = variable_byte_integer::decode(buffer, &mut offset)
-            .map_err(ReadError::InvalidRemainingLength)?;
 
-        if buffer.len() < offset + remaining_length {
-            return Err(ReadError::MissingBytes(
-                buffer.len() - offset - remaining_length,
-            ));
-        }
-        let variable_header_and_payload = &buffer[offset..offset + remaining_length];
+        let parts = get_parts(buffer).map_err(ReadError::PartsError)?;
 
-        match packet_type {
-            Connect::TYPE => Err(ReadError::UnsupportedPacketType(packet_type)),
+        match parts.r#type {
+            Connect::TYPE => Err(ReadError::UnsupportedPacketType(parts.r#type)),
             ConnectAcknowledgement::TYPE => {
                 let connect_acknowledgement =
-                    ConnectAcknowledgement::read(variable_header_and_payload)
+                    ConnectAcknowledgement::read(parts.variable_header_and_payload)
                         .map_err(ReadError::ConnectAcknowledgementError)?;
 
                 Ok(Packet::ConnectAcknowledgement(connect_acknowledgement))
             }
             Publish::TYPE => {
-                let publish = Publish::read(flags, variable_header_and_payload)
+                let publish = Publish::read(parts.flags, parts.variable_header_and_payload)
                     .map_err(ReadError::PublishError)?;
 
                 let packet = T::from_publish(publish);
                 Ok(Packet::Publish(packet))
             }
-            Subscribe::TYPE => Err(ReadError::UnsupportedPacketType(packet_type)),
+            Subscribe::TYPE => Err(ReadError::UnsupportedPacketType(parts.r#type)),
             SubscribeAcknowledgement::TYPE => {
                 let subscribe_acknowledgement =
-                    SubscribeAcknowledgement::read(variable_header_and_payload)
+                    SubscribeAcknowledgement::read(parts.variable_header_and_payload)
                         .map_err(ReadError::SubscribeAcknowledgementError)?;
 
                 Ok(Packet::SubscribeAcknowledgement(subscribe_acknowledgement))

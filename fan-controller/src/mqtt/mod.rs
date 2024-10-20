@@ -16,6 +16,7 @@ pub(crate) mod publish;
 pub(crate) mod subscribe;
 mod subscribe_acknowledgement;
 mod variable_byte_integer;
+pub(crate) mod task;
 
 #[derive(Debug, Format, Clone)]
 pub(super) enum ConnectErrorReasonCode {
@@ -45,6 +46,7 @@ pub(super) enum ConnectErrorReasonCode {
 #[derive(Debug, Clone, Format)]
 pub struct UnknownConnectErrorReasonCode(u8);
 
+#[derive(Format)]
 pub(super) enum QualityOfService {
     /// At most once delivery or 0
     AtMostOnceDelivery = 0x00,
