@@ -56,7 +56,7 @@ use crate::mqtt::subscribe_acknowledgement::SubscribeAcknowledgement;
 use crate::mqtt::task::{send, Encode};
 use crate::mqtt::QualityOfService;
 use crate::mqtt::{connect, publish, subscribe};
-use fan::FanClient;
+use fan::{FanClient, FanSetting};
 
 mod async_callback;
 mod configuration;
@@ -376,7 +376,13 @@ async fn mqtt_task(
                     return;
                 };
 
-                let fans = FANS.lock().await;
+                let mut fans = FANS.lock().await;
+                let Some(fan) = fans.deref_mut() else {
+                    warn!("No fan available to set speed");
+                    return;
+                };
+
+                fan.set_set_point(setting).await;
             }
 
             other => info!(
@@ -555,7 +561,7 @@ async fn mqtt_task(
     }
 
     //TODO cancel all tasks when client loses connection
-    // join3(listen, talk, set_up).await;
+    join3(listen, talk, set_up).await;
 }
 
 enum PublishReceiveError {
@@ -850,26 +856,6 @@ async fn send_discovery_and_keep_alive(
         //TODO read ping response or disconnect after "a reasonable amount of time"
     }
 }
-#[derive(Debug)]
-struct FanSetting(u16);
-#[derive(Debug)]
-
-struct SetPointOutOfBoundsError;
-
-impl FanSetting {
-    const ZERO: Self = Self(0);
-    const fn new(set_point: u16) -> Result<Self, SetPointOutOfBoundsError> {
-        if set_point > fan::MAX_SET_POINT {
-            return Err(SetPointOutOfBoundsError);
-        }
-
-        Ok(Self(set_point))
-    }
-
-    const fn get(&self) -> u16 {
-        self.0
-    }
-}
 
 /// This task handles inputs from physical buttons to change the fan speed
 #[embassy_executor::task]
@@ -918,7 +904,7 @@ async fn input_task(pin_18: PIN_18) {
             continue;
         };
 
-        fan.set_set_point(set_point).await;
+        fan.set_set_point(setting).await;
     }
 }
 
@@ -956,9 +942,9 @@ async fn main(spawner: Spawner) {
     unwrap!(spawner.spawn(input_task(pin_18)));
     // The MQTT task waits for publishes from MQTT and sends them to the modbus task.
     // It also sends updates from the modbus task that happen through button inputs to MQTT
-    // unwrap!(spawner.spawn(mqtt_task(
-    //     spawner, pin_23, pin_25, pio0, dma_ch0, pin_24, pin_29
-    // )));
+    unwrap!(spawner.spawn(mqtt_task(
+        spawner, pin_23, pin_25, pio0, dma_ch0, pin_24, pin_29
+    )));
 }
 
 #[cfg(test)]
