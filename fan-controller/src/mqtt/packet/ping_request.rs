@@ -1,6 +1,6 @@
+use crate::mqtt::Encode;
 use core::convert::Infallible;
 use core::pin::Pin;
-use crate::mqtt::task::Encode;
 
 pub(crate) struct PingRequest;
 

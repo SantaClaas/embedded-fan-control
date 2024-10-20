@@ -1,7 +1,7 @@
 use defmt::Format;
 
-use crate::mqtt::{QualityOfService, variable_byte_integer};
-use crate::mqtt::task::Encode;
+use crate::mqtt::Encode;
+use crate::mqtt::{variable_byte_integer, QualityOfService};
 
 #[derive(Debug)]
 pub(crate) struct Options(u8);
@@ -83,7 +83,7 @@ pub(crate) struct Subscribe<'a> {
 
 impl<'a> Subscribe<'a> {
     pub(crate) const TYPE: u8 = 8;
-    
+
     #[deprecated(note = "Use Encode trait")]
     pub(crate) fn write(self, buffer: &mut [u8], offset: &mut usize) -> Result<(), EncodeError> {
         let variable_header_length = size_of::<u16>() + size_of::<u8>();
@@ -154,10 +154,10 @@ impl Encode for Subscribe<'_> {
 
         let payload_length = self.subscriptions.len() * size_of::<u16>()
             + self
-            .subscriptions
-            .iter()
-            .map(|subscription| subscription.length())
-            .sum::<usize>();
+                .subscriptions
+                .iter()
+                .map(|subscription| subscription.length())
+                .sum::<usize>();
 
         let remaining_length = variable_header_length + payload_length;
         let required_length = size_of_val(&Self::TYPE) + remaining_length;

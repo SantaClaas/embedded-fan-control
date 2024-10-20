@@ -35,6 +35,8 @@ use embassy_time::{with_deadline, with_timeout, Duration, Instant, Ticker, Timeo
 use embedded_io_async::{Read, Write};
 use embedded_nal_async::{AddrType, Dns, SocketAddr, TcpConnect};
 use mqtt::client::ConnectError;
+use mqtt::packet::disconnect::Disconnect;
+use mqtt::Decode;
 use rand::RngCore;
 use reqwless::client::{TlsConfig, TlsVerify};
 use static_cell::StaticCell;
@@ -54,7 +56,8 @@ use crate::mqtt::packet::subscribe::{Subscribe, Subscription};
 use crate::mqtt::packet::subscribe_acknowledgement::SubscribeAcknowledgement;
 use crate::mqtt::packet::{connect, publish, subscribe};
 use crate::mqtt::packet::{get_parts, FromPublish, FromSubscribeAcknowledgement};
-use crate::mqtt::task::{send, Encode};
+use crate::mqtt::task::send;
+use crate::mqtt::Encode;
 use crate::mqtt::QualityOfService;
 
 mod async_callback;
@@ -428,7 +431,13 @@ async fn mqtt_task(
                         .call(&subscribe_acknowledgement)
                         .await;
                 }
+                Disconnect::TYPE => {
+                    info!("Received disconnect");
 
+                    let disconnect = Disconnect::decode(&parts.variable_header_and_payload);
+                    info!("Disconnect {:?}", disconnect);
+                    //TODO disconnect TCP connection
+                }
                 other => info!("Unsupported packet type {}", other),
             }
         }

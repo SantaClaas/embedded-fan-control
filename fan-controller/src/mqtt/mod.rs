@@ -65,3 +65,15 @@ enum ReadConnectAcknowledgementError {
     InvalidReasonCode(UnknownConnectErrorReasonCode),
     InvalidPropertiesLength(VariableByteIntegerDecodeError),
 }
+
+pub(crate) trait Encode {
+    type Error;
+    fn encode(&self, buffer: &mut [u8], offset: &mut usize) -> Result<(), Self::Error>;
+}
+
+pub(crate) trait Decode {
+    type Error;
+    fn decode(variable_header_and_payload: &[u8]) -> Result<Self, Self::Error>
+    where
+        Self: Sized;
+}

@@ -1,6 +1,7 @@
 use crate::mqtt::packet::connect::{Connect, EncodeError};
 use crate::mqtt::packet::connect_acknowledgement::{ConnectAcknowledgement, ConnectReasonCode};
 use crate::mqtt::packet::GetPartsError;
+use crate::mqtt::Encode;
 use crate::mqtt::{packet, ConnectErrorReasonCode, ReadConnectAcknowledgementError};
 use defmt::{warn, Format};
 use embassy_net::tcp;
@@ -9,11 +10,6 @@ use embedded_io_async::Write;
 
 ///! Tasks that need to be done to run MQTT
 ///! - Keep alive
-
-pub(crate) trait Encode {
-    type Error;
-    fn encode(&self, buffer: &mut [u8], offset: &mut usize) -> Result<(), Self::Error>;
-}
 
 #[derive(Debug, Format)]
 pub(crate) enum SendError<T> {

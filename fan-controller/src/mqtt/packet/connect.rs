@@ -1,6 +1,6 @@
-use crate::mqtt::task::Encode;
 use crate::mqtt::variable_byte_integer;
 use crate::mqtt::variable_byte_integer::VariableByteIntegerEncodeError;
+use crate::mqtt::Encode;
 use defmt::Format;
 
 pub(crate) struct Connect<'a> {
