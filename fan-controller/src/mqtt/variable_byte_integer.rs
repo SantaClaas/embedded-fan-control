@@ -60,6 +60,7 @@ pub(super) enum VariableByteIntegerDecodeError {
 
     InvalidLength,
 }
+
 pub(super) fn decode(
     buffer: &[u8],
     offset: &mut usize,
@@ -70,8 +71,9 @@ pub(super) fn decode(
 
     // Shortcut if the length is 1 (bit 7 is 0)
     if (buffer[*offset] & 0b1000_0000) == 0 {
+        let value = buffer[*offset] as usize;
         *offset += 1;
-        return Ok(buffer[*offset] as usize);
+        return Ok(value);
     }
 
     let mut multiplier = 1;
