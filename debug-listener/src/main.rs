@@ -2,7 +2,7 @@ use serialport::{DataBits, Parity, SerialPort, StopBits};
 use std::time::Duration;
 
 // This might change depending on your system. Could put this in an environment variable
-const PORT_NAME: &str = "/dev/cu.usbserial-2150";
+const PORT_NAME: &str = "/dev/cu.usbserial-150";
 
 fn open_serial_port() -> serialport::Result<Box<dyn SerialPort>> {
     serialport::new(PORT_NAME, 19_200)
@@ -16,11 +16,19 @@ fn open_serial_port() -> serialport::Result<Box<dyn SerialPort>> {
 #[tokio::main]
 async fn main() -> serialport::Result<()> {
     println!("Starting debug listener");
+
+    // List available devices
+    println!("\nAvailable ports:");
+    for port in serialport::available_ports()? {
+        println!("Port: {}", port.port_name)
+    }
+
     // Arrange
     let mut port = open_serial_port()?;
 
     let mut count = 0u64;
 
+    println!("\nListening on device {}", PORT_NAME);
     loop {
         let mut buffer = [0u8; 32];
         // We expect this length but this is a test, and it could not be guaranteed
@@ -32,7 +40,6 @@ async fn main() -> serialport::Result<()> {
         //     continue;
         // }
         // let mut buffer = Vec::with_capacity(to_read.try_into().unwrap());
-        buffer;
         let bytes_read = port.read(&mut buffer)?;
         // let mut buffer = Vec::with_capacity(7);
         // let bytes_read = port.read_to_end(&mut buffer)?;
