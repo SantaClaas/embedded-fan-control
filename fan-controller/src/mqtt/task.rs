@@ -1,5 +1,5 @@
-use crate::mqtt::connect::{Connect, EncodeError};
-use crate::mqtt::connect_acknowledgement::{ConnectAcknowledgement, ConnectReasonCode};
+use crate::mqtt::packet::connect::{Connect, EncodeError};
+use crate::mqtt::packet::connect_acknowledgement::{ConnectAcknowledgement, ConnectReasonCode};
 use crate::mqtt::packet::GetPartsError;
 use crate::mqtt::{packet, ConnectErrorReasonCode, ReadConnectAcknowledgementError};
 use defmt::{warn, Format};

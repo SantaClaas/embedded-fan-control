@@ -1,8 +1,8 @@
 use crate::mqtt::packet::{FromPublish, FromSubscribeAcknowledgement, Packet};
 
-use super::{
-    connect, connect_acknowledgement::ConnectReasonCode, packet, Connect, ConnectErrorReasonCode,
-};
+use super::packet::{connect, connect_acknowledgement::ConnectReasonCode};
+use crate::mqtt::packet::connect::Connect;
+use crate::mqtt::ConnectErrorReasonCode;
 use core::marker::PhantomData;
 use embassy_net::tcp::{self, TcpReader, TcpSocket, TcpWriter};
 use embassy_time::{with_timeout, Duration, TimeoutError};
@@ -16,7 +16,7 @@ pub(crate) enum ConnectError {
     TcpWriteError(tcp::Error),
     TcpFlushError(tcp::Error),
     ReadError(ReadError),
-    DecodePacketError(packet::ReadError),
+    DecodePacketError(crate::mqtt::packet::ReadError),
     /// Received invalid packet type. The server had to respond with a Connect Acknowledgement (CONNACK) packet but send another one instead
     InvalidPacket(u8),
     /// Received a connect acknowledgement with an error code
@@ -150,7 +150,7 @@ pub(crate) struct MqttSender<'a> {
 #[derive(Debug)]
 pub(crate) enum ReceiveError {
     ReadError(ReadError),
-    DecodePacketError(packet::ReadError),
+    DecodePacketError(crate::mqtt::packet::ReadError),
 }
 
 pub(crate) struct MqttReceiver<'a> {
@@ -186,12 +186,14 @@ impl<'a> MqttReceiver<'a> {
 }
 
 pub(crate) mod runner {
-    use crate::mqtt::connect::Connect;
-    use crate::mqtt::connect_acknowledgement::{ConnectAcknowledgement, ConnectReasonCode};
+    use crate::mqtt;
+    use crate::mqtt::packet::connect::Connect;
+    use crate::mqtt::packet::connect_acknowledgement::{ConnectAcknowledgement, ConnectReasonCode};
+    use crate::mqtt::packet::subscribe::{Subscribe, Subscription};
+    use crate::mqtt::packet::subscribe_acknowledgement::SubscribeErrorReasonCode;
+    use crate::mqtt::packet::{connect, subscribe};
     use crate::mqtt::packet::{FromPublish, FromSubscribeAcknowledgement, Packet};
-    use crate::mqtt::subscribe::{Subscribe, Subscription};
-    use crate::mqtt::subscribe_acknowledgement::SubscribeErrorReasonCode;
-    use crate::mqtt::{connect, packet, subscribe, ConnectErrorReasonCode};
+    use crate::mqtt::ConnectErrorReasonCode;
     use defmt::{warn, Format};
     use embassy_futures::select::{select, Either};
     use embassy_net::tcp;
@@ -201,9 +203,9 @@ pub(crate) mod runner {
     use embassy_time::{with_deadline, with_timeout, Duration, Instant, TimeoutError};
 
     mod message {
-        use crate::mqtt::connect_acknowledgement::ConnectReasonCode;
+        use crate::mqtt::packet::connect_acknowledgement::ConnectReasonCode;
+        use crate::mqtt::packet::subscribe::Subscription;
         use crate::mqtt::packet::{FromPublish, FromSubscribeAcknowledgement};
-        use crate::mqtt::subscribe::Subscription;
 
         pub(super) enum Outgoing<'a> {
             Connect {
@@ -259,7 +261,7 @@ pub(crate) mod runner {
     #[derive(Clone, Debug, Format)]
     enum ReceiveError {
         ReadError(ReadError),
-        DecodePacketError(packet::ReadError),
+        DecodePacketError(mqtt::packet::ReadError),
     }
 
     struct MqttRunner<'socket, 'state, T, S>

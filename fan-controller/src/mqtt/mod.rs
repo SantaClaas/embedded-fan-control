@@ -4,20 +4,13 @@
 use defmt::Format;
 use embedded_io_async::Write;
 
-use crate::mqtt::connect::Connect;
+use crate::mqtt::packet::connect::Connect;
 use crate::mqtt::variable_byte_integer::VariableByteIntegerDecodeError;
 
 pub(crate) mod client;
-pub(crate) mod connect;
-pub(crate) mod connect_acknowledgement;
 pub(crate) mod packet;
-pub(crate) mod ping_request;
-pub(crate) mod publish;
-pub(crate) mod subscribe;
-pub(crate) mod subscribe_acknowledgement;
-mod variable_byte_integer;
 pub(crate) mod task;
-pub(crate) mod ping_response;
+pub(crate) mod variable_byte_integer;
 
 #[derive(Debug, Format, Clone)]
 pub(super) enum ConnectErrorReasonCode {

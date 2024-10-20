@@ -45,17 +45,17 @@ use self::mqtt::packet;
 use self::mqtt::packet::Packet;
 use crate::async_callback::AsyncCallback;
 use crate::mqtt::client::runner::State;
-use crate::mqtt::connect::Connect;
-use crate::mqtt::connect_acknowledgement::ConnectReasonCode;
+use crate::mqtt::packet::connect::Connect;
+use crate::mqtt::packet::connect_acknowledgement::ConnectReasonCode;
+use crate::mqtt::packet::ping_request::PingRequest;
+use crate::mqtt::packet::ping_response::PingResponse;
+use crate::mqtt::packet::publish::Publish;
+use crate::mqtt::packet::subscribe::{Subscribe, Subscription};
+use crate::mqtt::packet::subscribe_acknowledgement::SubscribeAcknowledgement;
+use crate::mqtt::packet::{connect, publish, subscribe};
 use crate::mqtt::packet::{get_parts, FromPublish, FromSubscribeAcknowledgement};
-use crate::mqtt::ping_request::PingRequest;
-use crate::mqtt::ping_response::PingResponse;
-use crate::mqtt::publish::Publish;
-use crate::mqtt::subscribe::{Subscribe, Subscription};
-use crate::mqtt::subscribe_acknowledgement::SubscribeAcknowledgement;
 use crate::mqtt::task::{send, Encode};
 use crate::mqtt::QualityOfService;
-use crate::mqtt::{connect, publish, subscribe};
 
 mod async_callback;
 mod configuration;
@@ -478,20 +478,20 @@ async fn mqtt_task(
     const SUBSCRIPTIONS: [Subscription; 2] = [
         Subscription {
             topic_filter: "testfan/on/set",
-            options: mqtt::subscribe::Options::new(
+            options: mqtt::packet::subscribe::Options::new(
                 QualityOfService::AtMostOnceDelivery,
                 false,
                 false,
-                mqtt::subscribe::RetainHandling::DoNotSend,
+                mqtt::packet::subscribe::RetainHandling::DoNotSend,
             ),
         },
         Subscription {
             topic_filter: "testfan/speed/percentage",
-            options: mqtt::subscribe::Options::new(
+            options: mqtt::packet::subscribe::Options::new(
                 QualityOfService::AtMostOnceDelivery,
                 false,
                 false,
-                mqtt::subscribe::RetainHandling::DoNotSend,
+                mqtt::packet::subscribe::RetainHandling::DoNotSend,
             ),
         },
     ];

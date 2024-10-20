@@ -1,13 +1,23 @@
-use crate::mqtt::connect::Connect;
-use crate::mqtt::connect_acknowledgement::ConnectAcknowledgement;
-use crate::mqtt::publish::Publish;
-use crate::mqtt::subscribe::Subscribe;
-use crate::mqtt::subscribe_acknowledgement::{
+use crate::mqtt::packet::connect::Connect;
+use crate::mqtt::packet::connect_acknowledgement::ConnectAcknowledgement;
+use crate::mqtt::packet::publish::Publish;
+use crate::mqtt::packet::subscribe::Subscribe;
+use crate::mqtt::packet::subscribe_acknowledgement::{
     SubscribeAcknowledgement, SubscribeAcknowledgementError,
 };
+use crate::mqtt::variable_byte_integer;
 use crate::mqtt::variable_byte_integer::VariableByteIntegerDecodeError;
-use crate::mqtt::{publish, variable_byte_integer, ReadConnectAcknowledgementError};
+use crate::mqtt::ReadConnectAcknowledgementError;
 use defmt::Format;
+
+pub(crate) mod connect;
+pub(crate) mod connect_acknowledgement;
+pub(crate) mod disconnect;
+pub(crate) mod ping_request;
+pub(crate) mod ping_response;
+pub(crate) mod publish;
+pub(crate) mod subscribe;
+pub(crate) mod subscribe_acknowledgement;
 
 #[derive(Clone, Format, Debug)]
 pub(crate) enum GetPartsError {
