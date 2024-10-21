@@ -1,6 +1,6 @@
 use crate::mqtt::variable_byte_integer;
 use crate::mqtt::variable_byte_integer::VariableByteIntegerEncodeError;
-use crate::mqtt::Encode;
+use crate::mqtt::TryEncode;
 use defmt::Format;
 
 pub(crate) struct Connect<'a> {
@@ -110,7 +110,7 @@ impl<'a> Connect<'a> {
     }
 }
 
-impl Encode for Connect<'_> {
+impl TryEncode for Connect<'_> {
     type Error = EncodeError;
 
     fn encode(&self, buffer: &mut [u8], offset: &mut usize) -> Result<(), Self::Error> {

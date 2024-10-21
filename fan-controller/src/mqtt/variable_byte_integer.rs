@@ -51,7 +51,7 @@ pub(super) fn encode(
 }
 
 #[derive(Debug, Format, Clone)]
-pub(super) enum VariableByteIntegerDecodeError {
+pub(super) enum DecodeError {
     MalformedVariableByteIntegerError,
     /// The buffer does not contain enough bytes to read the remaining length
     EndOfBuffer,
@@ -61,12 +61,9 @@ pub(super) enum VariableByteIntegerDecodeError {
     InvalidLength,
 }
 
-pub(super) fn decode(
-    buffer: &[u8],
-    offset: &mut usize,
-) -> Result<usize, VariableByteIntegerDecodeError> {
+pub(super) fn decode(buffer: &[u8], offset: &mut usize) -> Result<usize, DecodeError> {
     if buffer.len() <= *offset {
-        return Err(VariableByteIntegerDecodeError::EndOfBuffer);
+        return Err(DecodeError::EndOfBuffer);
     }
 
     // Shortcut if the length is 1 (bit 7 is 0)
@@ -88,7 +85,7 @@ pub(super) fn decode(
         value += (encoded_byte & 127) as usize * multiplier;
 
         if multiplier > 128 * 128 * 128 {
-            return Err(VariableByteIntegerDecodeError::MalformedVariableByteIntegerError);
+            return Err(DecodeError::MalformedVariableByteIntegerError);
         }
 
         multiplier *= 128;
@@ -100,11 +97,11 @@ pub(super) fn decode(
 
         // The current byte indicates the next byte is part of the integer, but we would be past 4 bytes
         if length > 4 {
-            return Err(VariableByteIntegerDecodeError::InvalidLength);
+            return Err(DecodeError::InvalidLength);
         }
 
         if buffer.len() <= *offset {
-            return Err(VariableByteIntegerDecodeError::UnexpectedEndOfBuffer);
+            return Err(DecodeError::UnexpectedEndOfBuffer);
         }
     }
 

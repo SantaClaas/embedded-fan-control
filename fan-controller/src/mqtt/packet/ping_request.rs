@@ -9,13 +9,10 @@ impl PingRequest {
 }
 
 impl Encode for PingRequest {
-    type Error = Infallible;
-
-    fn encode(&self, buffer: &mut [u8], offset: &mut usize) -> Result<(), Self::Error> {
+    fn encode(&self, buffer: &mut [u8], offset: &mut usize) {
         buffer[*offset] = Self::TYPE << 4;
         *offset += 1;
         // Setting it to 0, because this might not be 0 if we reuse the buffer
         buffer[*offset] = 0;
-        Ok(())
     }
 }

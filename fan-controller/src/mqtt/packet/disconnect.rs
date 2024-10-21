@@ -1,4 +1,4 @@
-use crate::mqtt::Decode;
+use crate::mqtt::TryDecode;
 use defmt::Format;
 
 #[derive(Debug, Format)]
@@ -90,7 +90,7 @@ pub(crate) enum DecodeDisconnectError {
     UnknownReasonCode(UnknownReasonCode),
 }
 
-impl Decode for Disconnect {
+impl TryDecode for Disconnect {
     type Error = DecodeDisconnectError;
 
     fn decode(variable_header_and_payload: &[u8]) -> Result<Self, Self::Error> {

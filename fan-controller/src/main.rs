@@ -1,8 +1,11 @@
 #![no_std]
 #![no_main]
+//TODO remove this 🥴
 #![allow(warnings)]
 
+use core::convert::Infallible;
 use core::future::{poll_fn, Future};
+use core::num::NonZeroU16;
 use core::ops::{Deref, DerefMut, Sub};
 use core::pin::pin;
 use core::task::Poll;
@@ -11,7 +14,7 @@ use cyw43::{Control, NetDriver};
 use cyw43_pio::PioSpi;
 use defmt::*;
 use embassy_executor::Spawner;
-use embassy_futures::join::{join, join3};
+use embassy_futures::join::{join, join3, join4};
 use embassy_net::dns::{DnsQueryType, DnsSocket};
 use embassy_net::tcp::client::{TcpClient, TcpClientState};
 use embassy_net::tcp::{TcpReader, TcpSocket, TcpWriter};
@@ -36,7 +39,7 @@ use embedded_io_async::{Read, Write};
 use embedded_nal_async::{AddrType, Dns, SocketAddr, TcpConnect};
 use mqtt::client::ConnectError;
 use mqtt::packet::disconnect::Disconnect;
-use mqtt::Decode;
+use mqtt::TryDecode;
 use rand::RngCore;
 use reqwless::client::{TlsConfig, TlsVerify};
 use static_cell::StaticCell;
@@ -47,6 +50,7 @@ use self::mqtt::packet;
 use self::mqtt::packet::Packet;
 use crate::async_callback::AsyncCallback;
 use crate::mqtt::client::runner::State;
+use crate::mqtt::non_zero_u16;
 use crate::mqtt::packet::connect::Connect;
 use crate::mqtt::packet::connect_acknowledgement::ConnectReasonCode;
 use crate::mqtt::packet::ping_request::PingRequest;
@@ -57,8 +61,8 @@ use crate::mqtt::packet::subscribe_acknowledgement::SubscribeAcknowledgement;
 use crate::mqtt::packet::{connect, publish, subscribe};
 use crate::mqtt::packet::{get_parts, FromPublish, FromSubscribeAcknowledgement};
 use crate::mqtt::task::send;
-use crate::mqtt::Encode;
 use crate::mqtt::QualityOfService;
+use crate::mqtt::TryEncode;
 
 mod async_callback;
 mod configuration;
@@ -248,13 +252,14 @@ async fn mqtt_task(
             Ok(addresses) => addresses,
             Err(error) => {
                 info!(
-                    "Error resolving Home Assistant MQTT broker IP address: {:?}",
-                    error
+                    "Error resolving Home Assistant MQTT broker IP address with {}: {:?}",
+                    configuration::MQTT_BROKER_ADDRESS,
+                    error,
                 );
                 // Exponential backoff doesn't seem necessary here
                 // Maybe the current installation of Home Assistant is in the process of
                 // being set up and the entry is not yet available
-                Timer::after_millis(500).await;
+                Timer::after_secs(25).await;
                 continue;
             }
         };
@@ -312,22 +317,29 @@ async fn mqtt_task(
     ) {
         info!("Received subscribe acknowledgement");
         let mut acknowledgements = ACKNOWLEDGEMENTS.lock().await;
+        info!("Locked ACKNOWLEDGEMENTS");
         // Validate server sends a valid packet identifier or we get bamboozled and panic
         let Some(value) = acknowledgements.get_mut(acknowledgement.packet_identifier as usize)
         else {
             warn!("Received subscribe acknowledgement for out of bounds packet identifier");
             return;
         };
+
+        info!(
+            "Received acknowledgement {} Reason codes: {:#04x}",
+            acknowledgement.packet_identifier, acknowledgement.reason_codes
+        );
     }
 
-    async fn wait_for_acknowledgement<const PACKET_IDENTIFIER: u16>() {
+    async fn wait_for_acknowledgement(packet_identifier: NonZeroU16) {
+        info!("Waiting for subscribe acknowledgements");
         //TODO if this function gets called multiple times it might never be woken up because there
         // is only one waker and the other call of this function will lock the mutex. To solve this
         // we could use structs from [embassy-sync::waitqueue] and/or a blocking mutex to remove the
         // try_lock which is used because the lock function is async and we can not easily await here
         poll_fn(|context| match ACKNOWLEDGEMENTS.try_lock() {
             Ok(mut guard) => {
-                let packet = guard.get_mut(PACKET_IDENTIFIER as usize).unwrap();
+                let packet = guard.get_mut(packet_identifier.get() as usize).unwrap();
                 if *packet {
                     Poll::Ready(())
                 } else {
@@ -341,6 +353,8 @@ async fn mqtt_task(
             Err(_error) => Poll::Pending,
         })
         .await;
+
+        info!("Subscribe acknowledgement received")
     }
 
     /// A handler that takes MQTT publishes and sets the fan settings accordingly
@@ -384,7 +398,9 @@ async fn mqtt_task(
                     return;
                 };
 
-                fan.set_set_point(setting).await;
+                if let Err(TimeoutError) = fan.set_set_point(setting).await {
+                    error!("Setting fan speed from publish timed out");
+                }
             }
 
             other => info!(
@@ -401,35 +417,88 @@ async fn mqtt_task(
         PING_RESPONSE.signal(ping_response);
     }
 
-    async fn listen<'reader, FS, FP, FR, F>(
-        reader: &mut TcpReader<'reader>,
-        on_subscribe_acknowledgement: FS,
-        on_publish: FP,
-        on_ping_response: FR,
-    ) where
-        FS: for<'a> AsyncCallback<'a, SubscribeAcknowledgement<'a>>,
-        FP: for<'a> AsyncCallback<'a, Publish<'a>>,
-        FR: Fn(PingResponse) -> F,
-        F: Future<Output = ()>,
-    {
+    enum ClientState {
+        Disconnected,
+        Connected,
+        ConnectionLost,
+    }
+    static CLIENT_STATE: Signal<CriticalSectionRawMutex, ClientState> = Signal::new();
+
+    async fn listen<'reader>(reader: &mut TcpReader<'reader>) {
         let mut buffer = [0; 1024];
         loop {
-            let bytes_read = reader.read(&mut buffer).await.unwrap();
-            let parts = get_parts(&buffer[..bytes_read]).unwrap();
+            info!("Waiting for packet");
+            let result = reader.read(&mut buffer).await;
+            let bytes_read = match result {
+                // This indicates the TCP connection was closed. (See embassy-net documentation)
+                Ok(0) => {
+                    warn!("MQTT broker closed connection");
+                    CLIENT_STATE.signal(ClientState::ConnectionLost);
+                    return;
+                }
+                Ok(bytes_read) => bytes_read,
+                Err(error) => {
+                    warn!("Error reading from MQTT broker: {:?}", error);
+                    return;
+                }
+            };
+
+            info!("Packet received");
+
+            info!(
+                "Getting parts from {} bytes {:?}",
+                bytes_read,
+                &buffer[..bytes_read]
+            );
+            let parts = match get_parts(&buffer[..bytes_read]) {
+                Ok(parts) => parts,
+                Err(error) => {
+                    warn!("Error reading MQTT packet: {:?}", error);
+                    return;
+                }
+            };
+
+            info!("Handling packet");
+
             match parts.r#type {
                 Publish::TYPE => {
+                    info!("Received publish");
                     let publish =
-                        Publish::read(parts.flags, &parts.variable_header_and_payload).unwrap();
+                        match Publish::read(parts.flags, &parts.variable_header_and_payload) {
+                            Ok(publish) => publish,
+                            Err(error) => {
+                                warn!("Error reading publish: {:?}", error);
+                                continue;
+                            }
+                        };
 
-                    on_publish.call(&publish).await;
+                    handle_publish(&publish).await;
                 }
                 SubscribeAcknowledgement::TYPE => {
                     let subscribe_acknowledgement =
-                        SubscribeAcknowledgement::read(&parts.variable_header_and_payload).unwrap();
+                        match SubscribeAcknowledgement::read(&parts.variable_header_and_payload) {
+                            Ok(acknowledgement) => acknowledgement,
+                            Err(error) => {
+                                warn!("Error reading subscribe acknowledgement: {:?}", error);
+                                continue;
+                            }
+                        };
 
-                    on_subscribe_acknowledgement
-                        .call(&subscribe_acknowledgement)
-                        .await;
+                    handle_subscribe_acknowledgement(&subscribe_acknowledgement).await;
+                }
+                PingResponse::TYPE => {
+                    info!("Received ping response");
+                    let ping_response = match PingResponse::decode(
+                        &parts.variable_header_and_payload,
+                    ) {
+                        Ok(response) => response,
+                        // Matching to get compiler error if this changes
+                        Err(Infallible) => {
+                            defmt::unreachable!("Ping response is always empty so decode should always succeed if the protocol did not change")
+                        }
+                    };
+
+                    handle_ping_response(ping_response).await;
                 }
                 Disconnect::TYPE => {
                     info!("Received disconnect");
@@ -445,12 +514,7 @@ async fn mqtt_task(
 
     let (mut reader, mut writer) = socket.split();
     // Future 1
-    let listen = listen(
-        &mut reader,
-        handle_subscribe_acknowledgement,
-        handle_publish,
-        handle_ping_response,
-    );
+    let listen = listen(&mut reader);
 
     enum Message<'a> {
         Subscribe(Subscribe<'a>),
@@ -463,12 +527,15 @@ async fn mqtt_task(
     async fn talk(writer: &Mutex<CriticalSectionRawMutex, TcpWriter<'_>>) {
         loop {
             let message = OUTGOING.receive().await;
+
             let mut writer = writer.lock().await;
             match message {
                 Message::Subscribe(subscribe) => {
+                    info!("Sending subscribe");
                     send(&mut *writer, subscribe).await.unwrap();
                 }
                 Message::Publish(publish) => {
+                    info!("Sending publish");
                     send(&mut *writer, publish).await.unwrap();
                 }
             }
@@ -491,7 +558,8 @@ async fn mqtt_task(
                 QualityOfService::AtMostOnceDelivery,
                 false,
                 false,
-                mqtt::packet::subscribe::RetainHandling::DoNotSend,
+                // mqtt::packet::subscribe::RetainHandling::DoNotSend,
+                mqtt::packet::subscribe::RetainHandling::SendAtSubscribe,
             ),
         },
         Subscription {
@@ -500,32 +568,28 @@ async fn mqtt_task(
                 QualityOfService::AtMostOnceDelivery,
                 false,
                 false,
-                mqtt::packet::subscribe::RetainHandling::DoNotSend,
+                // mqtt::packet::subscribe::RetainHandling::DoNotSend,
+                mqtt::packet::subscribe::RetainHandling::SendAtSubscribe,
             ),
         },
     ];
 
-    async fn set_up_subscriptions<const PACKET_IDENTIFIER: u16>() {
+    async fn set_up_subscriptions(packet_identifier: NonZeroU16) {
+        info!("Setting up subscriptions");
         let message = Message::Subscribe(Subscribe {
             subscriptions: &SUBSCRIPTIONS,
             //TODO free identifier management
-            packet_identifier: PACKET_IDENTIFIER,
+            packet_identifier,
         });
 
         OUTGOING.send(message).await;
 
-        wait_for_acknowledgement::<PACKET_IDENTIFIER>().await;
+        wait_for_acknowledgement(packet_identifier).await;
+        info!("Set up subscriptions complete")
     }
 
     // Future 3
-    let set_up = set_up_subscriptions::<0>();
-
-    enum ClientState {
-        Disconnected,
-        Connected,
-        ConnectionLost,
-    }
-    static CLIENT_STATE: Signal<CriticalSectionRawMutex, ClientState> = Signal::new();
+    let set_up = set_up_subscriptions(non_zero_u16!(1));
 
     // Keep alive task
     async fn keep_alive(writer: &Mutex<CriticalSectionRawMutex, TcpWriter<'_>>) {
@@ -544,259 +608,49 @@ async fn mqtt_task(
             let result = with_deadline(deadline, LAST_PACKET.wait()).await;
             match result {
                 Err(TimeoutError) => {
+                    info!("Sending keep alive ping request");
                     let mut writer = writer.lock().await;
                     // Send keep alive ping request
-                    send(&mut *writer, PingRequest).await.unwrap();
+                    if let Err(error) = send(&mut *writer, PingRequest).await {
+                        error!("Error sending keep alive ping request: {:?}", error);
+                        CLIENT_STATE.signal(ClientState::ConnectionLost);
+                        return;
+                    }
+
                     // Keep alive is time from when the last packet was sent and not when the ping response
                     // was received. Therefore, we need to reset it here
                     last_send = Instant::now();
 
                     // Wait for ping response
-                    if let Err(TimeoutError) =
-                        with_timeout(configuration::TIMEOUT, PING_RESPONSE.wait()).await
+                    if let Err(TimeoutError) = with_timeout(
+                        configuration::MQTT_TIMEOUT + Duration::from_secs(69),
+                        PING_RESPONSE.wait(),
+                    )
+                    .await
                     {
                         // Assume disconnect from server
                         error!("Timeout waiting for ping response. Disconnecting");
                         CLIENT_STATE.signal(ClientState::ConnectionLost);
                         return;
                     }
+                    info!(
+                        "Received ping response in {:?} after sending ping request",
+                        Instant::now() - last_send
+                    );
                 }
                 Ok(last_packet) => {
+                    info!("Sent packet. Resetting timer to send keep alive");
                     last_send = last_packet;
                 }
             }
         }
     }
 
+    // Future 4
+    let keep_alive = keep_alive(&writer);
+
     //TODO cancel all tasks when client loses connection
-    join3(listen, talk, set_up).await;
-}
-
-enum PublishReceiveError {
-    ReadError(tcp::Error),
-    ReadPacketError(packet::ReadError),
-}
-async fn mqtt_routine<'a>(mut socket: TcpSocket<'a>) {
-    core::todo!()
-
-    // info!("Sending MQTT connect packet");
-    // // No experience how big this buffer should be
-    // let mut send_buffer = [0; 256];
-    // // Send MQTT connect packet
-    // let packet = Connect {
-    //     client_identifier: "testfan",
-    //     username: MQTT_BROKER_USERNAME,
-    //     password: MQTT_BROKER_PASSWORD,
-    //     keep_alive_seconds: KEEP_ALIVE.as_secs() as u16,
-    // };
-
-    // let mut offset = 0;
-    // packet
-    //     .write(&mut send_buffer, &mut offset)
-    //     .map_err(MqttError::WriteConnectError)?;
-
-    // socket
-    //     .write_all(&send_buffer[..offset])
-    //     .await
-    //     .map_err(MqttError::WriteError)?;
-    // socket.flush().await.map_err(MqttError::FlushError)?;
-
-    // info!("Sent MQTT connect packet");
-
-    // info!("Waiting for MQTT connect acknowledgement");
-
-    // // Wait for connection acknowledgement
-    // let mut receive_buffer = [0; 1024];
-    // let bytes_read = socket
-    //     .read(&mut receive_buffer)
-    //     .await
-    //     .map_err(MqttError::ReadError)?;
-    // let packet = Packet::read(&receive_buffer[..bytes_read]).map_err(MqttError::ReadPacketError)?;
-
-    // match packet {
-    //     Packet::ConnectAcknowledgement(acknowledgement) => {
-    //         if let ConnectReasonCode::ErrorCode(error_code) = acknowledgement.connect_reason_code {
-    //             return Err(MqttError::ConnectError(error_code));
-    //         }
-    //     }
-    //     unexpected => {
-    //         // Unexpected packet type -> disconnect
-    //         info!("Unexpected packet");
-    //         return Err(MqttError::UnexpectedPacketType(unexpected.get_type()));
-    //     }
-    // }
-
-    // // Start keep alive after connect acknowledgement?
-    // //TODO use keep alive interval received from server in connect acknowledgement
-    // let mut keep_alive = Ticker::every(KEEP_ALIVE);
-
-    // // Subscribe to home assistant topics
-    // // Before sending discovery packet
-    // let subscriptions = [
-    //     Subscription {
-    //         topic_filter: "testfan/on/set",
-    //         options: mqtt::subscribe::Options::new(
-    //             QualityOfService::AtMostOnceDelivery,
-    //             false,
-    //             false,
-    //             mqtt::subscribe::RetainHandling::DoNotSend,
-    //         ),
-    //     },
-    //     Subscription {
-    //         topic_filter: "testfan/speed/percentage",
-    //         options: mqtt::subscribe::Options::new(
-    //             QualityOfService::AtMostOnceDelivery,
-    //             false,
-    //             false,
-    //             mqtt::subscribe::RetainHandling::DoNotSend,
-    //         ),
-    //     },
-    // ];
-
-    // //TODO packet identifier management
-    // let packet = Subscribe {
-    //     subscriptions,
-    //     packet_identifier: 42,
-    // };
-
-    // offset = 0;
-    // let mut last_send = Instant::now();
-    // packet
-    //     .write(&mut send_buffer, &mut offset)
-    //     .map_err(MqttError::WriteSubscribeError)?;
-    // socket
-    //     .write_all(&send_buffer[..offset])
-    //     .await
-    //     .map_err(MqttError::WriteError)?;
-    // socket.flush().await.map_err(MqttError::FlushError)?;
-    // keep_alive.reset();
-
-    // // Read subscribe acknowledgement
-    // let bytes_read = socket
-    //     .read(&mut receive_buffer)
-    //     .await
-    //     .map_err(MqttError::ReadError)?;
-
-    // let packet = Packet::read(&receive_buffer[..bytes_read]).map_err(MqttError::ReadPacketError)?;
-    // match packet {
-    //     Packet::SubscribeAcknowledgement(_acknowledgement) => {
-    //         // Ignoring acknowledgement errors for now as their information is only useful for debugging currently
-    //     }
-    //     unexpected => {
-    //         // Unexpected packet type -> disconnect
-    //         info!("Unexpected packet");
-
-    //         return Err(MqttError::UnexpectedPacketType(unexpected.get_type()));
-    //     }
-    // }
-
-    // //TODO listen for publishes to topics from here on out
-    // let (reader, writer) = socket.split();
-
-    // let (send_result, listen_result) = join(
-    //     send_discovery_and_keep_alive(writer, send_buffer, keep_alive),
-    //     listen_for_publishes(reader, receive_buffer),
-    // )
-    // .await;
-    // Ok(())
-}
-
-async fn listen_for_publishes<T, S>(
-    mut reader: TcpReader<'_>,
-    mut buffer: [u8; 1024],
-) -> Result<(), PublishReceiveError>
-where
-    T: FromPublish,
-    S: FromSubscribeAcknowledgement,
-{
-    loop {
-        // Should read at least one byte
-        let bytes_read = reader
-            .read(&mut buffer)
-            .await
-            .map_err(PublishReceiveError::ReadError)?;
-
-        let packet = Packet::<T, S>::read(&buffer[..bytes_read])
-            .map_err(PublishReceiveError::ReadPacketError)?;
-        match packet {
-            //TODO handle disconnect packet
-            packet @ Packet::ConnectAcknowledgement(_)
-            | packet @ Packet::SubscribeAcknowledgement(_) => {
-                warn!("Received unexpected packet type: {}", packet.get_type());
-            }
-            Packet::Publish(publish) => {
-                info!("Received publish");
-                // This part is not MQTT and application specific
-                // match publish.topic_name {
-                //     "testfan/speed/percentage" => {
-                //         let payload = match core::str::from_utf8(&publish.payload) {
-                //             Ok(payload) => payload,
-                //             Err(error) => {
-                //                 warn!("Expected percentage_command_topic payload (speed percentage) to be a valid UTF-8 string with a number");
-                //                 continue;
-                //             }
-                //         };
-                //
-                //         // And then to an integer...
-                //         let set_point = payload.parse::<u16>();
-                //         let set_point = match set_point {
-                //             Ok(set_point) => set_point,
-                //             Err(error) => {
-                //                 warn!("Expected speed percentage to be a number string. Payload is: {}", payload);
-                //                 continue;
-                //             }
-                //         };
-                //
-                //         let Ok(setting) = FanSetting::new(set_point) else {
-                //             warn!(
-                //                 "Setting fan speed out of bounds. Not accepting new setting: {}",
-                //                 set_point
-                //             );
-                //             continue;
-                //         };
-                //
-                //         //TODO confirm there was no error on the modbus side
-                //         // MODBUS_SIGNAL.signal(setting);
-                //     }
-                //     "testfan/on/set" => {
-                //         let payload = match core::str::from_utf8(publish.payload) {
-                //             Ok(payload) => payload,
-                //             Err(error) => {
-                //                 warn!(
-                //                     "Expected command_topic payload to be a valid UTF-8 string with either \"ON\" or \"OFF\". Payload is: {}",
-                //                     publish.payload
-                //                 );
-                //                 continue;
-                //             }
-                //         };
-                //
-                //         match payload {
-                //             "ON" => {
-                //                 //TODO set to last known state before off
-                //                 println!("Turning on");
-                //             }
-                //             "OFF" => {
-                //                 println!("Turning off");
-                //                 // MODBUS_SIGNAL.signal(FanSetting::ZERO);
-                //             }
-                //             unknown => {
-                //                 warn!(
-                //                     "Expected either \"ON\" or \"OFF\" but received: {}",
-                //                     unknown
-                //                 );
-                //             }
-                //         }
-                //     }
-                //     unknown => {
-                //         warn!(
-                //             "Unexpected topic: {} with payload: {}",
-                //             publish.topic_name, publish.payload
-                //         );
-                //     }
-                // }
-            }
-        }
-    }
+    join4(listen, talk, keep_alive, set_up).await;
 }
 
 async fn send_discovery_and_keep_alive(
@@ -912,7 +766,10 @@ async fn input_task(pin_18: PIN_18) {
             continue;
         };
 
-        fan.set_set_point(setting).await;
+        info!("Button pressed, setting fan speed to: {}", setting);
+        if let Err(TimeoutError) = fan.set_set_point(setting).await {
+            error!("Timeout setting fan speed from button press");
+        }
     }
 }
 

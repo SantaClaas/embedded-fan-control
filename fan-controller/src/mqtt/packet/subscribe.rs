@@ -1,6 +1,8 @@
-use defmt::Format;
+use core::num::NonZeroU16;
 
-use crate::mqtt::Encode;
+use defmt::{info, Format};
+
+use crate::mqtt::TryEncode;
 use crate::mqtt::{variable_byte_integer, QualityOfService};
 
 #[derive(Debug)]
@@ -78,17 +80,31 @@ pub(crate) enum EncodeError {
 #[derive(Debug)]
 pub(crate) struct Subscribe<'a> {
     pub(crate) subscriptions: &'a [Subscription<'a>],
-    pub(crate) packet_identifier: u16,
+    /// Packet identifier of 0 is invalid even though it is only used by client to keep track of packets
+    pub(crate) packet_identifier: NonZeroU16,
 }
 
 impl<'a> Subscribe<'a> {
     pub(crate) const TYPE: u8 = 8;
 }
 
-impl Encode for Subscribe<'_> {
+impl TryEncode for Subscribe<'_> {
     type Error = EncodeError;
 
+    // https://www.emqx.com/en/blog/mqtt-5-0-control-packets-03-subscribe-unsubscribe
     fn encode(&self, buffer: &mut [u8], offset: &mut usize) -> Result<(), Self::Error> {
+        // 82 0a 05 be 00 00 04 64 65 6d 6f 02
+        // let test_packet = &[
+        //     0x82, 0x0a, 0x05, 0xbe, 0x00, 0x00, 0x04, 0x64, 0x65, 0x6d, 0x6f, 0x02,
+        // ];
+        // for byte in test_packet {
+        //     buffer[*offset] = *byte;
+        //     *offset += 1;
+        // }
+
+        // return Ok(());
+
+        // Calculate lengths to bail early if buffer is too small
         let variable_header_length = size_of::<u16>() + size_of::<u8>();
 
         let payload_length = self.subscriptions.len() * size_of::<u16>()
@@ -107,7 +123,8 @@ impl Encode for Subscribe<'_> {
             });
         }
 
-        buffer[*offset] = Self::TYPE << 4;
+        // Need to set type and fixed/reserved bit in first byte
+        buffer[*offset] = Self::TYPE << 4 | 0b0000_0010;
         *offset += 1;
 
         variable_byte_integer::encode(remaining_length, buffer, offset)
@@ -115,10 +132,12 @@ impl Encode for Subscribe<'_> {
 
         // Variable header
         // Packet Identifier
-        buffer[*offset] = (self.packet_identifier >> 8) as u8;
+        buffer[*offset] = (Into::<u16>::into(self.packet_identifier) >> 8) as u8;
         *offset += 1;
 
-        buffer[*offset] = self.packet_identifier as u8;
+        //TODO support identifiers greater than u8::MAX
+        let identifier: u16 = self.packet_identifier.into();
+        buffer[*offset] = identifier as u8;
         *offset += 1;
 
         // Property length
@@ -142,6 +161,7 @@ impl Encode for Subscribe<'_> {
 
             // Options
             buffer[*offset] = subscription.options.0;
+
             *offset += 1;
         }
 

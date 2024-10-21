@@ -1,11 +1,13 @@
 //! Module containing all the MQTT things to enable the fan controller to be integrated with Home
 //! Assistant
 
+use core::convert::Infallible;
+
 use defmt::Format;
 use embedded_io_async::Write;
 
 use crate::mqtt::packet::connect::Connect;
-use crate::mqtt::variable_byte_integer::VariableByteIntegerDecodeError;
+use crate::mqtt::variable_byte_integer::DecodeError;
 
 pub(crate) mod client;
 pub(crate) mod packet;
@@ -60,20 +62,68 @@ impl QualityOfService {
     }
 }
 
-#[derive(Debug, Clone, Format)]
-enum ReadConnectAcknowledgementError {
-    InvalidReasonCode(UnknownConnectErrorReasonCode),
-    InvalidPropertiesLength(VariableByteIntegerDecodeError),
+pub(crate) trait Encode {
+    fn encode(&self, buffer: &mut [u8], offset: &mut usize);
 }
 
-pub(crate) trait Encode {
+pub(crate) trait TryEncode {
     type Error;
     fn encode(&self, buffer: &mut [u8], offset: &mut usize) -> Result<(), Self::Error>;
 }
 
+impl<T: Encode> TryEncode for T {
+    type Error = Infallible;
+
+    fn encode(&self, buffer: &mut [u8], offset: &mut usize) -> Result<(), Self::Error> {
+        self.encode(buffer, offset);
+        Ok(())
+    }
+}
+
 pub(crate) trait Decode {
+    fn decode(variable_header_and_payload: &[u8]) -> Self
+    where
+        Self: Sized;
+}
+
+pub(crate) trait TryDecode {
     type Error;
     fn decode(variable_header_and_payload: &[u8]) -> Result<Self, Self::Error>
     where
         Self: Sized;
 }
+
+impl<T: Decode> TryDecode for T {
+    type Error = Infallible;
+
+    fn decode(variable_header_and_payload: &[u8]) -> Result<Self, Self::Error>
+    where
+        Self: Sized,
+    {
+        let value = T::decode(variable_header_and_payload);
+        Ok(value)
+    }
+}
+
+/// Helps to mark an integer as a non zero integer when you know at compile time that it is not zero
+macro_rules! non_zero_u16 {
+    (0) => {
+        compile_error!("0 is not a valid NonZeroU16")
+    };
+    ($value:expr) => {{
+        const VALUE: core::num::NonZeroU16 = {
+            let Some(value) = core::num::NonZeroU16::new($value) else {
+                // Using compile_error!() would always cause a compile error.
+                // So panic at const time it is
+                // Formatting goes strange here
+            core::panic!(core::stringify!($value is not a valid NonZeroU16))
+            };
+
+            value
+        };
+
+        VALUE
+    }};
+}
+
+pub(crate) use non_zero_u16;

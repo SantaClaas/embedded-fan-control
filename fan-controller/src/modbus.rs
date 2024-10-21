@@ -29,4 +29,3 @@ pub(super) const fn get_message_delay(baud_rate: u32) -> u64 {
     // Round up as it is better to wait longer than too short
     MICROSECONDS_FOR_BITS.div_ceil(baud_rate as u64)
 }
-

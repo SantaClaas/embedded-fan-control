@@ -6,9 +6,10 @@ use crate::mqtt::packet::subscribe_acknowledgement::{
     SubscribeAcknowledgement, SubscribeAcknowledgementError,
 };
 use crate::mqtt::variable_byte_integer;
-use crate::mqtt::variable_byte_integer::VariableByteIntegerDecodeError;
-use crate::mqtt::ReadConnectAcknowledgementError;
-use defmt::Format;
+use crate::mqtt::DecodeError;
+use defmt::{info, Format};
+
+use super::TryDecode;
 
 pub(crate) mod connect;
 pub(crate) mod connect_acknowledgement;
@@ -21,7 +22,8 @@ pub(crate) mod subscribe_acknowledgement;
 
 #[derive(Clone, Format, Debug)]
 pub(crate) enum GetPartsError {
-    InvalidRemainingLength(VariableByteIntegerDecodeError),
+    EmptyBuffer,
+    InvalidRemainingLength(variable_byte_integer::DecodeError),
     MissingBytes(usize),
 }
 #[derive(Debug, Clone, Format)]
@@ -31,7 +33,7 @@ pub(crate) enum ReadError {
     UnsupportedPacketType(u8),
     UnexpectedPacketType(u8),
     PartsError(GetPartsError),
-    ConnectAcknowledgementError(ReadConnectAcknowledgementError),
+    ConnectAcknowledgementError(connect_acknowledgement::DecodeError),
     PublishError(publish::ReadError),
     SubscribeAcknowledgementError(SubscribeAcknowledgementError),
 }
@@ -58,6 +60,10 @@ where
 }
 
 pub(crate) fn get_parts(buffer: &[u8]) -> Result<PacketParts, GetPartsError> {
+    if buffer.is_empty() {
+        return Err(GetPartsError::EmptyBuffer);
+    }
+
     let packet_type = buffer[0] >> 4;
     let flags = buffer[0] & 0b0000_1111;
     let mut offset = 1;
@@ -92,7 +98,7 @@ where
             Connect::TYPE => Err(ReadError::UnsupportedPacketType(parts.r#type)),
             ConnectAcknowledgement::TYPE => {
                 let connect_acknowledgement =
-                    ConnectAcknowledgement::read(parts.variable_header_and_payload)
+                    ConnectAcknowledgement::decode(parts.variable_header_and_payload)
                         .map_err(ReadError::ConnectAcknowledgementError)?;
 
                 Ok(Packet::ConnectAcknowledgement(connect_acknowledgement))

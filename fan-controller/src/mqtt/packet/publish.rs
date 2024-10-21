@@ -1,10 +1,8 @@
 use core::str::Utf8Error;
 
 use crate::mqtt::variable_byte_integer;
-use crate::mqtt::variable_byte_integer::{
-    VariableByteIntegerDecodeError, VariableByteIntegerEncodeError,
-};
-use crate::mqtt::Encode;
+use crate::mqtt::variable_byte_integer::VariableByteIntegerEncodeError;
+use crate::mqtt::TryEncode;
 use defmt::{write, Debug2Format, Format, Formatter};
 
 #[derive(Format, Clone)]
@@ -22,7 +20,7 @@ pub(crate) enum EncodeError {
 pub(crate) enum ReadError {
     /// The quality of service level is not supported and can't be ignored.
     UnsupportedQualityOfServiceLevel(u8),
-    VariableByteIntegerError(VariableByteIntegerDecodeError),
+    VariableByteIntegerError(variable_byte_integer::DecodeError),
     ZeroLengthTopicName,
     InvalidTopicName(Utf8Error),
 }
@@ -141,7 +139,7 @@ impl<'a> Publish<'a> {
     }
 }
 
-impl Encode for Publish<'_> {
+impl TryEncode for Publish<'_> {
     type Error = EncodeError;
 
     fn encode(&self, buffer: &mut [u8], offset: &mut usize) -> Result<(), Self::Error> {

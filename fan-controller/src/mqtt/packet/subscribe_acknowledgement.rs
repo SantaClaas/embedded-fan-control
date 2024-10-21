@@ -1,10 +1,9 @@
-use crate::mqtt::variable_byte_integer::VariableByteIntegerDecodeError;
 use crate::mqtt::{variable_byte_integer, QualityOfService};
 use defmt::Format;
 
 #[derive(Debug, Clone, Format)]
 pub(crate) enum SubscribeAcknowledgementError {
-    InvalidPropertiesLength(VariableByteIntegerDecodeError),
+    InvalidPropertiesLength(variable_byte_integer::DecodeError),
 }
 
 #[derive(Format)]

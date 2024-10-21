@@ -3,6 +3,7 @@ use crate::mqtt::packet::{FromPublish, FromSubscribeAcknowledgement, Packet};
 use super::packet::{connect, connect_acknowledgement::ConnectReasonCode};
 use crate::mqtt::packet::connect::Connect;
 use crate::mqtt::ConnectErrorReasonCode;
+use crate::non_zero_u16;
 use core::marker::PhantomData;
 use embassy_net::tcp::{self, TcpReader, TcpSocket, TcpWriter};
 use embassy_time::{with_timeout, Duration, TimeoutError};
@@ -186,6 +187,8 @@ impl<'a> MqttReceiver<'a> {
 }
 
 pub(crate) mod runner {
+    use core::num::NonZero;
+
     use crate::mqtt::packet::connect::Connect;
     use crate::mqtt::packet::connect_acknowledgement::{ConnectAcknowledgement, ConnectReasonCode};
     use crate::mqtt::packet::subscribe::{Subscribe, Subscription};
@@ -193,7 +196,7 @@ pub(crate) mod runner {
     use crate::mqtt::packet::{connect, subscribe};
     use crate::mqtt::packet::{FromPublish, FromSubscribeAcknowledgement, Packet};
     use crate::mqtt::ConnectErrorReasonCode;
-    use crate::mqtt::{self, Encode};
+    use crate::mqtt::{self, TryEncode};
     use defmt::{warn, Format};
     use embassy_futures::select::{select, Either};
     use embassy_net::tcp;
@@ -203,6 +206,8 @@ pub(crate) mod runner {
     use embassy_time::{with_deadline, with_timeout, Duration, Instant, TimeoutError};
 
     mod message {
+        use core::num::NonZeroU16;
+
         use crate::mqtt::packet::connect_acknowledgement::ConnectReasonCode;
         use crate::mqtt::packet::subscribe::Subscription;
         use crate::mqtt::packet::{FromPublish, FromSubscribeAcknowledgement};
@@ -215,7 +220,7 @@ pub(crate) mod runner {
             },
             Subscribe {
                 subscriptions: &'a [Subscription<'a>],
-                packet_identifier: u16,
+                packet_identifier: NonZeroU16,
             },
         }
 
@@ -542,7 +547,7 @@ pub(crate) mod runner {
             subscriptions: &'state [Subscription<'state>; 2],
         ) -> Result<[Result<(), SubscribeErrorReasonCode>; 2], SubscribeError> {
             //TODO manage packet identifier
-            let packet_identifier = 42;
+            let packet_identifier: NonZero<u16> = crate::mqtt::non_zero_u16!(42);
             let message = message::Outgoing::Subscribe {
                 subscriptions,
                 packet_identifier,

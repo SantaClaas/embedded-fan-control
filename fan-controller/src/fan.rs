@@ -1,7 +1,7 @@
 //! ebm-pabst [RadiCal centrifugal fans in scroll housings for residential ventilation](https://www.ebmpapst.com/us/en/campaigns/product-campaigns/centrifugal-fans/radical-with-scroll-housing.html)
 //! specific configuration and constants
 
-use crate::modbus;
+use crate::{configuration, modbus};
 use cortex_m::prelude::_embedded_hal_serial_Write;
 use defmt::{error, info, Format};
 use embassy_rp::dma::Channel;
@@ -9,7 +9,7 @@ use embassy_rp::gpio::{Level, Output, Pin};
 use embassy_rp::interrupt::typelevel::Binding;
 use embassy_rp::uart::{Async, DataBits, InterruptHandler, Parity, RxPin, StopBits, TxPin, Uart};
 use embassy_rp::{uart, Peripheral};
-use embassy_time::{Duration, Timer};
+use embassy_time::{with_timeout, Duration, TimeoutError, Timer};
 
 pub(crate) const BAUD_RATE: u32 = 19_200;
 pub(crate) fn get_configuration() -> uart::Config {
@@ -25,10 +25,10 @@ pub(crate) fn get_configuration() -> uart::Config {
 
 pub(crate) const MAX_SET_POINT: u16 = 64_000;
 
-#[derive(Debug)]
+#[derive(Debug, Format)]
 pub(crate) struct Setting(u16);
 
-#[derive(Debug)]
+#[derive(Debug, Format)]
 pub(crate) struct SetPointOutOfBoundsError;
 
 impl Setting {
@@ -88,7 +88,10 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
         }
     }
 
-    pub(crate) async fn set_set_point(&mut self, Setting(set_point): Setting) {
+    pub(crate) async fn set_set_point(
+        &mut self,
+        Setting(set_point): Setting,
+    ) -> Result<(), TimeoutError> {
         // Send update through UART to MAX845 to modbus fans
         // Form message to fan 1
         let mut message: [u8; 8] = [
@@ -135,7 +138,12 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
         // Read response from fan 1
         let mut response_buffer: [u8; 8] = [0; 8];
         info!("Waiting for response from fan 1");
-        let response = self.uart.read(&mut response_buffer).await;
+        let response = with_timeout(
+            configuration::FAN_TIMEOUT,
+            self.uart.read(&mut response_buffer),
+        )
+        .await?;
+
         info!("response from fan 1: {:?} {:?}", response, response_buffer);
         //TODO validate response from fan 1
 
@@ -174,7 +182,12 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
         //TODO validate response from fan 2
 
         // Read response from fan 2
-        let response = self.uart.read(&mut response_buffer).await;
+        let response = with_timeout(
+            configuration::FAN_TIMEOUT,
+            self.uart.read(&mut response_buffer),
+        )
+        .await?;
         info!("response from fan 2: {:?} {:?}", response, response_buffer);
+        Ok(())
     }
 }
