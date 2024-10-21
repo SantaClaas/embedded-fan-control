@@ -622,11 +622,8 @@ async fn mqtt_task(
                     last_send = Instant::now();
 
                     // Wait for ping response
-                    if let Err(TimeoutError) = with_timeout(
-                        configuration::MQTT_TIMEOUT + Duration::from_secs(69),
-                        PING_RESPONSE.wait(),
-                    )
-                    .await
+                    if let Err(TimeoutError) =
+                        with_timeout(configuration::MQTT_TIMEOUT, PING_RESPONSE.wait()).await
                     {
                         // Assume disconnect from server
                         error!("Timeout waiting for ping response. Disconnecting");
