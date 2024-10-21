@@ -14,5 +14,6 @@ impl Encode for PingRequest {
         *offset += 1;
         // Setting it to 0, because this might not be 0 if we reuse the buffer
         buffer[*offset] = 0;
+        *offset += 1;
     }
 }
