@@ -488,7 +488,7 @@ async fn mqtt_task(
                 }
                 PingResponse::TYPE => {
                     info!("Received ping response");
-                    let ping_response = match PingResponse::decode(
+                    let ping_response = match PingResponse::try_decode(
                         &parts.variable_header_and_payload,
                     ) {
                         Ok(response) => response,
@@ -503,7 +503,7 @@ async fn mqtt_task(
                 Disconnect::TYPE => {
                     info!("Received disconnect");
 
-                    let disconnect = Disconnect::decode(&parts.variable_header_and_payload);
+                    let disconnect = Disconnect::try_decode(&parts.variable_header_and_payload);
                     info!("Disconnect {:?}", disconnect);
                     //TODO disconnect TCP connection
                 }
@@ -706,7 +706,7 @@ async fn send_discovery_and_keep_alive(
     loop {
         keep_alive.next().await;
         // Send keep alive ping request
-        let _ = PingRequest.encode(&mut send_buffer, &mut offset);
+        let _ = PingRequest.try_encode(&mut send_buffer, &mut offset);
         writer
             .write_all(&send_buffer[..offset])
             .await

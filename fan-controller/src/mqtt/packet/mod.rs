@@ -98,7 +98,7 @@ where
             Connect::TYPE => Err(ReadError::UnsupportedPacketType(parts.r#type)),
             ConnectAcknowledgement::TYPE => {
                 let connect_acknowledgement =
-                    ConnectAcknowledgement::decode(parts.variable_header_and_payload)
+                    ConnectAcknowledgement::try_decode(parts.variable_header_and_payload)
                         .map_err(ReadError::ConnectAcknowledgementError)?;
 
                 Ok(Packet::ConnectAcknowledgement(connect_acknowledgement))

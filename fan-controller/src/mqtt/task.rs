@@ -30,7 +30,7 @@ where
     let mut offset = 0;
     let mut send_buffer = [0; 256];
     packet
-        .encode(&mut send_buffer, &mut offset)
+        .try_encode(&mut send_buffer, &mut offset)
         .map_err(SendError::EncodeError)?;
 
     socket
@@ -81,7 +81,7 @@ pub(crate) async fn connect<'a, 'b>(
 
     info!("Connect acknowledgement packet received");
 
-    let acknowledgement = ConnectAcknowledgement::decode(parts.variable_header_and_payload)
+    let acknowledgement = ConnectAcknowledgement::try_decode(parts.variable_header_and_payload)
         .map_err(ConnectError::DecodeAcknowledgementError)?;
 
     info!("Connect acknowledgement read");

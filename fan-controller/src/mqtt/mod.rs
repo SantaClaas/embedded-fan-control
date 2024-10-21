@@ -68,13 +68,13 @@ pub(crate) trait Encode {
 
 pub(crate) trait TryEncode {
     type Error;
-    fn encode(&self, buffer: &mut [u8], offset: &mut usize) -> Result<(), Self::Error>;
+    fn try_encode(&self, buffer: &mut [u8], offset: &mut usize) -> Result<(), Self::Error>;
 }
 
 impl<T: Encode> TryEncode for T {
     type Error = Infallible;
 
-    fn encode(&self, buffer: &mut [u8], offset: &mut usize) -> Result<(), Self::Error> {
+    fn try_encode(&self, buffer: &mut [u8], offset: &mut usize) -> Result<(), Self::Error> {
         self.encode(buffer, offset);
         Ok(())
     }
@@ -88,7 +88,7 @@ pub(crate) trait Decode {
 
 pub(crate) trait TryDecode {
     type Error;
-    fn decode(variable_header_and_payload: &[u8]) -> Result<Self, Self::Error>
+    fn try_decode(variable_header_and_payload: &[u8]) -> Result<Self, Self::Error>
     where
         Self: Sized;
 }
@@ -96,7 +96,7 @@ pub(crate) trait TryDecode {
 impl<T: Decode> TryDecode for T {
     type Error = Infallible;
 
-    fn decode(variable_header_and_payload: &[u8]) -> Result<Self, Self::Error>
+    fn try_decode(variable_header_and_payload: &[u8]) -> Result<Self, Self::Error>
     where
         Self: Sized,
     {

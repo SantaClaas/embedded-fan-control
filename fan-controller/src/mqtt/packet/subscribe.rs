@@ -92,7 +92,7 @@ impl TryEncode for Subscribe<'_> {
     type Error = EncodeError;
 
     // https://www.emqx.com/en/blog/mqtt-5-0-control-packets-03-subscribe-unsubscribe
-    fn encode(&self, buffer: &mut [u8], offset: &mut usize) -> Result<(), Self::Error> {
+    fn try_encode(&self, buffer: &mut [u8], offset: &mut usize) -> Result<(), Self::Error> {
         // 82 0a 05 be 00 00 04 64 65 6d 6f 02
         // let test_packet = &[
         //     0x82, 0x0a, 0x05, 0xbe, 0x00, 0x00, 0x04, 0x64, 0x65, 0x6d, 0x6f, 0x02,

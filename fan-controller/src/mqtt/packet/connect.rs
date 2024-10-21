@@ -113,7 +113,7 @@ impl<'a> Connect<'a> {
 impl TryEncode for Connect<'_> {
     type Error = EncodeError;
 
-    fn encode(&self, buffer: &mut [u8], offset: &mut usize) -> Result<(), Self::Error> {
+    fn try_encode(&self, buffer: &mut [u8], offset: &mut usize) -> Result<(), Self::Error> {
         let remaining_length = 11
             + size_of::<u16>()
             + self.client_identifier.len()

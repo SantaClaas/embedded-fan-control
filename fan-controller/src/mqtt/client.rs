@@ -357,7 +357,7 @@ pub(crate) mod runner {
 
                                 let mut offset = 0;
                                 if let Err(error) =
-                                    packet.encode(&mut self.send_buffer, &mut offset)
+                                    packet.try_encode(&mut self.send_buffer, &mut offset)
                                 {
                                     //TODO handle error
                                     warn!("Error encoding subscribe packet: {:?}", error);

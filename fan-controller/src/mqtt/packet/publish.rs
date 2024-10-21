@@ -142,7 +142,7 @@ impl<'a> Publish<'a> {
 impl TryEncode for Publish<'_> {
     type Error = EncodeError;
 
-    fn encode(&self, buffer: &mut [u8], offset: &mut usize) -> Result<(), Self::Error> {
+    fn try_encode(&self, buffer: &mut [u8], offset: &mut usize) -> Result<(), Self::Error> {
         // Fixed header
         //TODO set flags
         buffer[*offset] = Self::TYPE << 4;
