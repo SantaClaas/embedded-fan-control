@@ -38,11 +38,11 @@ pub(crate) enum DecodeError {
     },
     UnknownPropertyIdentifier(u8),
 }
-impl TryDecode for ConnectAcknowledgement {
+impl TryDecode<'_> for ConnectAcknowledgement {
     type Error = DecodeError;
 
     /// Reads the variable header and payload of a connect acknowledgement packet
-    fn decode(buffer: &[u8]) -> Result<Self, Self::Error>
+    fn try_decode(flags: u8, buffer: &[u8]) -> Result<Self, Self::Error>
     where
         Self: Sized,
     {

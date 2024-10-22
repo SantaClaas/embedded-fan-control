@@ -97,14 +97,16 @@ where
         match parts.r#type {
             Connect::TYPE => Err(ReadError::UnsupportedPacketType(parts.r#type)),
             ConnectAcknowledgement::TYPE => {
-                let connect_acknowledgement =
-                    ConnectAcknowledgement::try_decode(parts.variable_header_and_payload)
-                        .map_err(ReadError::ConnectAcknowledgementError)?;
+                let connect_acknowledgement = ConnectAcknowledgement::try_decode(
+                    parts.flags,
+                    parts.variable_header_and_payload,
+                )
+                .map_err(ReadError::ConnectAcknowledgementError)?;
 
                 Ok(Packet::ConnectAcknowledgement(connect_acknowledgement))
             }
             Publish::TYPE => {
-                let publish = Publish::read(parts.flags, parts.variable_header_and_payload)
+                let publish = Publish::try_decode(parts.flags, parts.variable_header_and_payload)
                     .map_err(ReadError::PublishError)?;
 
                 let packet = T::from_publish(publish);

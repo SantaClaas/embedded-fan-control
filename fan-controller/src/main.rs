@@ -463,23 +463,28 @@ async fn mqtt_task(
             match parts.r#type {
                 Publish::TYPE => {
                     info!("Received publish");
-                    let publish =
-                        match Publish::read(parts.flags, &parts.variable_header_and_payload) {
-                            Ok(publish) => publish,
-                            Err(error) => {
-                                warn!("Error reading publish: {:?}", error);
-                                continue;
-                            }
-                        };
+                    let publish = match Publish::try_decode(
+                        parts.flags,
+                        &parts.variable_header_and_payload,
+                    ) {
+                        Ok(publish) => publish,
+                        Err(error) => {
+                            error!("Error reading publish: {:?}", error);
+                            continue;
+                        }
+                    };
 
-                    handle_publish(&publish).await;
+                    // debug!("Read publish");
+
+                    // handle_publish(&publish).await;
+                    // debug!("Handled publish");
                 }
                 SubscribeAcknowledgement::TYPE => {
                     let subscribe_acknowledgement =
                         match SubscribeAcknowledgement::read(&parts.variable_header_and_payload) {
                             Ok(acknowledgement) => acknowledgement,
                             Err(error) => {
-                                warn!("Error reading subscribe acknowledgement: {:?}", error);
+                                error!("Error reading subscribe acknowledgement: {:?}", error);
                                 continue;
                             }
                         };
@@ -489,6 +494,7 @@ async fn mqtt_task(
                 PingResponse::TYPE => {
                     info!("Received ping response");
                     let ping_response = match PingResponse::try_decode(
+                        parts.flags,
                         &parts.variable_header_and_payload,
                     ) {
                         Ok(response) => response,
@@ -503,7 +509,8 @@ async fn mqtt_task(
                 Disconnect::TYPE => {
                     info!("Received disconnect");
 
-                    let disconnect = Disconnect::try_decode(&parts.variable_header_and_payload);
+                    let disconnect =
+                        Disconnect::try_decode(parts.flags, &parts.variable_header_and_payload);
                     info!("Disconnect {:?}", disconnect);
                     //TODO disconnect TCP connection
                 }
@@ -532,11 +539,17 @@ async fn mqtt_task(
             match message {
                 Message::Subscribe(subscribe) => {
                     info!("Sending subscribe");
-                    send(&mut *writer, subscribe).await.unwrap();
+                    if let Err(error) = send(&mut *writer, subscribe).await {
+                        error!("Error sending subscribe: {:?}", error);
+                        continue;
+                    }
                 }
                 Message::Publish(publish) => {
                     info!("Sending publish");
-                    send(&mut *writer, publish).await.unwrap();
+                    if let Err(error) = send(&mut *writer, publish).await {
+                        error!("Error sending publish: {:?}", error);
+                        continue;
+                    }
                 }
             }
 
@@ -588,8 +601,47 @@ async fn mqtt_task(
         info!("Set up subscriptions complete")
     }
 
+    async fn set_up_discovery() {
+        // Send discovery packet
+        // Configuration is like the YAML configuration that would be added in Home Assistant but as JSON
+        // Command topic: The MQTT topic to publish commands to change the state of the fan
+        //TODO set firmware version from Cargo.toml package version
+        //TODO think about setting hardware version, support url, and manufacturer
+        //TODO create single home assistant device with multiple entities for sensors in fan and the bypass
+        //TODO add diagnostic entity like IP address
+        //TODO availability topic
+        //TODO remove whitespace at compile time through macro, build script or const fn
+
+        // Using abbreviations to save space of binary and on the wire (haven't measured the effect though...)
+        // name -> name
+        // uniq_id -> unique_id
+        // stat_t -> state_topic
+        // cmd_t -> command_topic
+        // pct_stat_t -> percentage_state_topic
+        // pct_cmd_t -> percentage_command_topic
+        // spd_rng_max -> speed_range_max
+        // Don't need to set speed_range_min because it is 1 by default
+        const DISCOVERY_PAYLOAD: &[u8] = br#"{
+            "name": "Fan",
+            "uniq_id": "testfan",
+            "stat_t": "testfan/on/state",
+            "cmd_t": "testfan/on/set",
+            "pct_stat_t": "testfan/speed/percentage_state",
+            "pct_cmd_t": "testfan/speed/percentage",
+            "spd_rng_max": 64000
+        }"#;
+
+        const DISCOVERY_PUBLISH: Message = Message::Publish(Publish {
+            topic_name: configuration::DISCOVERY_TOPIC,
+            payload: DISCOVERY_PAYLOAD,
+        });
+
+        OUTGOING.send(DISCOVERY_PUBLISH).await;
+        //TODO wait for packet acknowledgement
+    }
+
     // Future 3
-    let set_up = set_up_subscriptions(non_zero_u16!(1));
+    let set_up = join(set_up_subscriptions(non_zero_u16!(1)), set_up_discovery());
 
     // Keep alive task
     async fn keep_alive(writer: &Mutex<CriticalSectionRawMutex, TcpWriter<'_>>) {
@@ -691,7 +743,7 @@ async fn send_discovery_and_keep_alive(
 
     let mut offset = 0;
     DISCOVERY_PUBLISH
-        .write(&mut send_buffer, &mut offset)
+        .try_encode(&mut send_buffer, &mut offset)
         .map_err(MqttError::WritePublishError)?;
 
     writer

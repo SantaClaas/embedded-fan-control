@@ -80,27 +80,27 @@ impl<T: Encode> TryEncode for T {
     }
 }
 
-pub(crate) trait Decode {
-    fn decode(variable_header_and_payload: &[u8]) -> Self
+pub(crate) trait Decode<'a> {
+    fn decode(flags: u8, variable_header_and_payload: &'a [u8]) -> Self
     where
         Self: Sized;
 }
 
-pub(crate) trait TryDecode {
+pub(crate) trait TryDecode<'a> {
     type Error;
-    fn try_decode(variable_header_and_payload: &[u8]) -> Result<Self, Self::Error>
+    fn try_decode(flags: u8, variable_header_and_payload: &'a [u8]) -> Result<Self, Self::Error>
     where
         Self: Sized;
 }
 
-impl<T: Decode> TryDecode for T {
+impl<'a, T: Decode<'a>> TryDecode<'a> for T {
     type Error = Infallible;
 
-    fn try_decode(variable_header_and_payload: &[u8]) -> Result<Self, Self::Error>
+    fn try_decode(flags: u8, variable_header_and_payload: &'a [u8]) -> Result<Self, Self::Error>
     where
         Self: Sized,
     {
-        let value = T::decode(variable_header_and_payload);
+        let value = T::decode(flags, variable_header_and_payload);
         Ok(value)
     }
 }

@@ -69,6 +69,7 @@ impl<'a> Subscription<'a> {
 
 #[derive(Debug, Format)]
 pub(crate) enum EncodeError {
+    EmptyBuffer,
     /// The buffer does not contain enough empty space to write the packet
     BufferTooSmall {
         required: usize,
@@ -93,16 +94,14 @@ impl TryEncode for Subscribe<'_> {
 
     // https://www.emqx.com/en/blog/mqtt-5-0-control-packets-03-subscribe-unsubscribe
     fn try_encode(&self, buffer: &mut [u8], offset: &mut usize) -> Result<(), Self::Error> {
-        // 82 0a 05 be 00 00 04 64 65 6d 6f 02
-        // let test_packet = &[
-        //     0x82, 0x0a, 0x05, 0xbe, 0x00, 0x00, 0x04, 0x64, 0x65, 0x6d, 0x6f, 0x02,
-        // ];
-        // for byte in test_packet {
-        //     buffer[*offset] = *byte;
-        //     *offset += 1;
-        // }
+        if buffer.is_empty() {
+            return Err(EncodeError::EmptyBuffer);
+        }
 
-        // return Ok(());
+        // Fixed header
+        // Need to set type and fixed/reserved bit in first byte
+        buffer[*offset] = Self::TYPE << 4 | 0b0000_0010;
+        *offset += 1;
 
         // Calculate lengths to bail early if buffer is too small
         let variable_header_length = size_of::<u16>() + size_of::<u8>();
@@ -115,20 +114,16 @@ impl TryEncode for Subscribe<'_> {
                 .sum::<usize>();
 
         let remaining_length = variable_header_length + payload_length;
-        let required_length = size_of_val(&Self::TYPE) + remaining_length;
+        let length_length = variable_byte_integer::encode(remaining_length, buffer, offset)
+            .map_err(EncodeError::RemainingLengthError)?;
+
+        let required_length = size_of_val(&Self::TYPE) + length_length + remaining_length;
         if required_length > buffer.len() - *offset {
             return Err(EncodeError::BufferTooSmall {
                 required: required_length,
                 available: buffer.len() - *offset,
             });
         }
-
-        // Need to set type and fixed/reserved bit in first byte
-        buffer[*offset] = Self::TYPE << 4 | 0b0000_0010;
-        *offset += 1;
-
-        variable_byte_integer::encode(remaining_length, buffer, offset)
-            .map_err(EncodeError::RemainingLengthError)?;
 
         // Variable header
         // Packet Identifier
@@ -165,6 +160,7 @@ impl TryEncode for Subscribe<'_> {
             *offset += 1;
         }
 
+        assert_eq!(required_length, buffer[..*offset].len());
         Ok(())
     }
 }

@@ -90,10 +90,10 @@ pub(crate) enum DecodeDisconnectError {
     UnknownReasonCode(UnknownReasonCode),
 }
 
-impl TryDecode for Disconnect {
+impl TryDecode<'_> for Disconnect {
     type Error = DecodeDisconnectError;
 
-    fn try_decode(variable_header_and_payload: &[u8]) -> Result<Self, Self::Error> {
+    fn try_decode(flags: u8, variable_header_and_payload: &[u8]) -> Result<Self, Self::Error> {
         // Variable header
         // Disconnect reason code
         let reason_code = variable_header_and_payload[0];

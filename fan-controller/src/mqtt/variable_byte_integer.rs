@@ -8,11 +8,12 @@ pub(super) enum VariableByteIntegerEncodeError {
     EndOfBuffer,
 }
 const MAX: usize = 268_435_455;
+/// Returns bytes written on success
 pub(super) fn encode(
     value: usize,
     buffer: &mut [u8],
     offset: &mut usize,
-) -> Result<(), VariableByteIntegerEncodeError> {
+) -> Result<usize, VariableByteIntegerEncodeError> {
     // This checks if the length is also too large for u32
     let length = match value {
         0..=127 => 1,
@@ -30,7 +31,7 @@ pub(super) fn encode(
     if value < 128 {
         buffer[*offset] = value as u8;
         *offset += 1;
-        return Ok(());
+        return Ok(1);
     }
 
     let mut value = value as u32;
@@ -47,7 +48,7 @@ pub(super) fn encode(
         }
     }
 
-    Ok(())
+    Ok(length)
 }
 
 #[derive(Debug, Format, Clone)]

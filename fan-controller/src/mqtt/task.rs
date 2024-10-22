@@ -3,6 +3,7 @@ use crate::mqtt::packet::connect_acknowledgement::{ConnectAcknowledgement, Conne
 use crate::mqtt::packet::GetPartsError;
 use crate::mqtt::{packet, ConnectErrorReasonCode, DecodeError};
 use crate::mqtt::{TryDecode, TryEncode};
+use core::fmt::Debug;
 use defmt::{info, warn, Format};
 use embassy_net::tcp;
 use embassy_net::tcp::TcpSocket;
@@ -14,7 +15,7 @@ use super::packet::connect_acknowledgement;
 ///! - Keep alive
 
 #[derive(Debug, Format)]
-pub(crate) enum SendError<T> {
+pub(crate) enum SendError<T: Debug + Format> {
     EncodeError(T),
     SendError(tcp::Error),
     FlushError(tcp::Error),
@@ -25,10 +26,11 @@ pub(crate) async fn send<'a, T>(
     packet: T,
 ) -> Result<(), SendError<<T as TryEncode>::Error>>
 where
-    T: TryEncode,
+    T: TryEncode<Error: Debug + Format>,
 {
+    info!("Sending packet");
     let mut offset = 0;
-    let mut send_buffer = [0; 256];
+    let mut send_buffer = [0; 512];
     packet
         .try_encode(&mut send_buffer, &mut offset)
         .map_err(SendError::EncodeError)?;
@@ -81,8 +83,9 @@ pub(crate) async fn connect<'a, 'b>(
 
     info!("Connect acknowledgement packet received");
 
-    let acknowledgement = ConnectAcknowledgement::try_decode(parts.variable_header_and_payload)
-        .map_err(ConnectError::DecodeAcknowledgementError)?;
+    let acknowledgement =
+        ConnectAcknowledgement::try_decode(parts.flags, parts.variable_header_and_payload)
+            .map_err(ConnectError::DecodeAcknowledgementError)?;
 
     info!("Connect acknowledgement read");
     if let ConnectReasonCode::ErrorCode(error_code) = acknowledgement.connect_reason_code {

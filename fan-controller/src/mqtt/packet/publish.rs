@@ -1,9 +1,9 @@
 use core::str::Utf8Error;
 
-use crate::mqtt::variable_byte_integer;
 use crate::mqtt::variable_byte_integer::VariableByteIntegerEncodeError;
 use crate::mqtt::TryEncode;
-use defmt::{write, Debug2Format, Format, Formatter};
+use crate::mqtt::{variable_byte_integer, TryDecode};
+use defmt::{debug, info, write, Debug2Format, Format, Formatter};
 
 #[derive(Format, Clone)]
 pub(crate) struct Publish<'a> {
@@ -11,8 +11,14 @@ pub(crate) struct Publish<'a> {
     pub(crate) payload: &'a [u8],
 }
 
-#[derive(Debug)]
+#[derive(Debug, Format)]
 pub(crate) enum EncodeError {
+    EmptyBuffer,
+    /// The buffer does not contain enough empty space to write the packet
+    BufferTooSmall {
+        required: usize,
+        available: usize,
+    },
     VariableByteIntegerError(VariableByteIntegerEncodeError),
 }
 
@@ -46,9 +52,16 @@ impl Format for ReadError {
 
 impl<'a> Publish<'a> {
     pub(crate) const TYPE: u8 = 3;
+}
 
-    #[deprecated(note = "Use Encode trait")]
-    pub(crate) fn write(&self, buffer: &mut [u8], offset: &mut usize) -> Result<(), EncodeError> {
+impl TryEncode for Publish<'_> {
+    type Error = EncodeError;
+
+    fn try_encode(&self, buffer: &mut [u8], offset: &mut usize) -> Result<(), Self::Error> {
+        if buffer.is_empty() {
+            return Err(EncodeError::EmptyBuffer);
+        }
+
         // Fixed header
         //TODO set flags
         buffer[*offset] = Self::TYPE << 4;
@@ -58,8 +71,18 @@ impl<'a> Publish<'a> {
         let topic_name_length = self.topic_name.len();
         let variable_header_length = size_of::<u16>() + topic_name_length + size_of::<u8>();
         let remaining_length = variable_header_length + self.payload.len();
-        variable_byte_integer::encode(remaining_length, buffer, offset)
+
+        let length_length = variable_byte_integer::encode(remaining_length, buffer, offset)
             .map_err(EncodeError::VariableByteIntegerError)?;
+
+        let required_length = size_of_val(&Self::TYPE) + length_length + remaining_length;
+
+        if required_length > buffer.len() - *offset {
+            return Err(EncodeError::BufferTooSmall {
+                required: required_length,
+                available: buffer.len() - *offset,
+            });
+        }
 
         // Variable header
         // Topic name length
@@ -78,6 +101,7 @@ impl<'a> Publish<'a> {
         buffer[*offset] = 0;
         *offset += 1;
 
+        info!("Encode 2");
         // Payload
         // No need to set length as it will be calculated
         for byte in self.payload {
@@ -85,10 +109,16 @@ impl<'a> Publish<'a> {
             *offset += 1;
         }
 
+        assert_eq!(required_length, buffer[..*offset].len());
+
         Ok(())
     }
+}
 
-    pub(crate) fn read(flags: u8, buffer: &'a [u8]) -> Result<Self, ReadError> {
+impl<'a> TryDecode<'a> for Publish<'a> {
+    type Error = ReadError;
+
+    fn try_decode(flags: u8, variable_header_and_payload: &'a [u8]) -> Result<Self, Self::Error> {
         // let is_re_delivery = (flags & 0b0000_1000) != 0;
         let quality_of_service_level = (flags & 0b0000_0110) >> 1;
         if quality_of_service_level > 0 {
@@ -103,82 +133,38 @@ impl<'a> Publish<'a> {
         // let is_retain = (flags & 0b0000_0001) != 0;
 
         let mut offset = 0;
-        let remaining_length = variable_byte_integer::decode(buffer, &mut offset)
-            .map_err(ReadError::VariableByteIntegerError)?;
-        //TODO check lengths
-
         // Variable header
-        let topic_length = ((buffer[offset] as u16) << 8) | buffer[offset + 1] as u16;
+        let topic_length = ((variable_header_and_payload[offset] as u16) << 8)
+            | variable_header_and_payload[offset + 1] as u16;
+
         offset += 2;
         if topic_length == 0 {
             return Err(ReadError::ZeroLengthTopicName);
         }
 
-        let topic_name = core::str::from_utf8(&buffer[offset..offset + topic_length as usize])
-            .map_err(ReadError::InvalidTopicName)?;
+        let topic_name = core::str::from_utf8(
+            &variable_header_and_payload[offset..offset + topic_length as usize],
+        )
+        .map_err(ReadError::InvalidTopicName)?;
         //TODO validate topic name does not contain MQTT wildcard characters
         offset += topic_length as usize;
 
         // Properties
-        let properties_length = variable_byte_integer::decode(buffer, &mut offset)
-            .map_err(ReadError::VariableByteIntegerError)?;
+        let properties_length =
+            variable_byte_integer::decode(variable_header_and_payload, &mut offset)
+                .map_err(ReadError::VariableByteIntegerError)?;
 
         // Ignore properties for now
         offset += properties_length;
 
         // Payload
-        let payload_length = remaining_length - offset;
-
         //TODO validate there is enough space left in the buffer
-        let payload = &buffer[offset..offset + payload_length];
+        let payload = &variable_header_and_payload[offset..];
 
+        debug!("8");
         Ok(Publish {
             topic_name,
             payload,
         })
-    }
-}
-
-impl TryEncode for Publish<'_> {
-    type Error = EncodeError;
-
-    fn try_encode(&self, buffer: &mut [u8], offset: &mut usize) -> Result<(), Self::Error> {
-        // Fixed header
-        //TODO set flags
-        buffer[*offset] = Self::TYPE << 4;
-        *offset += 1;
-
-        // Remaining length
-        let topic_name_length = self.topic_name.len();
-        let variable_header_length = size_of::<u16>() + topic_name_length + size_of::<u8>();
-        let remaining_length = variable_header_length + self.payload.len();
-        variable_byte_integer::encode(remaining_length, buffer, offset)
-            .map_err(EncodeError::VariableByteIntegerError)?;
-
-        // Variable header
-        // Topic name length
-        buffer[*offset] = (topic_name_length >> 8) as u8;
-        *offset += 1;
-        buffer[*offset] = topic_name_length as u8;
-        *offset += 1;
-        // Topic name
-        for byte in self.topic_name.as_bytes() {
-            buffer[*offset] = *byte;
-            *offset += 1;
-        }
-
-        // Property length
-        // No properties supported for now so set to 0
-        buffer[*offset] = 0;
-        *offset += 1;
-
-        // Payload
-        // No need to set length as it will be calculated
-        for byte in self.payload {
-            buffer[*offset] = *byte;
-            *offset += 1;
-        }
-
-        Ok(())
     }
 }
