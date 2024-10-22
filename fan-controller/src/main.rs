@@ -445,11 +445,6 @@ async fn mqtt_task(
 
             info!("Packet received");
 
-            info!(
-                "Getting parts from {} bytes {:?}",
-                bytes_read,
-                &buffer[..bytes_read]
-            );
             let parts = match get_parts(&buffer[..bytes_read]) {
                 Ok(parts) => parts,
                 Err(error) => {
@@ -680,9 +675,12 @@ async fn mqtt_task(
                         CLIENT_STATE.signal(ClientState::ConnectionLost);
                         return;
                     }
+
+                    let response_duration = Instant::now() - last_send;
                     info!(
-                        "Received ping response in {:?} after sending ping request",
-                        Instant::now() - last_send
+                        "Received and processed ping response in {:?} ({}ms) after sending ping request",
+                        response_duration,
+                        response_duration.as_millis()
                     );
                 }
                 Ok(last_packet) => {
