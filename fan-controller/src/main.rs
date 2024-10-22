@@ -474,10 +474,8 @@ async fn mqtt_task(
                         }
                     };
 
-                    // debug!("Read publish");
-
-                    // handle_publish(&publish).await;
-                    // debug!("Handled publish");
+                    handle_publish(&publish).await;
+                    info!("Handled publish");
                 }
                 SubscribeAcknowledgement::TYPE => {
                     let subscribe_acknowledgement =
