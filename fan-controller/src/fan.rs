@@ -36,14 +36,14 @@ impl SettingStringBuffer {
     }
 }
 
-#[derive(Debug, Format)]
+#[derive(Debug, Format, Clone, Copy)]
 pub(crate) struct Setting(u16);
 
 #[derive(Debug, Format)]
 pub(crate) struct SetPointOutOfBoundsError;
 
 impl Setting {
-    const ZERO: Self = Self(0);
+    pub(crate) const ZERO: Self = Self(0);
     pub(crate) const fn new(set_point: u16) -> Result<Self, SetPointOutOfBoundsError> {
         if set_point > MAX_SET_POINT {
             return Err(SetPointOutOfBoundsError);

@@ -8,6 +8,7 @@ use core::future::{poll_fn, Future};
 use core::num::NonZeroU16;
 use core::ops::{Deref, DerefMut, Sub};
 use core::pin::pin;
+use core::sync::atomic::AtomicBool;
 use core::task::Poll;
 use crc::{Crc, CRC_16_MODBUS};
 use cyw43::{Control, NetDriver};
@@ -525,6 +526,11 @@ async fn mqtt_task(
                     OUTGOING.send(PACKET).await;
                 }
 
+                // Set last set point to the new set point
+                let mut lock = LAST_FAN_SETTING.lock().await;
+                let current_setting = lock.deref_mut();
+                *current_setting = setting;
+
                 // Update the fan state after successful update
 
                 info!("Fan speed set. Updating homeassistant");
@@ -541,8 +547,41 @@ async fn mqtt_task(
                     "Turning fan {} based on command",
                     if is_on { "on" } else { "off" }
                 );
+
+                let mut fans = FANS.lock().await;
+                let Some(fan) = fans.deref_mut() else {
+                    warn!("No fan available to turn on or off");
+                    return;
+                };
+
+                if is_on {
+                    let last_setting = LAST_FAN_SETTING.lock().await;
+                    let result = fan.set_set_point(&last_setting).await;
+                    if let Err(TimeoutError) = result {
+                        error!("Setting fan speed from 'turn on' publish message timed out");
+                        return;
+                    }
+                    info!(
+                        "Fan set to last remembered setting for on command. Updating homeassistant"
+                    );
+                    // Update home assistant state
+                    let packet =
+                        Message::PredefinedPublish(PredefinedPublish::PublishPercentageState {
+                            setting: last_setting.clone(),
+                        });
+                    OUTGOING.send(packet).await;
+                } else {
+                    let result = fan.set_set_point(&fan::Setting::ZERO).await;
+                    if let Err(TimeoutError) = result {
+                        error!("Setting fan speed from 'turn off' publish message timed out");
+                        return;
+                    }
+                }
+
+                // Update home assistant state
                 let packet =
                     Message::PredefinedPublish(PredefinedPublish::PublishOnState { is_on });
+
                 OUTGOING.send(packet).await;
             }
             other => warn!(
@@ -1004,6 +1043,12 @@ async fn input_task(pin_18: PIN_18) {
 type Fans = Mutex<CriticalSectionRawMutex, Option<fan::Client<'static, UART0, PIN_4>>>;
 /// Use this to make calls to the fans through modbus
 static FANS: Fans = Mutex::new(None);
+/// Last set setting to emulate off/on in homeassistant. This is used to reset to last setting after turning on.
+/// Should probably persist this to flash
+static LAST_FAN_SETTING: Mutex<CriticalSectionRawMutex, fan::Setting> =
+    Mutex::new(fan::Setting::ZERO);
+static FAN_IS_ON: AtomicBool = AtomicBool::new(false);
+
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
     let Peripherals {
@@ -1026,6 +1071,7 @@ async fn main(spawner: Spawner) {
     // UART
 
     let client = fan::Client::new(uart0, pin_12, pin_13, Irqs, dma_ch1, dma_ch2, pin_4);
+    //TODO load fan setting from fan
     // Inner scope to drop the guard after assigning
     {
         *(FANS.lock().await) = Some(client);
