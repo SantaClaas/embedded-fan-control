@@ -39,7 +39,7 @@ use embassy_time::{with_deadline, with_timeout, Duration, Instant, Ticker, Timeo
 use embedded_io_async::{Read, Write};
 use embedded_nal_async::{AddrType, Dns, SocketAddr, TcpConnect};
 use mqtt::packet::disconnect::Disconnect;
-use mqtt::TryDecode;
+use mqtt::{Encode, TryDecode};
 use rand::RngCore;
 use reqwless::client::{TlsConfig, TlsVerify};
 use static_cell::StaticCell;
@@ -977,7 +977,7 @@ async fn send_discovery_and_keep_alive(
     loop {
         keep_alive.next().await;
         // Send keep alive ping request
-        let _ = PingRequest.try_encode(&mut send_buffer, &mut offset);
+        PingRequest.encode(&mut send_buffer, &mut offset);
         writer
             .write_all(&send_buffer[..offset])
             .await
