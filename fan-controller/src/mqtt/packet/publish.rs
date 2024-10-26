@@ -101,7 +101,6 @@ impl TryEncode for Publish<'_> {
         buffer[*offset] = 0;
         *offset += 1;
 
-        info!("Encode 2");
         // Payload
         // No need to set length as it will be calculated
         for byte in self.payload {
@@ -160,8 +159,6 @@ impl<'a> TryDecode<'a> for Publish<'a> {
         // Payload
         //TODO validate there is enough space left in the buffer
         let payload = &variable_header_and_payload[offset..];
-
-        debug!("8");
         Ok(Publish {
             topic_name,
             payload,

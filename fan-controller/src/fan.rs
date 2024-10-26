@@ -24,6 +24,17 @@ pub(crate) fn get_configuration() -> uart::Config {
 }
 
 pub(crate) const MAX_SET_POINT: u16 = 64_000;
+/// Like a string with length and capacity of 5. Used for sending publish packets to Home Assistant through MQTT
+pub(crate) struct SettingStringBuffer {
+    buffer: [u8; 5],
+    start_index: usize,
+}
+
+impl SettingStringBuffer {
+    pub(crate) fn as_bytes(&self) -> &[u8] {
+        &self.buffer[self.start_index..]
+    }
+}
 
 #[derive(Debug, Format)]
 pub(crate) struct Setting(u16);
@@ -43,6 +54,28 @@ impl Setting {
 
     const fn get(&self) -> u16 {
         self.0
+    }
+
+    pub(crate) const fn to_string_buffer(&self) -> SettingStringBuffer {
+        // The largest value the set point can assume is 64000 which is 5 characters long
+        let mut buffer = [0; 5];
+        let mut index = 4;
+        let mut remainder = self.0;
+        loop {
+            let digit = remainder % 10;
+            // Convert digit to ASCII (which is also valid utf-8)
+            buffer[index] = digit as u8 + b'0';
+            remainder /= 10;
+            if remainder <= 0 {
+                break;
+            }
+            index -= 1;
+        }
+
+        SettingStringBuffer {
+            buffer,
+            start_index: index,
+        }
     }
 }
 
@@ -90,7 +123,7 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
 
     pub(crate) async fn set_set_point(
         &mut self,
-        Setting(set_point): Setting,
+        Setting(set_point): &Setting,
     ) -> Result<(), TimeoutError> {
         // Send update through UART to MAX845 to modbus fans
         // Form message to fan 1
@@ -104,7 +137,7 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
             holding_registers::REFERENCE_SET_POINT[1],
             // Value to set
             (set_point >> 8) as u8,
-            set_point as u8,
+            *set_point as u8,
             // CRC is set later
             0,
             0,

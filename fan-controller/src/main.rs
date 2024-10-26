@@ -37,7 +37,6 @@ use embassy_sync::waitqueue::AtomicWaker;
 use embassy_time::{with_deadline, with_timeout, Duration, Instant, Ticker, TimeoutError, Timer};
 use embedded_io_async::{Read, Write};
 use embedded_nal_async::{AddrType, Dns, SocketAddr, TcpConnect};
-use mqtt::client::ConnectError;
 use mqtt::packet::disconnect::Disconnect;
 use mqtt::TryDecode;
 use rand::RngCore;
@@ -49,7 +48,6 @@ use {defmt_rtt as _, panic_probe as _};
 use self::mqtt::packet;
 use self::mqtt::packet::Packet;
 use crate::async_callback::AsyncCallback;
-use crate::mqtt::client::runner::State;
 use crate::mqtt::non_zero_u16;
 use crate::mqtt::packet::connect::Connect;
 use crate::mqtt::packet::connect_acknowledgement::ConnectReasonCode;
@@ -173,6 +171,121 @@ enum MqttError {
     WriteSubscribeError(subscribe::EncodeError),
     UnexpectedPacketType(u8),
     WritePublishError(publish::EncodeError),
+}
+#[embassy_executor::task]
+async fn mqtt_task_client(
+    spawner: Spawner,
+    pwr_pin: PIN_23,
+    cs_pin: PIN_25,
+    pio: PIO0,
+    dma: DMA_CH0,
+    dio: impl PioPin,
+    clk: impl PioPin,
+) -> () {
+    let (net_device, mut control) =
+        gain_control(spawner, pwr_pin, cs_pin, pio, dma, dio, clk).await;
+
+    static STACK: StaticCell<Stack<NetDriver<'static>>> = StaticCell::new();
+    static RESOURCES: StaticCell<StackResources<5>> = StaticCell::new();
+    let configuration = Config::dhcpv4(Default::default());
+    let mut random = RoscRng;
+    let seed = random.next_u64();
+    // Initialize network stack
+    let stack = &*STACK.init(Stack::new(
+        net_device,
+        configuration,
+        RESOURCES.init(StackResources::<5>::new()),
+        seed,
+    ));
+
+    unwrap!(spawner.spawn(network_task(stack)));
+
+    // Join Wi-Fi network
+    loop {
+        match control
+            .join_wpa2(configuration::WIFI_NETWORK, configuration::WIFI_PASSWORD)
+            .await
+        {
+            Ok(_) => break,
+            Err(error) => info!("Error joining Wi-Fi network with status: {}", error.status),
+        }
+    }
+
+    // Wait for DHCP
+    info!("Waiting for DHCP");
+    while !stack.is_config_up() {
+        Timer::after_millis(100).await;
+    }
+
+    info!("DHCP is up");
+
+    info!("Waiting for link up");
+    while !stack.is_link_up() {
+        Timer::after_millis(500).await;
+    }
+
+    info!("Link is up");
+
+    info!("Waiting for stack to be up");
+    stack.wait_config_up().await;
+    info!("Stack is up");
+
+    // Now we can use it
+    let mut receive_buffer = [0; 1024];
+    let mut send_buffer = [0; 1024];
+    let mut socket = TcpSocket::new(stack, &mut receive_buffer, &mut send_buffer);
+
+    let dns_client = DnsSocket::new(stack);
+
+    info!("Resolving MQTT broker IP address");
+    // Get home assistant MQTT broker IP address
+    let address = loop {
+        //TODO support IPv6
+        let result = dns_client
+            .query(configuration::MQTT_BROKER_ADDRESS, DnsQueryType::A)
+            .await;
+
+        let mut addresses = match result {
+            Ok(addresses) => addresses,
+            Err(error) => {
+                info!(
+                    "Error resolving Home Assistant MQTT broker IP address with {}: {:?}",
+                    configuration::MQTT_BROKER_ADDRESS,
+                    error,
+                );
+                // Exponential backoff doesn't seem necessary here
+                // Maybe the current installation of Home Assistant is in the process of
+                // being set up and the entry is not yet available
+                Timer::after_secs(25).await;
+                continue;
+            }
+        };
+
+        if addresses.is_empty() {
+            info!("No addresses found for Home Assistant MQTT broker");
+            Timer::after_millis(500).await;
+            continue;
+        }
+
+        break addresses.swap_remove(0);
+    };
+    info!("MQTT broker IP address resolved");
+
+    info!("Connecting to MQTT broker through TCP");
+    let endpoint = IpEndpoint::new(address, configuration::MQTT_BROKER_PORT);
+    // Connect
+    while let Err(error) = socket.connect(endpoint).await {
+        info!(
+            "Error connecting to Home Assistant MQTT broker: {:?}",
+            error
+        );
+        Timer::after_millis(500).await;
+    }
+
+    use crate::mqtt::client::Client as MqttClient;
+
+    let (reader, writer) = socket.split();
+    MqttClient::connect(reader, writer);
 }
 
 #[embassy_executor::task]
@@ -384,6 +497,7 @@ async fn mqtt_task(
                     }
                 };
 
+                info!("Setting fan to set point {} from publish", set_point);
                 let Ok(setting) = fan::Setting::new(set_point) else {
                     warn!(
                         "Setting fan speed out of bounds. Not accepting new setting: {}",
@@ -398,12 +512,37 @@ async fn mqtt_task(
                     return;
                 };
 
-                if let Err(TimeoutError) = fan.set_set_point(setting).await {
+                if let Err(TimeoutError) = fan.set_set_point(&setting).await {
                     error!("Setting fan speed from publish timed out");
+
+                    // Turn fan state to off in home assistant as we don't know the current state the fan is in
+                    const PACKET: Message = Message::Publish(Publish {
+                        //TODO use shared constant for topic
+                        topic_name: "testfan/on/state",
+                        payload: b"OFF",
+                    });
+
+                    OUTGOING.send(PACKET).await;
                 }
+
+                // let s : str = core::fmt::
+                // Max is "64000" which is 5 characters
+                let mut buffer = [0; 5];
+
+                // Update the fan state after successful update
+                // let packet: Message = Message::Publish(Publish {
+                //     //TODO use shared constant for topic
+                //     topic_name: "testfan/speed/percentage_state",
+                //     // payload: set_point.to_string().as_bytes(),
+                //     payload: publish.payload,
+                // });
+
+                info!("Fan speed set. Updating homeassistant");
+                let packet = Message::PredefinedPublish(PublishPercentageState { setting });
+                OUTGOING.send(packet).await;
             }
 
-            other => info!(
+            other => warn!(
                 "Unexpected topic: {} with payload: {}",
                 other, publish.payload
             ),
@@ -516,9 +655,14 @@ async fn mqtt_task(
     // Future 1
     let listen = listen(&mut reader);
 
+    struct PublishPercentageState {
+        setting: fan::Setting,
+    }
+
     enum Message<'a> {
         Subscribe(Subscribe<'a>),
         Publish(Publish<'a>),
+        PredefinedPublish(PublishPercentageState),
     }
 
     static OUTGOING: Channel<CriticalSectionRawMutex, Message, 8> = Channel::new();
@@ -541,6 +685,19 @@ async fn mqtt_task(
                     info!("Sending publish");
                     if let Err(error) = send(&mut *writer, publish).await {
                         error!("Error sending publish: {:?}", error);
+                        continue;
+                    }
+                }
+                Message::PredefinedPublish(PublishPercentageState { setting }) => {
+                    let buffer = setting.to_string_buffer();
+                    let packet = Publish {
+                        topic_name: "testfan/speed/percentage_state",
+                        payload: buffer.as_bytes(),
+                    };
+
+                    info!("Sending predefined publish");
+                    if let Err(error) = send(&mut *writer, packet).await {
+                        error!("Error sending predefined publish: {:?}", error);
                         continue;
                     }
                 }
@@ -812,7 +969,7 @@ async fn input_task(pin_18: PIN_18) {
         };
 
         info!("Button pressed, setting fan speed to: {}", setting);
-        if let Err(TimeoutError) = fan.set_set_point(setting).await {
+        if let Err(TimeoutError) = fan.set_set_point(&setting).await {
             error!("Timeout setting fan speed from button press");
         }
     }
