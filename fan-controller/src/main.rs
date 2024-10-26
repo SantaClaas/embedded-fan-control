@@ -528,8 +528,7 @@ async fn mqtt_task(
 
                 // Set last set point to the new set point
                 let mut lock = LAST_FAN_SETTING.lock().await;
-                let current_setting = lock.deref_mut();
-                *current_setting = setting;
+                *lock.deref_mut() = setting;
 
                 // Update the fan state after successful update
 
@@ -561,6 +560,7 @@ async fn mqtt_task(
                         error!("Setting fan speed from 'turn on' publish message timed out");
                         return;
                     }
+                    // No need to update last setting as it is already up to date
                     info!(
                         "Fan set to last remembered setting for on command. Updating homeassistant"
                     );
@@ -576,6 +576,7 @@ async fn mqtt_task(
                         error!("Setting fan speed from 'turn off' publish message timed out");
                         return;
                     }
+                    // Don't save to last setting as we don't want to turn it to 0 when turning on again
                 }
 
                 // Update home assistant state
@@ -1036,7 +1037,12 @@ async fn input_task(pin_18: PIN_18) {
         info!("Button pressed, setting fan speed to: {}", setting);
         if let Err(TimeoutError) = fan.set_set_point(&setting).await {
             error!("Timeout setting fan speed from button press");
+            continue;
         }
+
+        // Save last setting to reset to after turning on
+        let mut lock = LAST_FAN_SETTING.lock().await;
+        *lock.deref_mut() = setting;
     }
 }
 
