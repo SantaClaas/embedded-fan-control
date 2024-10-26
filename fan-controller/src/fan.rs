@@ -25,18 +25,18 @@ pub(crate) fn get_configuration() -> uart::Config {
 
 pub(crate) const MAX_SET_POINT: u16 = 64_000;
 /// Like a string with length and capacity of 5. Used for sending publish packets to Home Assistant through MQTT
-pub(crate) struct SettingStringBuffer {
+pub(crate) struct SetFanStatePayload {
     buffer: [u8; 5],
     start_index: usize,
 }
 
-impl SettingStringBuffer {
+impl SetFanStatePayload {
     pub(crate) fn as_bytes(&self) -> &[u8] {
         &self.buffer[self.start_index..]
     }
 }
 
-#[derive(Debug, Format, Clone, Copy)]
+#[derive(Debug, Format, Clone, Copy, PartialEq)]
 pub(crate) struct Setting(u16);
 
 #[derive(Debug, Format)]
@@ -56,7 +56,7 @@ impl Setting {
         self.0
     }
 
-    pub(crate) const fn to_string_buffer(&self) -> SettingStringBuffer {
+    pub(crate) const fn to_string_buffer(&self) -> SetFanStatePayload {
         // The largest value the set point can assume is 64000 which is 5 characters long
         let mut buffer = [0; 5];
         let mut index = 4;
@@ -72,7 +72,7 @@ impl Setting {
             index -= 1;
         }
 
-        SettingStringBuffer {
+        SetFanStatePayload {
             buffer,
             start_index: index,
         }

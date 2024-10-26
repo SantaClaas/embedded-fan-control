@@ -476,6 +476,8 @@ async fn mqtt_task(
     /// A handler that takes MQTT publishes and sets the fan settings accordingly
     async fn handle_publish<'f>(publish: &'f Publish<'f>) {
         info!("Handling publish");
+        let sender = FAN_STATE.sender();
+
         // This part is not MQTT and application specific
         match publish.topic_name {
             "testfan/speed/percentage" => {
@@ -500,7 +502,7 @@ async fn mqtt_task(
                     }
                 };
 
-                info!("Setting fan to set point {} from publish", set_point);
+                info!("SETTING FAN {}", set_point);
                 let Ok(setting) = fan::Setting::new(set_point) else {
                     warn!(
                         "Setting fan speed out of bounds. Not accepting new setting: {}",
@@ -509,83 +511,30 @@ async fn mqtt_task(
                     return;
                 };
 
-                let mut fans = FANS.lock().await;
-                let Some(fan) = fans.deref_mut() else {
-                    warn!("No fan available to set speed");
-                    return;
-                };
-
-                if let Err(TimeoutError) = fan.set_set_point(&setting).await {
-                    error!("Setting fan speed from publish timed out");
-
-                    // Turn fan state to off in home assistant as we don't know the current state the fan is in
-                    const PACKET: Message = Message::Publish(Publish {
-                        //TODO use shared constant for topic
-                        topic_name: "testfan/on/state",
-                        payload: b"OFF",
-                    });
-
-                    OUTGOING.send(PACKET).await;
-                }
-
-                // Set last set point to the new set point
-                let mut lock = LAST_FAN_SETTING.lock().await;
-                *lock.deref_mut() = setting;
-
-                // Update the fan state after successful update
-
-                info!("Fan speed set. Updating homeassistant");
-                let packet =
-                    Message::PredefinedPublish(PredefinedPublish::PublishPercentageState {
-                        setting,
-                    });
-                OUTGOING.send(packet).await;
+                sender.send(FanState {
+                    setting,
+                    // Set to on when there is a value set
+                    is_on: true,
+                });
+                // Home assistant and fan update will be done by receiver
             }
             "testfan/on/set" => {
                 info!("Received fan set on command from homeassistant");
-                let is_on = publish.payload == b"ON";
                 info!(
-                    "Turning fan {} based on command",
-                    if is_on { "on" } else { "off" }
+                    "Payload: {:?}",
+                    core::str::from_utf8(publish.payload).unwrap()
                 );
+                let is_on = publish.payload == b"ON";
+                info!("TURNING FAN {}", if is_on { "ON" } else { "OFF" });
 
-                let mut fans = FANS.lock().await;
-                let Some(fan) = fans.deref_mut() else {
-                    warn!("No fan available to turn on or off");
-                    return;
-                };
-
-                if is_on {
-                    let last_setting = LAST_FAN_SETTING.lock().await;
-                    let result = fan.set_set_point(&last_setting).await;
-                    if let Err(TimeoutError) = result {
-                        error!("Setting fan speed from 'turn on' publish message timed out");
-                        return;
-                    }
-                    // No need to update last setting as it is already up to date
-                    info!(
-                        "Fan set to last remembered setting for on command. Updating homeassistant"
-                    );
-                    // Update home assistant state
-                    let packet =
-                        Message::PredefinedPublish(PredefinedPublish::PublishPercentageState {
-                            setting: last_setting.clone(),
-                        });
-                    OUTGOING.send(packet).await;
-                } else {
-                    let result = fan.set_set_point(&fan::Setting::ZERO).await;
-                    if let Err(TimeoutError) = result {
-                        error!("Setting fan speed from 'turn off' publish message timed out");
-                        return;
-                    }
-                    // Don't save to last setting as we don't want to turn it to 0 when turning on again
-                }
-
-                // Update home assistant state
-                let packet =
-                    Message::PredefinedPublish(PredefinedPublish::PublishOnState { is_on });
-
-                OUTGOING.send(packet).await;
+                sender.send(FanState {
+                    setting: sender
+                        .try_get()
+                        .map(|state| state.setting)
+                        .unwrap_or(fan::Setting::ZERO),
+                    is_on,
+                });
+                // Home assistant and fan update will be done by receiver
             }
             other => warn!(
                 "Unexpected topic: {} with payload: {}",
@@ -922,17 +871,42 @@ async fn mqtt_task(
     // Future 4
     let keep_alive = keep_alive(&writer);
 
+    // Future 5 update homeassistant when manual change with button occurs
     async fn update_homeassistant() {
+        let Some(mut receiver) = FAN_STATE.receiver() else {
+            error!("Fan state receiver was not set up. Cannot update Homeassistant");
+            return;
+        };
+
+        // If there is no initial value this will cause an initial update to homeassistant
+        // which is good as we don't know the state on homeassistant
+        let mut previous_state = receiver.try_get().unwrap_or(FanState {
+            is_on: false,
+            setting: fan::Setting::ZERO,
+        });
+
         loop {
-            let update = BUTTON_FAN_UPDATE.wait().await;
-            info!("Fan was updated manually with button press. Sending updated state to Homeassistant");
-            let message = Message::PredefinedPublish(PredefinedPublish::PublishPercentageState {
-                setting: update,
+            let state = receiver.changed().await;
+
+            info!(
+                "UPDATING HOMEASSISTANT {}",
+                if state.is_on { "ON" } else { "OFF" }
+            );
+            let message = Message::PredefinedPublish(PredefinedPublish::PublishOnState {
+                is_on: state.is_on,
             });
             OUTGOING.send(message).await;
+
+            // Update setting before is on state for smoother transition in homeassistant UI
+            info!("UPDATING HOMEASSISTANT {}", state.setting);
+            let message = Message::PredefinedPublish(PredefinedPublish::PublishPercentageState {
+                setting: state.setting,
+            });
+            OUTGOING.send(message).await;
+
+            previous_state = state;
         }
     }
-    // Future 5 update homeassistant when manual change with button occurs
 
     //TODO cancel all tasks when client loses connection
     join5(listen, talk, keep_alive, set_up, update_homeassistant()).await;
@@ -1012,6 +986,7 @@ async fn input_task(pin_18: PIN_18) {
     let mut button = Input::new(pin_18, Pull::Up);
 
     let mut fan_state = fan::State::default();
+    let sender = FAN_STATE.sender();
 
     //TODO debounce
     loop {
@@ -1031,7 +1006,17 @@ async fn input_task(pin_18: PIN_18) {
 
         // Setting values low on purpose for testing
         let set_point = match fan_state {
-            fan::State::Off => 0,
+            fan::State::Off => {
+                let setting = FAN_STATE
+                    .try_get()
+                    .map(|state| state.setting)
+                    .unwrap_or(fan::Setting::ZERO);
+                sender.send(FanState {
+                    setting,
+                    is_on: false,
+                });
+                continue;
+            }
             // 10%
             fan::State::Low => fan::MAX_SET_POINT / 10,
             // 25%
@@ -1046,47 +1031,79 @@ async fn input_task(pin_18: PIN_18) {
             continue;
         };
 
+        // Optimistically update setting
+        sender.send(FanState {
+            setting,
+            is_on: true,
+        });
+    }
+}
+/// Update fans whenenver the fan setting or on state changes
+#[embassy_executor::task]
+async fn update_fans() {
+    let Some(mut receiver) = FAN_STATE.receiver() else {
+        // Not using asserts because they are hard to debug on embedded
+        error!("No receiver for fan is on state. This should never happen.");
+        return;
+    };
+
+    let mut previous_is_on = FAN_STATE
+        .try_get()
+        .map(|state| state.is_on)
+        .unwrap_or(false);
+
+    loop {
+        let state = receiver.changed().await;
+
+        if state.is_on == previous_is_on {
+            continue;
+        }
+
+        // Update previous before continue
+        previous_is_on = state.is_on;
+
         let mut fans = FANS.lock().await;
-        let Some(fan) = fans.deref_mut() else {
+        let Some(fans) = fans.deref_mut() else {
             warn!("No fan client found");
             continue;
         };
 
-        info!("Button pressed, setting fan speed to: {}", setting);
-        if let Err(TimeoutError) = fan.set_set_point(&setting).await {
+        let setting = if state.is_on {
+            state.setting
+        } else {
+            // Turn off fans
+            fan::Setting::ZERO
+        };
+
+        if let Err(TimeoutError) = fans.set_set_point(&setting).await {
             error!("Timeout setting fan speed from button press");
             continue;
         }
-
-        // Save last setting to reset to after turning on
-        let mut lock = LAST_FAN_SETTING.lock().await;
-        *lock.deref_mut() = setting;
-
-        BUTTON_FAN_UPDATE.signal(setting);
     }
 }
 
 type Fans = Mutex<CriticalSectionRawMutex, Option<fan::Client<'static, UART0, PIN_4>>>;
 /// Use this to make calls to the fans through modbus
 static FANS: Fans = Mutex::new(None);
-/// Last set setting to emulate off/on in homeassistant. This is used to reset to last setting after turning on.
-/// Should probably persist this to flash
-static LAST_FAN_SETTING: Mutex<CriticalSectionRawMutex, fan::Setting> =
-    Mutex::new(fan::Setting::ZERO);
 
-/// Signal to notify MQTT implementation to upate Homeassistant state from button press
-static BUTTON_FAN_UPDATE: Signal<CriticalSectionRawMutex, fan::Setting> = Signal::new();
+/// Fan state can have a setting while being off although and we emulate that behavior because
+/// fan devices actually don't have that behavior
+#[derive(Clone)]
+struct FanState {
+    is_on: bool,
+    setting: fan::Setting,
+}
 
+/// Is on and the setting update independent of each other on homeassistant.
 /// Update this state even though it might not yet be set on the fan devices.
-/// Use optimistic updates
+/// Use optimistic updates.
 /// Senders:
-/// - MQTT
+/// - MQTT (server to client)
 /// - Button
 /// Receivers:
 /// - Fan
-/// - MQTT
-static FAN_SETTING: Watch<CriticalSectionRawMutex, fan::Setting, 2> = Watch::new();
-static FAN_IS_ON: Watch<CriticalSectionRawMutex, bool, 2> = Watch::new();
+/// - MQTT (client to server)
+static FAN_STATE: Watch<CriticalSectionRawMutex, FanState, 2> = Watch::new();
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
@@ -1118,6 +1135,7 @@ async fn main(spawner: Spawner) {
 
     // Button input task waits for button presses and send according signals to the modbus task
     unwrap!(spawner.spawn(input_task(pin_18)));
+    unwrap!(spawner.spawn(update_fans()));
     // The MQTT task waits for publishes from MQTT and sends them to the modbus task.
     // It also sends updates from the modbus task that happen through button inputs to MQTT
     unwrap!(spawner.spawn(mqtt_task(
