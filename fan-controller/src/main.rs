@@ -525,23 +525,26 @@ async fn mqtt_task(
                     OUTGOING.send(PACKET).await;
                 }
 
-                // let s : str = core::fmt::
-                // Max is "64000" which is 5 characters
-                let mut buffer = [0; 5];
-
                 // Update the fan state after successful update
-                // let packet: Message = Message::Publish(Publish {
-                //     //TODO use shared constant for topic
-                //     topic_name: "testfan/speed/percentage_state",
-                //     // payload: set_point.to_string().as_bytes(),
-                //     payload: publish.payload,
-                // });
 
                 info!("Fan speed set. Updating homeassistant");
-                let packet = Message::PredefinedPublish(PublishPercentageState { setting });
+                let packet =
+                    Message::PredefinedPublish(PredefinedPublish::PublishPercentageState {
+                        setting,
+                    });
                 OUTGOING.send(packet).await;
             }
-
+            "testfan/on/set" => {
+                info!("Received fan set on command from homeassistant");
+                let is_on = publish.payload == b"ON";
+                info!(
+                    "Turning fan {} based on command",
+                    if is_on { "on" } else { "off" }
+                );
+                let packet =
+                    Message::PredefinedPublish(PredefinedPublish::PublishOnState { is_on });
+                OUTGOING.send(packet).await;
+            }
             other => warn!(
                 "Unexpected topic: {} with payload: {}",
                 other, publish.payload
@@ -655,14 +658,15 @@ async fn mqtt_task(
     // Future 1
     let listen = listen(&mut reader);
 
-    struct PublishPercentageState {
-        setting: fan::Setting,
+    enum PredefinedPublish {
+        PublishPercentageState { setting: fan::Setting },
+        PublishOnState { is_on: bool },
     }
 
     enum Message<'a> {
         Subscribe(Subscribe<'a>),
         Publish(Publish<'a>),
-        PredefinedPublish(PublishPercentageState),
+        PredefinedPublish(PredefinedPublish),
     }
 
     static OUTGOING: Channel<CriticalSectionRawMutex, Message, 8> = Channel::new();
@@ -688,19 +692,41 @@ async fn mqtt_task(
                         continue;
                     }
                 }
-                Message::PredefinedPublish(PublishPercentageState { setting }) => {
-                    let buffer = setting.to_string_buffer();
-                    let packet = Publish {
-                        topic_name: "testfan/speed/percentage_state",
-                        payload: buffer.as_bytes(),
-                    };
+                Message::PredefinedPublish(publish) => match publish {
+                    PredefinedPublish::PublishPercentageState { setting } => {
+                        let buffer = setting.to_string_buffer();
+                        let packet = Publish {
+                            topic_name: "testfan/speed/percentage_state",
+                            payload: buffer.as_bytes(),
+                        };
 
-                    info!("Sending predefined publish");
-                    if let Err(error) = send(&mut *writer, packet).await {
-                        error!("Error sending predefined publish: {:?}", error);
-                        continue;
+                        info!("Sending percentage state publish");
+                        if let Err(error) = send(&mut *writer, packet).await {
+                            error!("Error sending predefined publish: {:?}", error);
+                            continue;
+                        }
                     }
-                }
+                    PredefinedPublish::PublishOnState { is_on } => {
+                        //TODO update state
+                        let packet = if is_on {
+                            Publish {
+                                topic_name: "testfan/on/state",
+                                payload: b"ON",
+                            }
+                        } else {
+                            Publish {
+                                topic_name: "testfan/on/state",
+                                payload: b"OFF",
+                            }
+                        };
+
+                        info!("Sending on state publish");
+                        if let Err(error) = send(&mut *writer, packet).await {
+                            error!("Error sending predefined publish: {:?}", error);
+                            continue;
+                        }
+                    }
+                },
             }
 
             LAST_PACKET.signal(Instant::now());
