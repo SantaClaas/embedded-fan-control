@@ -10,12 +10,13 @@ use core::ops::{Deref, DerefMut, Sub};
 use core::pin::pin;
 use core::sync::atomic::AtomicBool;
 use core::task::Poll;
+use cortex_m::interrupt::CriticalSection;
 use crc::{Crc, CRC_16_MODBUS};
 use cyw43::{Control, NetDriver};
 use cyw43_pio::PioSpi;
 use defmt::*;
 use embassy_executor::Spawner;
-use embassy_futures::join::{join, join3, join4};
+use embassy_futures::join::{join, join3, join5};
 use embassy_net::dns::{DnsQueryType, DnsSocket};
 use embassy_net::tcp::client::{TcpClient, TcpClientState};
 use embassy_net::tcp::{TcpReader, TcpSocket, TcpWriter};
@@ -35,6 +36,7 @@ use embassy_sync::mutex::{Mutex, MutexGuard, TryLockError};
 use embassy_sync::pubsub::PubSubChannel;
 use embassy_sync::signal::Signal;
 use embassy_sync::waitqueue::AtomicWaker;
+use embassy_sync::watch::Watch;
 use embassy_time::{with_deadline, with_timeout, Duration, Instant, Ticker, TimeoutError, Timer};
 use embedded_io_async::{Read, Write};
 use embedded_nal_async::{AddrType, Dns, SocketAddr, TcpConnect};
@@ -473,7 +475,7 @@ async fn mqtt_task(
 
     /// A handler that takes MQTT publishes and sets the fan settings accordingly
     async fn handle_publish<'f>(publish: &'f Publish<'f>) {
-        info!("Received publish");
+        info!("Handling publish");
         // This part is not MQTT and application specific
         match publish.topic_name {
             "testfan/speed/percentage" => {
@@ -726,7 +728,10 @@ async fn mqtt_task(
                     }
                 }
                 Message::Publish(publish) => {
-                    info!("Sending publish");
+                    info!(
+                        "Sending publish {:?}",
+                        core::str::from_utf8(publish.payload).unwrap()
+                    );
                     if let Err(error) = send(&mut *writer, publish).await {
                         error!("Error sending publish: {:?}", error);
                         continue;
@@ -734,13 +739,13 @@ async fn mqtt_task(
                 }
                 Message::PredefinedPublish(publish) => match publish {
                     PredefinedPublish::PublishPercentageState { setting } => {
+                        info!("Sending percentage state publish {}", setting);
                         let buffer = setting.to_string_buffer();
                         let packet = Publish {
                             topic_name: "testfan/speed/percentage_state",
                             payload: buffer.as_bytes(),
                         };
 
-                        info!("Sending percentage state publish");
                         if let Err(error) = send(&mut *writer, packet).await {
                             error!("Error sending predefined publish: {:?}", error);
                             continue;
@@ -901,9 +906,9 @@ async fn mqtt_task(
 
                     let response_duration = Instant::now() - last_send;
                     info!(
-                        "Received and processed ping response in {:?} ({}ms) after sending ping request",
+                        "Received and processed ping response in {:?} ({}μs) after sending ping request",
                         response_duration,
-                        response_duration.as_millis()
+                        response_duration.as_micros()
                     );
                 }
                 Ok(last_packet) => {
@@ -917,8 +922,20 @@ async fn mqtt_task(
     // Future 4
     let keep_alive = keep_alive(&writer);
 
+    async fn update_homeassistant() {
+        loop {
+            let update = BUTTON_FAN_UPDATE.wait().await;
+            info!("Fan was updated manually with button press. Sending updated state to Homeassistant");
+            let message = Message::PredefinedPublish(PredefinedPublish::PublishPercentageState {
+                setting: update,
+            });
+            OUTGOING.send(message).await;
+        }
+    }
+    // Future 5 update homeassistant when manual change with button occurs
+
     //TODO cancel all tasks when client loses connection
-    join4(listen, talk, keep_alive, set_up).await;
+    join5(listen, talk, keep_alive, set_up, update_homeassistant()).await;
 }
 
 async fn send_discovery_and_keep_alive(
@@ -995,6 +1012,7 @@ async fn input_task(pin_18: PIN_18) {
     let mut button = Input::new(pin_18, Pull::Up);
 
     let mut fan_state = fan::State::default();
+
     //TODO debounce
     loop {
         // Falling edge for our button -> button down (pressing down
@@ -1043,6 +1061,8 @@ async fn input_task(pin_18: PIN_18) {
         // Save last setting to reset to after turning on
         let mut lock = LAST_FAN_SETTING.lock().await;
         *lock.deref_mut() = setting;
+
+        BUTTON_FAN_UPDATE.signal(setting);
     }
 }
 
@@ -1053,7 +1073,20 @@ static FANS: Fans = Mutex::new(None);
 /// Should probably persist this to flash
 static LAST_FAN_SETTING: Mutex<CriticalSectionRawMutex, fan::Setting> =
     Mutex::new(fan::Setting::ZERO);
-static FAN_IS_ON: AtomicBool = AtomicBool::new(false);
+
+/// Signal to notify MQTT implementation to upate Homeassistant state from button press
+static BUTTON_FAN_UPDATE: Signal<CriticalSectionRawMutex, fan::Setting> = Signal::new();
+
+/// Update this state even though it might not yet be set on the fan devices.
+/// Use optimistic updates
+/// Senders:
+/// - MQTT
+/// - Button
+/// Receivers:
+/// - Fan
+/// - MQTT
+static FAN_SETTING: Watch<CriticalSectionRawMutex, fan::Setting, 2> = Watch::new();
+static FAN_IS_ON: Watch<CriticalSectionRawMutex, bool, 2> = Watch::new();
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
