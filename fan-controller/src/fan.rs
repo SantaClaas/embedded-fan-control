@@ -1,7 +1,6 @@
 //! ebm-pabst [RadiCal centrifugal fans in scroll housings for residential ventilation](https://www.ebmpapst.com/us/en/campaigns/product-campaigns/centrifugal-fans/radical-with-scroll-housing.html)
 //! specific configuration and constants
 
-use crate::string_buffer::StringBuffer;
 use crate::{configuration, modbus};
 use cortex_m::prelude::_embedded_hal_serial_Write;
 use defmt::{error, info, Format};

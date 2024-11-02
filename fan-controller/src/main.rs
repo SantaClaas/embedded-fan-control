@@ -46,7 +46,6 @@ use mqtt::{Encode, TryDecode};
 use rand::RngCore;
 use reqwless::client::{TlsConfig, TlsVerify};
 use static_cell::StaticCell;
-use string_buffer::StringBuffer;
 
 use {defmt_rtt as _, panic_probe as _};
 
@@ -72,7 +71,6 @@ mod configuration;
 mod fan;
 mod modbus;
 mod mqtt;
-mod string_buffer;
 
 bind_interrupts!(struct Irqs {
     PIO0_IRQ_0 => PioInterruptHandler<PIO0>;
@@ -703,7 +701,15 @@ async fn mqtt_task(
                 Message::PredefinedPublish(publish) => match publish {
                     PredefinedPublish::FanPercentageState { setting } => {
                         info!("Sending percentage state publish {}", setting);
-                        let buffer: StringBuffer<5> = setting.into();
+                        // let buffer: StringBuffer<5> = setting.into();
+                        let buffer = match heapless::String::<5>::try_from(setting.0) {
+                            Ok(buffer) => buffer,
+                            Err(error) => {
+                                error!("Error converting setting to string: {:?}", error);
+                                continue;
+                            }
+                        };
+
                         let packet = Publish {
                             topic_name: "fancontroller/speed/percentage_state",
                             payload: buffer.as_bytes(),
