@@ -30,7 +30,7 @@ where
 {
     info!("Sending packet");
     let mut offset = 0;
-    let mut send_buffer = [0; 512];
+    let mut send_buffer = [0; 1024];
     packet
         .try_encode(&mut send_buffer, &mut offset)
         .map_err(SendError::EncodeError)?;

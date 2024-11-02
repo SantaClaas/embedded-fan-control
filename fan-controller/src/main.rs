@@ -3,6 +3,7 @@
 //TODO remove this 🥴
 #![allow(warnings)]
 
+use configuration::DISCOVERY_TOPIC;
 use core::convert::Infallible;
 use core::future::{poll_fn, Future};
 use core::num::NonZeroU16;
@@ -45,6 +46,7 @@ use mqtt::{Encode, TryDecode};
 use rand::RngCore;
 use reqwless::client::{TlsConfig, TlsVerify};
 use static_cell::StaticCell;
+use string_buffer::StringBuffer;
 
 use {defmt_rtt as _, panic_probe as _};
 
@@ -70,6 +72,7 @@ mod configuration;
 mod fan;
 mod modbus;
 mod mqtt;
+mod string_buffer;
 
 bind_interrupts!(struct Irqs {
     PIO0_IRQ_0 => PioInterruptHandler<PIO0>;
@@ -404,7 +407,7 @@ async fn mqtt_task(
 
     use mqtt::task;
     let packet = Connect {
-        client_identifier: "testfan",
+        client_identifier: "fancontroller",
         username: configuration::MQTT_BROKER_CREDENTIALS.username,
         password: configuration::MQTT_BROKER_CREDENTIALS.password,
         keep_alive_seconds: configuration::KEEP_ALIVE.as_secs() as u16,
@@ -480,7 +483,7 @@ async fn mqtt_task(
 
         // This part is not MQTT and application specific
         match publish.topic_name {
-            "testfan/speed/percentage" => {
+            "fancontroller/speed/percentage" => {
                 let payload = match core::str::from_utf8(publish.payload) {
                     Ok(payload) => payload,
                     Err(error) => {
@@ -518,7 +521,7 @@ async fn mqtt_task(
                 });
                 // Home assistant and fan update will be done by receiver
             }
-            "testfan/on/set" => {
+            "fancontroller/on/set" => {
                 info!("Received fan set on command from homeassistant");
                 info!(
                     "Payload: {:?}",
@@ -650,8 +653,19 @@ async fn mqtt_task(
     let listen = listen(&mut reader);
 
     enum PredefinedPublish {
-        PublishPercentageState { setting: fan::Setting },
-        PublishOnState { is_on: bool },
+        FanPercentageState {
+            setting: fan::Setting,
+        },
+        FanOnState {
+            is_on: bool,
+        },
+        SensorTemperature {
+            /// Celsius temperature as read from the sensor. This is the raw value. To get the actual temperature, divide by 10.
+            /// e.g. 234 means 23.4 degrees Celsius
+            temperature: u16,
+            /// The fan the sensor is on
+            fan: fan::Fan,
+        },
     }
 
     enum Message<'a> {
@@ -687,11 +701,11 @@ async fn mqtt_task(
                     }
                 }
                 Message::PredefinedPublish(publish) => match publish {
-                    PredefinedPublish::PublishPercentageState { setting } => {
+                    PredefinedPublish::FanPercentageState { setting } => {
                         info!("Sending percentage state publish {}", setting);
-                        let buffer = setting.to_string_buffer();
+                        let buffer: StringBuffer<5> = setting.into();
                         let packet = Publish {
-                            topic_name: "testfan/speed/percentage_state",
+                            topic_name: "fancontroller/speed/percentage_state",
                             payload: buffer.as_bytes(),
                         };
 
@@ -700,21 +714,46 @@ async fn mqtt_task(
                             continue;
                         }
                     }
-                    PredefinedPublish::PublishOnState { is_on } => {
+                    PredefinedPublish::FanOnState { is_on } => {
                         //TODO update state
                         let packet = if is_on {
                             Publish {
-                                topic_name: "testfan/on/state",
+                                topic_name: "fancontroller/on/state",
                                 payload: b"ON",
                             }
                         } else {
                             Publish {
-                                topic_name: "testfan/on/state",
+                                topic_name: "fancontroller/on/state",
                                 payload: b"OFF",
                             }
                         };
 
                         info!("Sending on state publish");
+                        if let Err(error) = send(&mut *writer, packet).await {
+                            error!("Error sending predefined publish: {:?}", error);
+                            continue;
+                        }
+                    }
+                    PredefinedPublish::SensorTemperature { temperature, fan } => {
+                        // The value is divided by 10 in the value template that is submitted with home assistant discovery
+                        let formatted = match heapless::String::<3>::try_from(temperature) {
+                            Ok(formatted) => formatted,
+                            Err(error) => {
+                                error!(
+                                    "Error writing temperature {} to heapless::String",
+                                    temperature
+                                );
+                                continue;
+                            }
+                        };
+                        let packet = Publish {
+                            topic_name: match fan {
+                                fan::Fan::One => "fancontroller/sensor/fan-1/temperature",
+                                fan::Fan::Two => "fancontroller/sensor/fan-2/temperature",
+                            },
+                            payload: formatted.as_bytes(),
+                        };
+                        info!("Sending sensor temperature publish");
                         if let Err(error) = send(&mut *writer, packet).await {
                             error!("Error sending predefined publish: {:?}", error);
                             continue;
@@ -736,7 +775,7 @@ async fn mqtt_task(
     // Subscribe to home assistant topics
     const SUBSCRIPTIONS: [Subscription; 2] = [
         Subscription {
-            topic_filter: "testfan/on/set",
+            topic_filter: "fancontroller/on/set",
             options: mqtt::packet::subscribe::Options::new(
                 QualityOfService::AtMostOnceDelivery,
                 false,
@@ -746,7 +785,7 @@ async fn mqtt_task(
             ),
         },
         Subscription {
-            topic_filter: "testfan/speed/percentage",
+            topic_filter: "fancontroller/speed/percentage",
             options: mqtt::packet::subscribe::Options::new(
                 QualityOfService::AtMostOnceDelivery,
                 false,
@@ -781,8 +820,10 @@ async fn mqtt_task(
         //TODO add diagnostic entity like IP address
         //TODO availability topic
         //TODO remove whitespace at compile time through macro, build script or const fn
+        //TODO support availability with will message https://www.home-assistant.io/integrations/mqtt/#using-availability-topics
 
         // Using abbreviations to save space of binary and on the wire (haven't measured the effect though...)
+        // See https://www.home-assistant.io/integrations/mqtt/ or https://github.com/home-assistant/core/blob/dev/homeassistant/components/mqtt/abbreviations.py
         // name -> name
         // uniq_id -> unique_id
         // stat_t -> state_topic
@@ -790,16 +831,33 @@ async fn mqtt_task(
         // pct_stat_t -> percentage_state_topic
         // pct_cmd_t -> percentage_command_topic
         // spd_rng_max -> speed_range_max
+        // dev -> device
+        // mf -> manufacturer
+        // o -> origin (recommended https://www.home-assistant.io/integrations/mqtt/)
+        // unit_of_meas -> unit_of_measurement
         // Don't need to set speed_range_min because it is 1 by default
+
         const DISCOVERY_PAYLOAD: &[u8] = br#"{
-            "name": "Fan",
-            "uniq_id": "testfan",
-            "stat_t": "testfan/on/state",
-            "cmd_t": "testfan/on/set",
-            "pct_stat_t": "testfan/speed/percentage_state",
-            "pct_cmd_t": "testfan/speed/percentage",
-            "spd_rng_max": 64000
+            "name": "Fans",
+            "uniq_id": "fancontroller",
+            "stat_t": "fancontroller/on/state",
+            "cmd_t": "fancontroller/on/set",
+            "pct_stat_t": "fancontroller/speed/percentage_state",
+            "pct_cmd_t": "fancontroller/speed/percentage",
+            "spd_rng_max": 64000,
+            "dev": {
+                "ids": "fancontroller-device",
+                "name": "Fan Controller",
+                "model": "Raspberry Pi Pico W 1"
+            }
         }"#;
+
+        // "~": "fancontroller",
+        //
+        // "o": {
+        //     "name": "Fan Controller",
+        //     "url": "github.com/santaclaas/embedded-fan-control/"
+        // }
 
         const DISCOVERY_PUBLISH: Message = Message::Publish(Publish {
             topic_name: configuration::DISCOVERY_TOPIC,
@@ -808,6 +866,26 @@ async fn mqtt_task(
 
         OUTGOING.send(DISCOVERY_PUBLISH).await;
         //TODO wait for packet acknowledgement
+        return;
+
+        // Needs to be string because "°C" is not ASCII
+        const DISCOVERY_TEMPERATURE_SENSOR_1: &str = r#"{
+            "name": "Fan 1 Temperature Sensor",
+            "uniq_id": "fan-1-temperature-sensor",
+            "dev": {
+                "ids": "fancontroller-device"
+            },
+            "stat_t": "fancontroller/fan-1/temperature",
+            "value_template": "{{ value | float / 10 }}",
+            "unit_of_meas": "°C"
+        }"#;
+
+        const DISCOVERY_TEMPERATURE_SENSOR_1_PUBLISH: Message = Message::Publish(Publish {
+            topic_name: "homeassistant/sensor/fan-1-temperature-sensor/config",
+            payload: DISCOVERY_TEMPERATURE_SENSOR_1.as_bytes(),
+        });
+
+        OUTGOING.send(DISCOVERY_TEMPERATURE_SENSOR_1_PUBLISH).await;
     }
 
     // Future 3
@@ -871,7 +949,7 @@ async fn mqtt_task(
     // Future 4
     let keep_alive = keep_alive(&writer);
 
-    // Future 5 update homeassistant when manual change with button occurs
+    // Future 5 update homeassistant when change occurs
     async fn update_homeassistant() {
         let Some(mut receiver) = FAN_STATE.receiver() else {
             error!("Fan state receiver was not set up. Cannot update Homeassistant");
@@ -892,14 +970,13 @@ async fn mqtt_task(
                 "UPDATING HOMEASSISTANT {}",
                 if state.is_on { "ON" } else { "OFF" }
             );
-            let message = Message::PredefinedPublish(PredefinedPublish::PublishOnState {
-                is_on: state.is_on,
-            });
+            let message =
+                Message::PredefinedPublish(PredefinedPublish::FanOnState { is_on: state.is_on });
             OUTGOING.send(message).await;
 
             // Update setting before is on state for smoother transition in homeassistant UI
             info!("UPDATING HOMEASSISTANT {}", state.setting);
-            let message = Message::PredefinedPublish(PredefinedPublish::PublishPercentageState {
+            let message = Message::PredefinedPublish(PredefinedPublish::FanPercentageState {
                 setting: state.setting,
             });
             OUTGOING.send(message).await;
@@ -908,74 +985,29 @@ async fn mqtt_task(
         }
     }
 
+    // Future 6
+    async fn poll_sensors() {
+        loop {
+            let mut fans = FANS.lock().await;
+            let Some(fans) = fans.deref_mut() else {
+                error!("Fans were not set up. Cannot poll sensors");
+                return;
+            };
+
+            let temperature = match fans.get_temperature(fan::Fan::One).await {
+                Ok(temperature) => temperature,
+                Err(TimeoutError) => {
+                    error!("Timeout getting temperature for fan 1");
+                    return;
+                }
+            };
+
+            Timer::after_secs(10).await;
+        }
+    }
+
     //TODO cancel all tasks when client loses connection
     join5(listen, talk, keep_alive, set_up, update_homeassistant()).await;
-}
-
-async fn send_discovery_and_keep_alive(
-    mut writer: TcpWriter<'_>,
-    mut send_buffer: [u8; 256],
-    mut keep_alive: Ticker,
-) -> Result<(), MqttError> {
-    // Send discovery packet
-    // Configuration is like the YAML configuration that would be added in Home Assistant but as JSON
-    // Command topic: The MQTT topic to publish commands to change the state of the fan
-    //TODO set firmware version from Cargo.toml package version
-    //TODO think about setting hardware version, support url, and manufacturer
-    //TODO create single home assistant device with multiple entities for sensors in fan and the bypass
-    //TODO add diagnostic entity like IP address
-    //TODO availability topic
-    //TODO remove whitespace at compile time through macro, build script or const fn
-
-    // Using abbreviations to save space of binary and on the wire (haven't measured the effect though...)
-    // name -> name
-    // uniq_id -> unique_id
-    // stat_t -> state_topic
-    // cmd_t -> command_topic
-    // pct_stat_t -> percentage_state_topic
-    // pct_cmd_t -> percentage_command_topic
-    // spd_rng_max -> speed_range_max
-    // Don't need to set speed_range_min because it is 1 by default
-    const DISCOVERY_PAYLOAD: &[u8] = br#"{
-        "name": "Fan",
-        "uniq_id": "testfan",
-        "stat_t": "testfan/on/state",
-        "cmd_t": "testfan/on/set",
-        "pct_stat_t": "testfan/speed/percentage_state",
-        "pct_cmd_t": "testfan/speed/percentage",
-        "spd_rng_max": 64000
-    }"#;
-
-    const DISCOVERY_PUBLISH: Publish = Publish {
-        topic_name: configuration::DISCOVERY_TOPIC,
-        payload: DISCOVERY_PAYLOAD,
-    };
-
-    let mut offset = 0;
-    DISCOVERY_PUBLISH
-        .try_encode(&mut send_buffer, &mut offset)
-        .map_err(MqttError::WritePublishError)?;
-
-    writer
-        .write_all(&send_buffer[..offset])
-        .await
-        .map_err(MqttError::WriteError)?;
-    writer.flush().await.map_err(MqttError::FlushError)?;
-
-    keep_alive.reset();
-    // No acknowledgement to read for quality of service 0
-
-    loop {
-        keep_alive.next().await;
-        // Send keep alive ping request
-        PingRequest.encode(&mut send_buffer, &mut offset);
-        writer
-            .write_all(&send_buffer[..offset])
-            .await
-            .map_err(MqttError::WriteError)?;
-        writer.flush().await.map_err(MqttError::FlushError)?;
-        //TODO read ping response or disconnect after "a reasonable amount of time"
-    }
 }
 
 /// This task handles inputs from physical buttons to change the fan speed
@@ -1047,21 +1079,23 @@ async fn update_fans() {
         return;
     };
 
-    let mut previous_is_on = FAN_STATE
-        .try_get()
-        .map(|state| state.is_on)
-        .unwrap_or(false);
+    // Only comparing on state causes button triggers to be ignored
+    let mut previous = FAN_STATE.try_get().unwrap_or(FanState {
+        is_on: false,
+        setting: fan::Setting::ZERO,
+    });
 
     loop {
         let state = receiver.changed().await;
 
-        if state.is_on == previous_is_on {
+        if state == previous {
             continue;
         }
 
         // Update previous before continue
-        previous_is_on = state.is_on;
+        previous = state.clone();
 
+        info!("Updating fans");
         let mut fans = FANS.lock().await;
         let Some(fans) = fans.deref_mut() else {
             warn!("No fan client found");
@@ -1088,7 +1122,7 @@ static FANS: Fans = Mutex::new(None);
 
 /// Fan state can have a setting while being off although and we emulate that behavior because
 /// fan devices actually don't have that behavior
-#[derive(Clone)]
+#[derive(PartialEq, Clone)]
 struct FanState {
     is_on: bool,
     setting: fan::Setting,
