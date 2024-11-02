@@ -27,6 +27,7 @@ async fn main() -> serialport::Result<()> {
     let mut port = open_serial_port()?;
 
     let mut count = 0u64;
+    let is_echo = false;
 
     println!("\nListening on device {}", PORT_NAME);
     loop {
@@ -45,17 +46,21 @@ async fn main() -> serialport::Result<()> {
         // let bytes_read = port.read_to_end(&mut buffer)?;
         println!(
             "message {count} - bytes_read: ({:?}) {:?} {:#b} {:#b} ",
-            bytes_read, buffer, buffer[0], buffer[1]
+            bytes_read,
+            &buffer[..bytes_read],
+            buffer[0],
+            buffer[1]
         );
 
-        // Wait as the fan would wait too
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-        // Echo
-        let result = port.write(&buffer[..bytes_read]);
-        println!("Echoed message back {:?}", result);
-        let result = port.flush();
-        println!("Flushed message back {:?}", result);
-
+        if is_echo {
+            // Wait as the fan would wait too
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            // Echo
+            let result = port.write(&buffer[..bytes_read]);
+            println!("Echoed message back {:?}", result);
+            let result = port.flush();
+            println!("Flushed message back {:?}", result);
+        }
         // let inverse: Vec<u8> = buffer.iter().map(|byte| byte.to_be()).collect::<Vec<u8>>();
         // println!("message {count} - inverse: {:?}", inverse);
         count += 1;
