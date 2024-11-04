@@ -7,9 +7,13 @@ use defmt::{error, info, Format};
 use embassy_rp::dma::Channel;
 use embassy_rp::gpio::{Level, Output, Pin};
 use embassy_rp::interrupt::typelevel::Binding;
-use embassy_rp::uart::{Async, DataBits, InterruptHandler, Parity, RxPin, StopBits, TxPin, Uart};
+use embassy_rp::uart::{
+    Async, BufferedInterruptHandler, BufferedUart, DataBits, InterruptHandler, Parity, RxPin,
+    StopBits, TxPin, Uart,
+};
 use embassy_rp::{uart, Peripheral};
 use embassy_time::{block_for, with_timeout, Duration, TimeoutError, Timer};
+use embedded_io_async::{Read, Write};
 
 pub(crate) const BAUD_RATE: u32 = 19_200;
 pub(crate) fn get_configuration() -> uart::Config {
@@ -79,7 +83,7 @@ pub(crate) enum Fan {
 /// Modbus messages are sent through UART to MAX845 to control fans.
 /// The pin is used to enable the DE pin to switch between reading and writing
 pub(crate) struct Client<'a, UART: uart::Instance, PIN: Pin> {
-    uart: Uart<'a, UART, Async>,
+    uart: BufferedUart<'a, UART>,
     driver_enable: Output<'a, PIN>,
 }
 
@@ -88,12 +92,14 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
         uart: impl Peripheral<P = UART> + 'a,
         tx: impl Peripheral<P = impl TxPin<UART>> + 'a,
         rx: impl Peripheral<P = impl RxPin<UART>> + 'a,
-        irq: impl Binding<UART::Interrupt, InterruptHandler<UART>>,
+        irq: impl Binding<UART::Interrupt, BufferedInterruptHandler<UART>>,
         tx_dma: impl Peripheral<P = impl Channel> + 'a,
         rx_dma: impl Peripheral<P = impl Channel> + 'a,
         driver_enable: impl Peripheral<P = PIN> + 'a,
+        tx_buffer: &'a mut [u8],
+        rx_buffer: &'a mut [u8],
     ) -> Self {
-        let uart = Uart::new(uart, tx, rx, irq, tx_dma, rx_dma, get_configuration());
+        let uart = BufferedUart::new(uart, irq, tx, rx, tx_buffer, rx_buffer, get_configuration());
         let driver_enable = Output::new(driver_enable, Level::Low);
 
         Self {
@@ -110,7 +116,7 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
         // As ref because &[u8; 8] is not the same as &[u8]
         let result = with_timeout(
             configuration::FAN_TIMEOUT,
-            self.uart.write(message.as_ref()),
+            self.uart.write_all(message.as_ref()),
         )
         .await?;
         // let result = self.uart.blocking_write(message.as_ref());

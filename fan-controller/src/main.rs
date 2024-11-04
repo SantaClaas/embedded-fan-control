@@ -28,7 +28,7 @@ use embassy_rp::peripherals::{
     DMA_CH0, PIN_12, PIN_13, PIN_18, PIN_23, PIN_24, PIN_25, PIN_29, PIN_4, PIO0, UART0,
 };
 use embassy_rp::pio::{InterruptHandler as PioInterruptHandler, Pio, PioPin};
-use embassy_rp::uart::{InterruptHandler as UartInterruptHandler, Uart};
+use embassy_rp::uart::{BufferedInterruptHandler, InterruptHandler as UartInterruptHandler, Uart};
 use embassy_rp::{bind_interrupts, dma, pio, uart, Peripheral, Peripherals};
 use embassy_sync::blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex};
 use embassy_sync::channel;
@@ -74,7 +74,7 @@ mod mqtt;
 
 bind_interrupts!(struct Irqs {
     PIO0_IRQ_0 => PioInterruptHandler<PIO0>;
-    UART0_IRQ  => UartInterruptHandler<UART0>;
+    UART0_IRQ  => BufferedInterruptHandler<UART0>;
 });
 
 #[embassy_executor::task]
@@ -1013,7 +1013,15 @@ async fn mqtt_task(
     }
 
     //TODO cancel all tasks when client loses connection
-    join5(listen, talk, keep_alive, set_up, update_homeassistant()).await;
+    join5(
+        listen,
+        talk,
+        keep_alive,
+        set_up,
+        // Join because there is only a join with max 5 arguments 😬
+        join(update_homeassistant(), poll_sensors()),
+    )
+    .await;
 }
 
 /// This task handles inputs from physical buttons to change the fan speed
@@ -1166,7 +1174,16 @@ async fn main(spawner: Spawner) {
 
     // UART
 
-    let client = fan::Client::new(uart0, pin_12, pin_13, Irqs, dma_ch1, dma_ch2, pin_4);
+    /// Transmit buffer for UART
+    static TX_BUFFER: StaticCell<[u8; 16]> = StaticCell::new();
+    let tx_buffer = &mut TX_BUFFER.init([0; 16])[..];
+    /// Receive buffer for UART
+    static RX_BUFFER: StaticCell<[u8; 16]> = StaticCell::new();
+    let rx_buffer = &mut RX_BUFFER.init([0; 16])[..];
+
+    let client = fan::Client::new(
+        uart0, pin_12, pin_13, Irqs, dma_ch1, dma_ch2, pin_4, tx_buffer, rx_buffer,
+    );
     //TODO load fan setting from fan
     // Inner scope to drop the guard after assigning
     {
