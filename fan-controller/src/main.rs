@@ -7,7 +7,7 @@ use configuration::DISCOVERY_TOPIC;
 use core::convert::Infallible;
 use core::future::{poll_fn, Future};
 use core::num::NonZeroU16;
-use core::ops::{Deref, DerefMut, Sub};
+use core::ops::{Deref, DerefMut, Div, Sub};
 use core::pin::pin;
 use core::sync::atomic::AtomicBool;
 use core::task::Poll;
@@ -843,6 +843,7 @@ async fn mqtt_task(
         // unit_of_meas -> unit_of_measurement
         // Don't need to set speed_range_min because it is 1 by default
 
+        // Speed set to max 32000 which is 50% of what the fans can do but more is not needed. This way the fans last longer
         const DISCOVERY_PAYLOAD: &[u8] = br#"{
             "name": "Fans",
             "uniq_id": "fancontroller",
@@ -850,7 +851,7 @@ async fn mqtt_task(
             "cmd_t": "fancontroller/on/set",
             "pct_stat_t": "fancontroller/speed/percentage_state",
             "pct_cmd_t": "fancontroller/speed/percentage",
-            "spd_rng_max": 64000,
+            "spd_rng_max": 32000,
             "dev": {
                 "ids": "fancontroller-device",
                 "name": "Fan Controller",
@@ -1002,8 +1003,12 @@ async fn mqtt_task(
 
             let temperature = match fans.get_temperature(fan::Fan::One).await {
                 Ok(temperature) => temperature,
-                Err(TimeoutError) => {
+                Err(fan::Error::Timeout(TimeoutError)) => {
                     error!("Timeout getting temperature for fan 1");
+                    return;
+                }
+                Err(fan::Error::Uart(error)) => {
+                    error!("Uart error getting temperature for fan 1: {:?}", error);
                     return;
                 }
             };
@@ -1019,7 +1024,8 @@ async fn mqtt_task(
         keep_alive,
         set_up,
         // Join because there is only a join with max 5 arguments 😬
-        join(update_homeassistant(), poll_sensors()),
+        // join(update_homeassistant(), poll_sensors()),
+        update_homeassistant(),
     )
     .await;
 }
@@ -1063,10 +1069,11 @@ async fn input_task(pin_18: PIN_18) {
                 });
                 continue;
             }
-            // 10%
-            fan::State::Low => fan::MAX_SET_POINT / 10,
-            // 25%
-            fan::State::Medium => fan::MAX_SET_POINT / 4,
+            // Setting speeds based
+            // 64000 / 3.3
+            fan::State::Low => 19_393,
+            // 64000 / 2.4 =
+            fan::State::Medium => 26_666,
             // 50%
             fan::State::High => fan::MAX_SET_POINT / 2,
         };
@@ -1123,9 +1130,16 @@ async fn update_fans() {
             fan::Setting::ZERO
         };
 
-        if let Err(TimeoutError) = fans.set_set_point(&setting).await {
-            error!("Timeout setting fan speed from button press");
-            continue;
+        match fans.set_set_point(&setting).await {
+            Ok(_) => {}
+            Err(fan::Error::Timeout(TimeoutError)) => {
+                error!("Timeout setting fan speed");
+                continue;
+            }
+            Err(fan::Error::Uart(error)) => {
+                error!("Uart error setting fan speed: {:?}", error);
+                continue;
+            }
         }
     }
 }

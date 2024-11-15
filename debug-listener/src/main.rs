@@ -2,7 +2,8 @@ use serialport::{DataBits, Parity, SerialPort, StopBits};
 use std::time::Duration;
 
 // This might change depending on your system. Could put this in an environment variable
-const PORT_NAME: &str = "/dev/cu.usbserial-150";
+// const PORT_NAME: &str = "/dev/cu.usbserial-150";
+const PORT_NAME: &str = "/dev/cu.usbserial-1150";
 
 fn open_serial_port() -> serialport::Result<Box<dyn SerialPort>> {
     serialport::new(PORT_NAME, 19_200)

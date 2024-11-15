@@ -29,3 +29,72 @@ pub(super) const fn get_message_delay(baud_rate: u32) -> u64 {
     // Round up as it is better to wait longer than too short
     MICROSECONDS_FOR_BITS.div_ceil(baud_rate as u64)
 }
+
+pub(crate) trait Function {
+    const CODE: u8;
+}
+
+pub(crate) struct ReadInputRegister {
+    address: u16,
+    number_of_registers: u16,
+}
+
+impl ReadInputRegister {
+    pub(crate) fn new(address: u16, number_of_registers: u16) -> Self {
+        Self {
+            address,
+            number_of_registers,
+        }
+    }
+}
+
+impl Function for ReadInputRegister {
+    const CODE: u8 = function_code::READ_INPUT_REGISTER;
+}
+
+pub(crate) struct Message<F> {
+    address: u8,
+    function: F,
+}
+
+pub(crate) trait ToBytes<const LENGTH: usize> {
+    fn to_bytes(&self) -> [u8; LENGTH];
+}
+
+impl ToBytes<8> for Message<ReadInputRegister> {
+    fn to_bytes(&self) -> [u8; 8] {
+        let address_bytes = self.function.address.to_be_bytes();
+        let length_bytes = self.function.number_of_registers.to_be_bytes();
+        let mut buffer = [
+            // Device address
+            self.address,
+            // Modbus function code
+            self.code(),
+            // Starting address
+            address_bytes[0],
+            address_bytes[1],
+            // Number of registers to read
+            length_bytes[0],
+            length_bytes[1],
+            // CRC checksum (placeholder)
+            0,
+            0,
+        ];
+
+        let checksum = CRC.checksum(&buffer[..6]).to_be_bytes();
+        // They come out reversed (or is us using to_be_bytes reversed?)
+        buffer[6] = checksum[1];
+        buffer[7] = checksum[0];
+        buffer
+    }
+}
+
+impl<F: Function> Message<F> {
+    pub(crate) fn new(address: u8, function: F) -> Self {
+        Self { address, function }
+    }
+
+    const fn code(&self) -> u8 {
+        F::CODE
+    }
+}
