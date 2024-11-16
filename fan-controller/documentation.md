@@ -2,6 +2,11 @@
 
 Not all of the information but I hope to write down most of it.
 
+## Goal statement
+
+Create a fan controller that is reliable and low power to control the fans for our house.
+It has to be controllable manually through buttons or dials. Everything else like Homeassistant integration is optional. It is important that it works alone.
+
 ## Status LEDs
 
 The status LEDs indicate the fan speed.
@@ -24,3 +29,14 @@ The network name and passowrd is currently configured through environment variab
 After successfully joining the network it tries to look up Homeassistant under the `homeassistant` name and tries to connect to it.
 Homeassistant needs to have the MQTT broker installed as the controller uses MQTT to connect to homeassitant and send data between them.
 After successful connection to the MQTT broker, the controller sends a discovery packet as defined by Homeassistant and the device should appear in Homeassistant on the dashboard when using the default Homeassistant configuration.
+
+### Wiring
+
+(TODO) This section is planned to describe how the fan controller is wired up and how all the parts are connected to each other.
+Parts include:
+
+- Raspberry Pi Pico W
+- (optional) Raspberry Pi Pico as debug probe or the debug probe
+- Max485 to convert UART from the Pico to Modbus signal to send to the fans
+- status LEDs
+- control (button) to change fan speed manually on device without homeassitant
