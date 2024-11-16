@@ -44,24 +44,6 @@ impl Setting {
         Err(error) => panic!("Invalid value"),
     };
 
-    /// Max speed 64000 / 3.3
-    pub(crate) const LOW: Self = match Self::new(19_393) {
-        Ok(setting) => setting,
-        Err(error) => panic!("Invalid value"),
-    };
-    /// Max speed 64000 / 2.4
-    pub(crate) const MEDIUM: Self = match Self::new(26_666) {
-        Ok(setting) => setting,
-        Err(error) => panic!("Invalid value"),
-    };
-
-    /// Max speed 50%
-    /// Not set to full speed to not wear out the fans
-    pub(crate) const HIGH: Self = match Self::new(MAX_SET_POINT / 2) {
-        Ok(setting) => setting,
-        Err(error) => panic!("Invalid value"),
-    };
-
     pub(crate) const fn new(set_point: u16) -> Result<Self, SetPointOutOfBoundsError> {
         if set_point > MAX_SET_POINT {
             return Err(SetPointOutOfBoundsError);
@@ -73,6 +55,30 @@ impl Setting {
     const fn get(&self) -> u16 {
         self.0
     }
+}
+
+/// Settings specific to our use case for these fans. They are custom tuned to the house.
+/// For example, we don't run the fans at full speed to reduce wear on them
+pub(crate) mod user_setting {
+    use crate::fan;
+
+    /// Max speed 64000 / 3.3
+    pub(crate) const LOW: fan::Setting = match fan::Setting::new(19_393) {
+        Ok(setting) => setting,
+        Err(error) => panic!("Invalid value"),
+    };
+    /// Max speed 64000 / 2.4
+    pub(crate) const MEDIUM: fan::Setting = match fan::Setting::new(26_666) {
+        Ok(setting) => setting,
+        Err(error) => panic!("Invalid value"),
+    };
+
+    /// Max speed 50%
+    /// Not set to full speed to not wear out the fans
+    pub(crate) const HIGH: fan::Setting = match fan::Setting::new(fan::MAX_SET_POINT / 2) {
+        Ok(setting) => setting,
+        Err(error) => panic!("Invalid value"),
+    };
 }
 
 #[derive(Default, Format, Debug)]

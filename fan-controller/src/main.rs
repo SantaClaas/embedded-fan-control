@@ -1073,11 +1073,11 @@ async fn input_task(pin_18: PIN_18) {
             }
             // Setting speeds based
             // 64000 / 3.3
-            fan::State::Low => fan::Setting::LOW,
+            fan::State::Low => fan::user_setting::LOW,
             // 64000 / 2.4 =
-            fan::State::Medium => fan::Setting::MEDIUM,
+            fan::State::Medium => fan::user_setting::MEDIUM,
             // 50%
-            fan::State::High => fan::Setting::HIGH,
+            fan::State::High => fan::user_setting::HIGH,
         };
 
         // Optimistically update setting
