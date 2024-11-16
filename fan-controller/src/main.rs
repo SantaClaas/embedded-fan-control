@@ -1181,6 +1181,14 @@ async fn display_status(pin_21: PIN_21, pin_20: PIN_20) {
     let mut led_1 = Output::new(pin_21, Level::Low);
     let mut led_2 = Output::new(pin_20, Level::Low);
 
+    // Flash LEDs for a second to check if they are working
+    // This needs to handle all LEDs so they flash at the same time. Because an Output can't be turned back into its pin to be passed around.
+    led_1.set_high();
+    led_2.set_high();
+    Timer::after_secs(1).await;
+    led_1.set_low();
+    led_2.set_low();
+
     let Some(mut receiver) = FAN_STATE.receiver() else {
         // Not using asserts because they are hard to debug on embedded where it crashed
         error!("No receiver for fan is on state. This should never happen.");
