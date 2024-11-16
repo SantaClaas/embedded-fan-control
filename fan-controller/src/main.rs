@@ -1040,12 +1040,13 @@ async fn input_task(pin_18: PIN_18) {
     let mut fan_state = fan::State::default();
     let sender = FAN_STATE.sender();
 
-    //TODO debounce
     loop {
         // Falling edge for our button -> button down (pressing down
         // Rising edge for our button -> button up (letting go after press)
         // Act on press as there is delay between pressing and letting go and it feels snappier
         button.wait_for_falling_edge().await;
+        // Record time of button press for naive debounce
+        let start = Instant::now();
 
         // Advance to next fan state
         // Could make this a state machine with phantom data, but chose not to as long as it is this simple
@@ -1089,6 +1090,13 @@ async fn input_task(pin_18: PIN_18) {
             setting,
             is_on: true,
         });
+
+        // Naive debounce. Just allow a button press every 250ms and ignore any other signal in that time
+        let time_passed = Instant::now() - start;
+        const DEBUNCE: Duration = Duration::from_millis(250);
+        if time_passed < DEBUNCE {
+            Timer::after(DEBUNCE - time_passed).await;
+        }
     }
 }
 /// Update fans whenenver the fan setting or on state changes
