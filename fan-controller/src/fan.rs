@@ -39,7 +39,29 @@ pub(crate) struct Setting(pub(crate) u16);
 pub(crate) struct SetPointOutOfBoundsError;
 
 impl Setting {
-    pub(crate) const ZERO: Self = Self(0);
+    pub(crate) const ZERO: Self = match Self::new(0) {
+        Ok(setting) => setting,
+        Err(error) => panic!("Invalid value"),
+    };
+
+    /// Max speed 64000 / 3.3
+    pub(crate) const LOW: Self = match Self::new(19_393) {
+        Ok(setting) => setting,
+        Err(error) => panic!("Invalid value"),
+    };
+    /// Max speed 64000 / 2.4
+    pub(crate) const MEDIUM: Self = match Self::new(26_666) {
+        Ok(setting) => setting,
+        Err(error) => panic!("Invalid value"),
+    };
+
+    /// Max speed 50%
+    /// Not set to full speed to not wear out the fans
+    pub(crate) const HIGH: Self = match Self::new(MAX_SET_POINT / 2) {
+        Ok(setting) => setting,
+        Err(error) => panic!("Invalid value"),
+    };
+
     pub(crate) const fn new(set_point: u16) -> Result<Self, SetPointOutOfBoundsError> {
         if set_point > MAX_SET_POINT {
             return Err(SetPointOutOfBoundsError);

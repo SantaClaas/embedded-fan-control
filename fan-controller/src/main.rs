@@ -25,7 +25,8 @@ use embassy_net::{tcp, Config, IpAddress, IpEndpoint, Stack, StackResources};
 use embassy_rp::clocks::RoscRng;
 use embassy_rp::gpio::{Input, Level, Output, Pin, Pull};
 use embassy_rp::peripherals::{
-    DMA_CH0, PIN_12, PIN_13, PIN_18, PIN_23, PIN_24, PIN_25, PIN_29, PIN_4, PIO0, UART0,
+    DMA_CH0, PIN_12, PIN_13, PIN_18, PIN_20, PIN_21, PIN_23, PIN_24, PIN_25, PIN_29, PIN_4, PIO0,
+    UART0,
 };
 use embassy_rp::pio::{InterruptHandler as PioInterruptHandler, Pio, PioPin};
 use embassy_rp::uart::{BufferedInterruptHandler, InterruptHandler as UartInterruptHandler, Uart};
@@ -1058,7 +1059,7 @@ async fn input_task(pin_18: PIN_18) {
         };
 
         // Setting values low on purpose for testing
-        let set_point = match fan_state {
+        let setting = match fan_state {
             fan::State::Off => {
                 let setting = FAN_STATE
                     .try_get()
@@ -1072,17 +1073,11 @@ async fn input_task(pin_18: PIN_18) {
             }
             // Setting speeds based
             // 64000 / 3.3
-            fan::State::Low => 19_393,
+            fan::State::Low => fan::Setting::LOW,
             // 64000 / 2.4 =
-            fan::State::Medium => 26_666,
+            fan::State::Medium => fan::Setting::MEDIUM,
             // 50%
-            fan::State::High => fan::MAX_SET_POINT / 2,
-        };
-
-        // Send signal to change fan speed
-        let Ok(setting) = fan::Setting::new(set_point) else {
-            warn!("Setting fan speed out of bounds. Not accepting new setting");
-            continue;
+            fan::State::High => fan::Setting::HIGH,
         };
 
         // Optimistically update setting
@@ -1103,7 +1098,7 @@ async fn input_task(pin_18: PIN_18) {
 #[embassy_executor::task]
 async fn update_fans() {
     let Some(mut receiver) = FAN_STATE.receiver() else {
-        // Not using asserts because they are hard to debug on embedded
+        // Not using asserts because they are hard to debug on embedded where it crashed
         error!("No receiver for fan is on state. This should never happen.");
         return;
     };
@@ -1173,7 +1168,26 @@ struct FanState {
 /// Receivers:
 /// - Fan
 /// - MQTT (client to server)
-static FAN_STATE: Watch<CriticalSectionRawMutex, FanState, 2> = Watch::new();
+static FAN_STATE: Watch<CriticalSectionRawMutex, FanState, 3> = Watch::new();
+
+/// Displays fan status with 2 LEDs:
+/// Off Off -> Fans Off
+/// On Off -> Fan on low setting
+/// Off On -> Fan on medium setting
+/// On On -> Fan on high setting
+#[embassy_executor::task]
+async fn display_status(pin_21: PIN_21, pin_20: PIN_20) {
+    let Some(mut receiver) = FAN_STATE.receiver() else {
+        // Not using asserts because they are hard to debug on embedded where it crashed
+        error!("No receiver for fan is on state. This should never happen.");
+        return;
+    };
+
+    let mut previous = FAN_STATE.try_get().unwrap_or(FanState {
+        is_on: false,
+        setting: fan::Setting::ZERO,
+    });
+}
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
