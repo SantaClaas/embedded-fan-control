@@ -1,0 +1,12 @@
+[package]
+name = "mqtt"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+thiserror = "1.0.63"
+tokio = { version = "1.39.1", features = ["full"] }
+tokio-rustls = "0.26.0"
+webpki-roots = "0.26.3"
+bytes = "1.6.1"
+dotenvy = "0.15.7"
