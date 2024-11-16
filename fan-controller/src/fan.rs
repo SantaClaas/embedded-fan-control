@@ -32,7 +32,7 @@ const BLOCK_FOR: Duration = Duration::from_micros(5_000);
 
 pub(crate) const MAX_SET_POINT: u16 = 64_000;
 
-#[derive(Debug, Format, Clone, Copy, PartialEq)]
+#[derive(Debug, Format, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct Setting(pub(crate) u16);
 
 #[derive(Debug, Format)]

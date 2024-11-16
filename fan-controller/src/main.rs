@@ -1177,16 +1177,49 @@ static FAN_STATE: Watch<CriticalSectionRawMutex, FanState, 3> = Watch::new();
 /// On On -> Fan on high setting
 #[embassy_executor::task]
 async fn display_status(pin_21: PIN_21, pin_20: PIN_20) {
+    // Setup LEDs
+    let mut led_1 = Output::new(pin_21, Level::Low);
+    let mut led_2 = Output::new(pin_20, Level::Low);
+
     let Some(mut receiver) = FAN_STATE.receiver() else {
         // Not using asserts because they are hard to debug on embedded where it crashed
         error!("No receiver for fan is on state. This should never happen.");
         return;
     };
 
-    let mut previous = FAN_STATE.try_get().unwrap_or(FanState {
+    // Set initial state
+    let mut current_state = FAN_STATE.try_get().unwrap_or(FanState {
         is_on: false,
         setting: fan::Setting::ZERO,
     });
+
+    loop {
+        let led_state = match current_state {
+            FanState {
+                is_on: false,
+                setting: _,
+            } => (Level::Low, Level::Low),
+            FanState {
+                is_on: true,
+                setting,
+            } => {
+                if setting >= fan::user_setting::HIGH {
+                    (Level::High, Level::High)
+                } else if setting >= fan::user_setting::MEDIUM {
+                    (Level::Low, Level::High)
+                } else {
+                    // (Low and lower than Low)
+                    (Level::High, Level::Low)
+                }
+            }
+        };
+
+        led_1.set_level(led_state.0);
+        led_2.set_level(led_state.1);
+
+        // Wait for state update
+        current_state = receiver.changed().await;
+    }
 }
 
 #[embassy_executor::main]
@@ -1205,6 +1238,9 @@ async fn main(spawner: Spawner) {
         PIN_12: pin_12,
         PIN_13: pin_13,
         PIN_18: pin_18,
+        // Status LEDs
+        PIN_20: pin_20,
+        PIN_21: pin_21,
         ..
     } = embassy_rp::init(Default::default());
 
@@ -1234,6 +1270,7 @@ async fn main(spawner: Spawner) {
     unwrap!(spawner.spawn(mqtt_task(
         spawner, pin_23, pin_25, pio0, dma_ch0, pin_24, pin_29
     )));
+    unwrap!(spawner.spawn(display_status(pin_21, pin_20)));
 }
 
 #[cfg(test)]
