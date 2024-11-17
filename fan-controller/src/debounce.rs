@@ -1,9 +1,10 @@
 use embassy_rp::gpio::{Input, Level, Pin};
 use embassy_time::{with_timeout, Duration, TimeoutError, Timer};
 
-///! Debouncer from Embassy examples https://github.com/embassy-rs/embassy/blob/8d8cd78f634b2f435e3a997f7f8f3ac0b8ca300c/examples/rp/src/bin/debounce.rs
-///! Licensed MIT/Apache-2.0
-/// Extended with debounce for falling edge
+/// Debouncer based on [Embassy debounce example](https://github.com/embassy-rs/embassy/blob/8d8cd78f634b2f435e3a997f7f8f3ac0b8ca300c/examples/rp/src/bin/debounce.rs)
+/// (Licensed MIT/Apache-2.0)
+/// and extended with debounce for falling edge
+///
 pub struct Debouncer<'a, T: Pin> {
     input: Input<'a, T>,
     debounce: Duration,
