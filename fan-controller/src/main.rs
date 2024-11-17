@@ -15,6 +15,7 @@ use cortex_m::interrupt::CriticalSection;
 use crc::{Crc, CRC_16_MODBUS};
 use cyw43::{Control, NetDriver};
 use cyw43_pio::PioSpi;
+use debounce::Debouncer;
 use defmt::*;
 use embassy_executor::Spawner;
 use embassy_futures::join::{join, join3, join5};
@@ -69,6 +70,7 @@ use crate::mqtt::TryEncode;
 
 mod async_callback;
 mod configuration;
+mod debounce;
 mod fan;
 mod modbus;
 mod mqtt;
@@ -1036,7 +1038,7 @@ async fn mqtt_task(
 async fn input_task(pin_18: PIN_18) {
     // The button just rotates through fan settings. This is because we currently only have one button
     // Will probably use something more advanced in the future
-    let mut button = Input::new(pin_18, Pull::Up);
+    let mut button = Debouncer::new(Input::new(pin_18, Pull::Up), Duration::from_millis(250));
 
     let mut fan_state = fan::State::default();
     let sender = FAN_STATE.sender();
@@ -1045,7 +1047,7 @@ async fn input_task(pin_18: PIN_18) {
         // Falling edge for our button -> button down (pressing down
         // Rising edge for our button -> button up (letting go after press)
         // Act on press as there is delay between pressing and letting go and it feels snappier
-        button.wait_for_falling_edge().await;
+        button.debounce_falling_edge().await;
         info!("Button pressed");
         // Record time of button press for naive debounce
         let start = Instant::now();
@@ -1087,13 +1089,6 @@ async fn input_task(pin_18: PIN_18) {
 
         // Optimistically update setting
         sender.send(state);
-
-        // Naive debounce. Just allow a button press every 250ms and ignore any other signal in that time
-        let time_passed = Instant::now() - start;
-        const DEBUNCE: Duration = Duration::from_millis(250);
-        if time_passed < DEBUNCE {
-            Timer::after(DEBUNCE - time_passed).await;
-        }
     }
 }
 /// Update fans whenenver the fan setting or on state changes
@@ -1112,6 +1107,8 @@ async fn update_fans() {
     });
 
     loop {
+        // This is expected to always provide the latest value.
+        // Even if it had multiple updates while this loop was throttled
         let state = receiver.changed().await;
 
         if state == previous {
@@ -1146,6 +1143,9 @@ async fn update_fans() {
                 continue;
             }
         }
+
+        // Throttle updates send to the fans
+        Timer::after_millis(500).await;
     }
 }
 
