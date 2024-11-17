@@ -1109,11 +1109,7 @@ async fn update_fans() {
     loop {
         // This is expected to always provide the latest value.
         // Even if it had multiple updates while this loop was throttled
-        let state = receiver.changed().await;
-
-        if state == previous {
-            continue;
-        }
+        let state = receiver.changed_and(|new| *new != previous).await;
 
         // Update previous before continue
         previous = state.clone();
