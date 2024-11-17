@@ -1219,6 +1219,11 @@ async fn display_status(pin_21: PIN_21, pin_20: PIN_20) {
             }
         };
 
+        info!(
+            "Setting status LEDs to {}, {}",
+            led_state.0 == Level::High,
+            led_state.1 == Level::High
+        );
         led_1.set_level(led_state.0);
         led_2.set_level(led_state.1);
 
