@@ -1046,6 +1046,7 @@ async fn input_task(pin_18: PIN_18) {
         // Rising edge for our button -> button up (letting go after press)
         // Act on press as there is delay between pressing and letting go and it feels snappier
         button.wait_for_falling_edge().await;
+        info!("Button pressed");
         // Record time of button press for naive debounce
         let start = Instant::now();
 
@@ -1059,32 +1060,33 @@ async fn input_task(pin_18: PIN_18) {
         };
 
         // Setting values low on purpose for testing
-        let setting = match fan_state {
+        let state = match fan_state {
             fan::State::Off => {
                 let setting = FAN_STATE
                     .try_get()
                     .map(|state| state.setting)
                     .unwrap_or(fan::Setting::ZERO);
-                sender.send(FanState {
+                FanState {
                     setting,
                     is_on: false,
-                });
-                continue;
+                }
             }
-            // Setting speeds based
-            // 64000 / 3.3
-            fan::State::Low => fan::user_setting::LOW,
-            // 64000 / 2.4 =
-            fan::State::Medium => fan::user_setting::MEDIUM,
-            // 50%
-            fan::State::High => fan::user_setting::HIGH,
+            fan::State::Low => FanState {
+                setting: fan::user_setting::LOW,
+                is_on: true,
+            },
+            fan::State::Medium => FanState {
+                setting: fan::user_setting::MEDIUM,
+                is_on: true,
+            },
+            fan::State::High => FanState {
+                setting: fan::user_setting::HIGH,
+                is_on: true,
+            },
         };
 
         // Optimistically update setting
-        sender.send(FanState {
-            setting,
-            is_on: true,
-        });
+        sender.send(state);
 
         // Naive debounce. Just allow a button press every 250ms and ignore any other signal in that time
         let time_passed = Instant::now() - start;
@@ -1211,13 +1213,12 @@ async fn display_status(pin_21: PIN_21, pin_20: PIN_20) {
                 is_on: true,
                 setting,
             } => {
-                if setting >= fan::user_setting::HIGH {
-                    (Level::High, Level::High)
-                } else if setting >= fan::user_setting::MEDIUM {
+                if setting <= fan::user_setting::LOW {
+                    (Level::High, Level::Low)
+                } else if setting <= fan::user_setting::MEDIUM {
                     (Level::Low, Level::High)
                 } else {
-                    // (Low and lower than Low)
-                    (Level::High, Level::Low)
+                    (Level::High, Level::High)
                 }
             }
         };
