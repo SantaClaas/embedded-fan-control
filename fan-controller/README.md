@@ -13,6 +13,7 @@ install [probe.rs](https://probe.rs) `cargo run`
 - [ ] Make Button press pick up state that was changed through Homeassistant and not keep its own fan state
 - [ ] Read temperature sensors
 - [ ] Switch to only using refactored send for modbus
+- [ ] Stop ignoring warnings and clean up code 😬
 
 ## Aspirational TODOs
 

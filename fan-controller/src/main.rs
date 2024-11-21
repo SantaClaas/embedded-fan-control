@@ -5,10 +5,12 @@
 
 use configuration::DISCOVERY_TOPIC;
 use core::convert::Infallible;
+use core::fmt::Error;
 use core::future::{poll_fn, Future};
 use core::num::NonZeroU16;
 use core::ops::{Deref, DerefMut, Div, Sub};
 use core::pin::pin;
+use core::str::{self, from_utf8, Utf8Error};
 use core::sync::atomic::AtomicBool;
 use core::task::Poll;
 use cortex_m::interrupt::CriticalSection;
@@ -18,16 +20,19 @@ use cyw43_pio::PioSpi;
 use debounce::Debouncer;
 use defmt::*;
 use embassy_executor::Spawner;
-use embassy_futures::join::{join, join3, join5};
+use embassy_futures::join::{join, join3, join5, Join};
 use embassy_net::dns::{DnsQueryType, DnsSocket};
+use embassy_net::driver::Driver;
 use embassy_net::tcp::client::{TcpClient, TcpClientState};
 use embassy_net::tcp::{TcpReader, TcpSocket, TcpWriter};
+use embassy_net::udp::PacketMetadata;
 use embassy_net::{tcp, Config, IpAddress, IpEndpoint, Stack, StackResources};
 use embassy_rp::clocks::RoscRng;
+use embassy_rp::flash::{Async, Flash};
 use embassy_rp::gpio::{Input, Level, Output, Pin, Pull};
 use embassy_rp::peripherals::{
-    DMA_CH0, PIN_12, PIN_13, PIN_18, PIN_20, PIN_21, PIN_23, PIN_24, PIN_25, PIN_29, PIN_4, PIO0,
-    UART0,
+    DMA_CH0, FLASH, PIN_12, PIN_13, PIN_18, PIN_20, PIN_21, PIN_23, PIN_24, PIN_25, PIN_29, PIN_4,
+    PIO0, UART0,
 };
 use embassy_rp::pio::{InterruptHandler as PioInterruptHandler, Pio, PioPin};
 use embassy_rp::uart::{BufferedInterruptHandler, InterruptHandler as UartInterruptHandler, Uart};
@@ -48,6 +53,7 @@ use mqtt::{Encode, TryDecode};
 use rand::RngCore;
 use reqwless::client::{TlsConfig, TlsVerify};
 use static_cell::StaticCell;
+use storage::{Ssid, Storage, WifiPassword};
 
 use {defmt_rtt as _, panic_probe as _};
 
@@ -71,9 +77,12 @@ use crate::mqtt::TryEncode;
 mod async_callback;
 mod configuration;
 mod debounce;
+mod dhcp;
 mod fan;
 mod modbus;
 mod mqtt;
+mod storage;
+mod wifi;
 
 bind_interrupts!(struct Irqs {
     PIO0_IRQ_0 => PioInterruptHandler<PIO0>;
@@ -1232,13 +1241,22 @@ async fn display_status(pin_21: PIN_21, pin_20: PIN_20) {
     }
 }
 
+// #[embassy_executor::task]
+// async fn
+
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
+    // Glossary:
+    // DMA: Direct Memory Access
+    // PIO: Programmable Input/Output
+    // UART: Universal Asynchronous Receiver/Transmitter
+    // SPI: Serial Peripheral Interface
+    // I2C: Inter-Integrated Circuit
+    // GPIO: General Purpose Input/Output
     let Peripherals {
         PIN_23: pin_23,
         PIN_25: pin_25,
         PIO0: pio0,
-        DMA_CH0: dma_ch0,
         DMA_CH1: dma_ch1,
         DMA_CH2: dma_ch2,
         PIN_24: pin_24,
@@ -1251,6 +1269,9 @@ async fn main(spawner: Spawner) {
         // Status LEDs
         PIN_20: pin_20,
         PIN_21: pin_21,
+        // Persistent flash storage to store configuration
+        FLASH: flash,
+        DMA_CH0: dma_ch0,
         ..
     } = embassy_rp::init(Default::default());
 
@@ -1275,12 +1296,245 @@ async fn main(spawner: Spawner) {
     // Button input task waits for button presses and send according signals to the modbus task
     unwrap!(spawner.spawn(input_task(pin_18)));
     unwrap!(spawner.spawn(update_fans()));
+    unwrap!(spawner.spawn(display_status(pin_21, pin_20)));
+
+    //TODO enable MQTT task when wifi is set up. Otherwise run as access point and host a web interface to configure wifi
+
+    // Read wifi credentials from flash storage
+    // Baseed on https://github.com/embassy-rs/embassy/blob/8d8cd78f634b2f435e3a997f7f8f3ac0b8ca300c/examples/rp/src/bin/flash.rs
+    // And https://github.com/tweedegolf/sequential-storage/blob/b6f7da77b7f3d66bc1ac36992a6a7b399b5ba030/example/src/main.rs
+
+    // Add some delay to give an attached debug probe time to parse the
+    // defmt RTT header. Reading that header might touch flash memory, which
+    // interferes with flash write operations.
+    // https://github.com/knurling-rs/defmt/pull/683
+    Timer::after_millis(10).await;
+
+    info!("Reading from flash");
+    // let mut storage = Storage::new(flash, dma_ch0);
+    // let wifi_ssid = storage.read_wifi_ssid().await;
+    // match wifi_ssid {
+    //     Ok(wifi_ssid) => {
+    //         info!("WiFi SSID: {}", wifi_ssid);
+    //     }
+    //     Err(error) => {
+    //         error!("Error reading WiFi SSID from flash");
+    //         match error {
+    //             storage::Error::FlashError(error) => {
+    //                 info!("Flash error: {:?}", defmt::Debug2Format(&error))
+    //             }
+
+    //             storage::Error::Utf8Error(utf8_error) => {
+    //                 info!("UTF8 error: {:?}", defmt::Debug2Format(&utf8_error))
+    //             }
+    //         }
+    //     }
+    // }
+    // storage.write();
+    let mut storage = Storage::create(flash).await.unwrap();
+
+    info!("Reading SSID from flash storage");
+    let ssid: Option<Ssid> = match storage.get().await {
+        Ok(ssid) => Some(ssid),
+        Err(ekv::ReadError::KeyNotFound) => {
+            info!("No SSID found");
+            None
+        }
+        Err(error) => {
+            // We can't stop the device as base functionality should still work
+            error!("Error reading SSID from flash {:?}", error);
+            None
+        }
+    };
+
+    info!("Reading wifi password from flash storage");
+    let password: Option<WifiPassword> = match storage.get().await {
+        Ok(password) => Some(password),
+        Err(ekv::ReadError::KeyNotFound) => {
+            info!("No password found");
+            None
+        }
+        Err(error) => {
+            // We can't stop the device as base functionality should still work
+            error!("Error reading password from flash {:?}", error);
+            None
+        }
+    };
+    info!("got from flash");
+
+    let (net_device, mut control) =
+        gain_control(spawner, pin_23, pin_25, pio0, dma_ch0, pin_24, pin_29).await;
+
+    //TODO limit retries until we go back into configuration mode
+
+    //TODO read mac from stack
+    //TODO read id from flash
+
+    // If we have at least an SSID, we can attempt to connect to WiFi
+    if let Some(ssid) = ssid {
+        if let Err(error) = wifi::join_wifi(&mut control, ssid, password).await {
+            // Create wifi network and host web server to configure wifi
+
+            // Need to probably use link local addresses
+            let configuration = embassy_net::StaticConfigV4 {
+                address: embassy_net::Ipv4Cidr::new(
+                    embassy_net::Ipv4Address::new(192, 168, 178, 1),
+                    24,
+                ),
+                gateway: Some(embassy_net::Ipv4Address::new(192, 168, 178, 1)),
+                // gateway: None,
+                dns_servers: heapless::Vec::new(),
+            };
+            // let configuration = embassy_net::StaticConfigV4 {
+            //     address: embassy_net::Ipv4Cidr::new(
+            //         embassy_net::Ipv4Address::new(169, 254, 1, 1),
+            //         16,
+            //     ),
+            //     dns_servers: heapless::Vec::new(),
+            //     gateway: None,
+            // };
+
+            let configuration = Config::ipv4_static(configuration);
+
+            // Idk where the channel 5 comes from
+            control.start_ap_open("fancontroller", 5).await;
+
+            // Stack
+            let mut random = RoscRng;
+            let seed = random.next_u64();
+            // Initialize network stack
+            static RESOURCES: StaticCell<StackResources<3>> = StaticCell::new();
+
+            static STACK: StaticCell<Stack<NetDriver<'static>>> = StaticCell::new();
+            let stack = &*STACK.init(Stack::new(
+                net_device,
+                configuration,
+                RESOURCES.init(StackResources::<3>::new()),
+                seed,
+            ));
+
+            unwrap!(spawner.spawn(network_task(stack)));
+            // Use it
+            // Try out DHCP
+
+            let mut transmit_buffer = [0; 4096];
+            let mut receive_buffer = [0; 4096];
+            let mut buffer = [0; 4096];
+            let mut transmit_meta = [PacketMetadata::EMPTY; 16];
+            let mut receive_meta = [PacketMetadata::EMPTY; 16];
+
+            loop {
+                let mut socket = embassy_net::udp::UdpSocket::new(
+                    stack,
+                    &mut receive_meta,
+                    &mut receive_buffer,
+                    &mut transmit_meta,
+                    &mut transmit_buffer,
+                );
+
+                info!("Binding UDP socket");
+                let result = socket.bind(67);
+                if let Err(error) = result {
+                    error!("Failed to bind to port 67: {:?}", error);
+                    Timer::after_secs(10).await;
+                    continue;
+                }
+
+                // Listen for incoming packets
+                loop {
+                    info!("Waiting for receive");
+                    let (bytes_read, meta_data) = match socket.recv_from(&mut buffer).await {
+                        Ok(result) => result,
+                        Err(error) => {
+                            error!("Failed to receive packet: {:?}", error);
+                            Timer::after_secs(10).await;
+                            continue;
+                        }
+                    };
+
+                    info!("Received UDP packet {:x}", &buffer[..bytes_read]);
+                    match dhcp::Packet::try_decode(&buffer[..bytes_read]) {
+                        Ok(packet) => info!("Received DHCP packet: {:#?}", packet),
+                        Err(error) => error!("Error decoding DHCP packet: {:#?}", error),
+                    }
+
+                    if let Ok(string) = core::str::from_utf8(&buffer[..bytes_read]) {
+                        info!("Received UDP packet: {}", string);
+                    }
+                }
+            }
+
+            let mut transmit_buffer = [0; 4096];
+            let mut receive_buffer = [0; 4096];
+            let mut buffer = [0; 4096];
+
+            loop {
+                let mut socket = TcpSocket::new(stack, &mut receive_buffer, &mut transmit_buffer);
+                socket.set_timeout(Some(Duration::from_secs(10)));
+
+                control.gpio_set(0, false).await;
+                info!("Listening on TCP:1234...");
+                if let Err(e) = socket.accept(1234).await {
+                    warn!("accept error: {:?}", e);
+                    continue;
+                }
+
+                info!("Received connection from {:?}", socket.remote_endpoint());
+                control.gpio_set(0, true).await;
+
+                loop {
+                    let n = match socket.read(&mut buffer).await {
+                        Ok(0) => {
+                            warn!("read EOF");
+                            break;
+                        }
+                        Ok(n) => n,
+                        Err(e) => {
+                            warn!("read error: {:?}", e);
+                            break;
+                        }
+                    };
+
+                    info!("rxd {}", from_utf8(&buffer[..n]).unwrap());
+
+                    const HTTP_RESPONSE: &[u8] = b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n<html><body><h1>Hello World!</h1></body></html>";
+
+                    match socket.write_all(&HTTP_RESPONSE).await {
+                        Ok(()) => {}
+                        Err(error) => {
+                            warn!("write error: {:?}", error);
+                            break;
+                        }
+                    };
+                }
+            }
+        }
+    }
+
+    // match ssid.map(|ssid| ssid.try_into_string()) {
+    //     Some(Ok(ssid)) => match password.map(|password| password.try_into_string()) {
+    //         Some(Ok(passowrd)) => {
+    //             let result = control.join_wpa2(ssid, passowrd).await;
+    //         }
+    //         Some(Err(core::str::Utf8Error { .. })) => {
+    //             warn!("Stored WiFi password is not valid string");
+    //         }
+    //         None => {}
+    //     },
+    //     Some(Err(core::str::Utf8Error { .. })) => {
+    //         warn!("Stored WiFi SSID is not valid string");
+    //     }
+    //     None => {}
+    // }
+
+    // If no wifi credentials are found, run as access point and host a web interface to configure wifi
+    //TODO implement reset button to reset device to "factory" settings and allow reconfiguation
+
     // The MQTT task waits for publishes from MQTT and sends them to the modbus task.
     // It also sends updates from the modbus task that happen through button inputs to MQTT
-    unwrap!(spawner.spawn(mqtt_task(
-        spawner, pin_23, pin_25, pio0, dma_ch0, pin_24, pin_29
-    )));
-    unwrap!(spawner.spawn(display_status(pin_21, pin_20)));
+    // unwrap!(spawner.spawn(mqtt_task(
+    //     spawner, pin_23, pin_25, pio0, dma_ch0, pin_24, pin_29
+    // )));
 }
 
 #[cfg(test)]

@@ -1,3 +1,13 @@
 [workspace]
-members = ["debug-listener", "exponential_distribution", "fan-controller", "mqtt", ]
+members = [
+    "debug-listener",
+    "exponential_distribution",
+    "fan-controller",
+    "mqtt",
+]
 resolver = "2"
+
+# Patch to trick ekv into using a newer version of embassy-sync because we need the new watch feature
+# Patch only works at the workspace root level
+[patch.crates-io]
+embassy-sync = { git = "https://github.com/embassy-rs/embassy.git", package = "embassy-sync", rev = "b31648f2e59a68748e1c0f1408d1658a2e5e6a08" }
