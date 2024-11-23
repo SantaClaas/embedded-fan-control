@@ -20,7 +20,7 @@ pub(crate) enum ReplyType {
     Broadcast = 0x01,
 }
 
-#[derive(Debug, Format)]
+#[derive(Debug, Format, Clone, Copy)]
 pub(crate) enum DhcpMessageType {
     Discover = 1,
     Offer = 2,
@@ -74,8 +74,9 @@ pub(crate) struct Options<'a> {
     pub(crate) router: Option<Ipv4Address>,
     // Option 51
     pub(crate) address_time: Option<u32>,
-    pub(crate) host_name: Option<MaybeString<'a>>,
+    // Option 53
     pub(crate) message_type: Option<DhcpMessageType>,
+    pub(crate) host_name: Option<MaybeString<'a>>,
     pub(crate) parameter_request_list: Option<&'a [u8]>,
     pub(crate) maximum_dhcp_message_size: Option<u16>,
     pub(crate) vendor_class_identifier: Option<MaybeString<'a>>,
@@ -86,7 +87,49 @@ pub(crate) struct Options<'a> {
 
 impl Encode for Options<'_> {
     fn encode(&self, buffer: &mut [u8], offset: &mut usize) {
-        todo!()
+        if let Some(message_type) = self.message_type {
+            // Option code
+            buffer[*offset] = 53;
+            *offset += 1;
+            // Option length
+            buffer[*offset] = 1;
+            *offset += 1;
+            buffer[*offset] = message_type as u8;
+            *offset += 1;
+        }
+
+        if let Some(subnet_mask) = self.subnet_mask {
+            // Option code
+            buffer[*offset] = 1;
+            // Option length
+            buffer[*offset] = 4;
+
+            buffer[*offset..*offset + 4].copy_from_slice(&subnet_mask.0);
+            *offset += 4;
+        }
+
+        if let Some(router) = self.router {
+            // Option code
+            buffer[*offset] = 3;
+
+            // Option length
+            buffer[*offset] = 4;
+
+            buffer[*offset..*offset + 4].copy_from_slice(&router.0);
+            *offset += 4;
+        }
+
+        if let Some(address_time) = self.address_time {
+            // Option code
+            buffer[*offset] = 51;
+            // Option length
+            buffer[*offset] = 4;
+
+            buffer[*offset..*offset + 4].copy_from_slice(&address_time.to_be_bytes());
+            *offset += 4;
+        }
+
+        //TODO domain name server
     }
 }
 
@@ -316,7 +359,9 @@ impl<'a> Packet<'a> {
             options,
         })
     }
+}
 
+impl Encode for Packet<'_> {
     fn encode(&self, buffer: &mut [u8], offset: &mut usize) {
         buffer[*offset] = match self.option {
             MessageType::Request => 0,

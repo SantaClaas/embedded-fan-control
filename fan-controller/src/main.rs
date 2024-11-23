@@ -5,7 +5,7 @@ use core::future::poll_fn;
 use core::num::NonZeroU16;
 use core::ops::DerefMut;
 use core::str::{self, from_utf8};
-use core::task::Poll;
+use core::task::{Context, Poll};
 use cyw43::{Control, NetDriver};
 use cyw43_pio::PioSpi;
 use debounce::Debouncer;
@@ -17,7 +17,7 @@ use embassy_net::dns::{DnsQueryType, DnsSocket};
 use embassy_net::driver::Driver;
 use embassy_net::tcp::{TcpReader, TcpSocket, TcpWriter};
 use embassy_net::udp::PacketMetadata;
-use embassy_net::{tcp, Config, IpEndpoint, Ipv4Address, Stack, StackResources};
+use embassy_net::{tcp, Config, EthernetAddress, IpEndpoint, Ipv4Address, Stack, StackResources};
 use embassy_rp::clocks::RoscRng;
 use embassy_rp::gpio::{Input, Level, Output, Pull};
 use embassy_rp::peripherals::{
@@ -25,6 +25,7 @@ use embassy_rp::peripherals::{
 };
 use embassy_rp::pio::{InterruptHandler as PioInterruptHandler, Pio, PioPin};
 use embassy_rp::uart::BufferedInterruptHandler;
+use embassy_rp::usb::Endpoint;
 use embassy_rp::{bind_interrupts, Peripherals};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
@@ -36,7 +37,7 @@ use embassy_sync::watch::Watch;
 use embassy_time::{with_deadline, with_timeout, Duration, Instant, TimeoutError, Timer};
 use embedded_io_async::{Read, Write};
 use embedded_nal_async::TcpConnect;
-use encoding::TryDecode;
+use encoding::{Encode, TryDecode};
 use mqtt::packet::disconnect::Disconnect;
 use rand::RngCore;
 use static_cell::StaticCell;
@@ -1346,7 +1347,7 @@ async fn main(spawner: Spawner) {
     };
     info!("got from flash");
 
-    let (net_device, mut control) =
+    let (mut net_device, mut control) =
         gain_control(spawner, pin_23, pin_25, pio0, dma_ch0, pin_24, pin_29).await;
 
     //TODO limit retries until we go back into configuration mode
@@ -1380,6 +1381,56 @@ async fn main(spawner: Spawner) {
 
             // Idk where the channel 5 comes from
             control.start_ap_open("fancontroller", 5).await;
+
+            info!("Starting my horrible experiment");
+            static WAKER: AtomicWaker = AtomicWaker::new();
+            let mut receive_buffer = [0; 1024];
+
+            loop {
+                let length = receive_buffer.len();
+                // Don't worry I don't know what I am doing
+                // Who needs smoltcp if you can write your own?
+                let bytes_read = poll_fn(|context| {
+                    let token = net_device.receive(context);
+
+                    if let Some((receive, transmit)) = token {
+                        use embassy_net::driver::RxToken;
+                        receive.consume(|data| {
+                            if data.len() > length {
+                                error!("Received packet larger than buffer");
+                                return Poll::Ready(0);
+                            }
+
+                            let slice = &mut receive_buffer[..data.len()];
+                            slice.copy_from_slice(data);
+                            Poll::Ready(slice.len())
+                        })
+                    } else {
+                        WAKER.register(context.waker());
+                        Poll::Pending
+                    }
+                })
+                .await;
+
+                info!("Received packet of length {}", bytes_read);
+
+                let buffer = &receive_buffer[..bytes_read];
+                // Read eathernet frame
+                let destination_mac = &buffer[..6];
+                let destination_mac = EthernetAddress::from_bytes(destination_mac);
+                // info!("Destination MAC: {:02x}", destination_mac);
+                info!(
+                    "\n Destination MAC: {:?}\n is broadcast: {}\n is multicast: {}\n is unicast: {}\n is local: {}",
+                    destination_mac,
+                    destination_mac.is_broadcast(),
+                    destination_mac.is_multicast(),
+                    destination_mac.is_unicast(),
+                    destination_mac.is_local(),
+                );
+
+                let source_mac = &buffer[6..12];
+                info!("Source MAC: {:x}", source_mac);
+            }
 
             // Stack
             let mut random = RoscRng;
@@ -1424,7 +1475,7 @@ async fn main(spawner: Spawner) {
                 // Listen for incoming packets
                 loop {
                     info!("Waiting for receive");
-                    let (bytes_read, meta_data) = match socket.recv_from(&mut buffer).await {
+                    let (bytes_read, mut endpoint) = match socket.recv_from(&mut buffer).await {
                         Ok(result) => result,
                         Err(error) => {
                             error!("Failed to receive packet: {:?}", error);
@@ -1434,6 +1485,7 @@ async fn main(spawner: Spawner) {
                     };
 
                     info!("Received UDP packet {:x}", &buffer[..bytes_read]);
+
                     let packet = match dhcp::Packet::try_decode(&buffer[..bytes_read]) {
                         Ok(packet) => {
                             info!("Received DHCP packet: {:#?}", packet);
@@ -1452,8 +1504,10 @@ async fn main(spawner: Spawner) {
 
                     match message_type {
                         DhcpMessageType::Discover => {
-                            info!("Received DHCP discover packet");
+                            info!("Received DHCP discover packet from {:?}", endpoint);
 
+                            info!("Sending DHCP offer");
+                            let offered_address = Ipv4Address::new(192, 168, 178, 2);
                             // Send DHCP offer
                             let offer = dhcp::Packet {
                                 option: MessageType::Reply,
@@ -1462,9 +1516,9 @@ async fn main(spawner: Spawner) {
                                 hops_count: 0,
                                 transaction_id: packet.transaction_id,
                                 seconds_elapsed: 0,
-                                flags: dhcp::ReplyType::Unicast,
+                                flags: dhcp::ReplyType::Broadcast,
                                 client_address: Ipv4Address::default(),
-                                your_address: Ipv4Address::new(192, 168, 178, 2),
+                                your_address: offered_address,
                                 server_address: DEVICE_ADDRESS,
                                 gateway_address: Ipv4Address::default(),
                                 client_hardware_address: packet.client_hardware_address,
@@ -1478,6 +1532,18 @@ async fn main(spawner: Spawner) {
                                     ..Default::default()
                                 },
                             };
+
+                            // For discover the IP is 0.0.0.0:68 but we can't use that to send to try broadcast
+                            // endpoint.addr = Ipv4Address::BROADCAST.into();
+                            endpoint.addr = offered_address.into();
+                            endpoint.port = 68;
+                            let mut buffer = [0; 512];
+                            offer.encode(&mut buffer, &mut 0);
+                            if let Err(send_error) = socket.send_to(&buffer, endpoint).await {
+                                warn!("Error sending DHCP offer: {:?}", send_error);
+                                continue;
+                            }
+                            info!("Sent DHCP offer");
                         }
                         other => warn!("Received unsupported DHCP message type: {:?}", other),
                     }
