@@ -8,8 +8,7 @@ use embassy_rp::dma::Channel;
 use embassy_rp::gpio::{Level, Output, Pin};
 use embassy_rp::interrupt::typelevel::Binding;
 use embassy_rp::uart::{
-    BufferedInterruptHandler, BufferedUart, DataBits, Parity, RxPin,
-    StopBits, TxPin,
+    BufferedInterruptHandler, BufferedUart, DataBits, Parity, RxPin, StopBits, TxPin,
 };
 use embassy_rp::{uart, Peripheral};
 use embassy_time::{block_for, with_timeout, Duration, TimeoutError, Timer};

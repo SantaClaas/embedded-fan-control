@@ -1,4 +1,3 @@
-
 use crate::encoding::Decode;
 
 pub(crate) struct PingResponse;

@@ -21,8 +21,7 @@ use embassy_net::{tcp, Config, IpEndpoint, Ipv4Address, Stack, StackResources};
 use embassy_rp::clocks::RoscRng;
 use embassy_rp::gpio::{Input, Level, Output, Pull};
 use embassy_rp::peripherals::{
-    DMA_CH0, PIN_18, PIN_20, PIN_21, PIN_23, PIN_25, PIN_4,
-    PIO0, UART0,
+    DMA_CH0, PIN_18, PIN_20, PIN_21, PIN_23, PIN_25, PIN_4, PIO0, UART0,
 };
 use embassy_rp::pio::{InterruptHandler as PioInterruptHandler, Pio, PioPin};
 use embassy_rp::uart::BufferedInterruptHandler;
@@ -48,13 +47,13 @@ use {defmt_rtt as _, panic_probe as _};
 use self::mqtt::packet;
 use crate::mqtt::non_zero_u16;
 use crate::mqtt::packet::connect::Connect;
+use crate::mqtt::packet::get_parts;
 use crate::mqtt::packet::ping_request::PingRequest;
 use crate::mqtt::packet::ping_response::PingResponse;
 use crate::mqtt::packet::publish::Publish;
 use crate::mqtt::packet::subscribe::{Subscribe, Subscription};
 use crate::mqtt::packet::subscribe_acknowledgement::SubscribeAcknowledgement;
 use crate::mqtt::packet::{connect, publish, subscribe};
-use crate::mqtt::packet::get_parts;
 use crate::mqtt::task::send;
 use crate::mqtt::QualityOfService;
 
