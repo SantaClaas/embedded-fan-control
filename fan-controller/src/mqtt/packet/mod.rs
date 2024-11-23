@@ -1,3 +1,4 @@
+use crate::encoding::TryDecode;
 use crate::mqtt::packet::connect::Connect;
 use crate::mqtt::packet::connect_acknowledgement::ConnectAcknowledgement;
 use crate::mqtt::packet::publish::Publish;
@@ -6,10 +7,7 @@ use crate::mqtt::packet::subscribe_acknowledgement::{
     SubscribeAcknowledgement, SubscribeAcknowledgementError,
 };
 use crate::mqtt::variable_byte_integer;
-use crate::mqtt::DecodeError;
 use defmt::{info, Format};
-
-use super::TryDecode;
 
 pub(crate) mod connect;
 pub(crate) mod connect_acknowledgement;

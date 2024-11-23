@@ -1,4 +1,4 @@
-use crate::mqtt::TryDecode;
+use crate::encoding::TryDecode;
 use defmt::Format;
 
 #[derive(Debug, Format)]

@@ -2,7 +2,7 @@ use core::num::NonZeroU16;
 
 use defmt::{info, Format};
 
-use crate::mqtt::TryEncode;
+use crate::encoding::TryEncode;
 use crate::mqtt::{variable_byte_integer, QualityOfService};
 
 #[derive(Debug)]

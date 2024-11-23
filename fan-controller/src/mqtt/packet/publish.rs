@@ -1,8 +1,8 @@
 use core::str::Utf8Error;
 
+use crate::encoding::{TryDecode, TryEncode};
+use crate::mqtt::variable_byte_integer;
 use crate::mqtt::variable_byte_integer::VariableByteIntegerEncodeError;
-use crate::mqtt::TryEncode;
-use crate::mqtt::{variable_byte_integer, TryDecode};
 use defmt::{debug, info, write, Debug2Format, Format, Formatter};
 
 #[derive(Format, Clone)]

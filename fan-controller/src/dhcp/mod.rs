@@ -1,5 +1,7 @@
 use defmt::{info, Format};
-use embassy_net::EthernetAddress;
+use embassy_net::{EthernetAddress, Ipv4Address};
+
+use crate::encoding::{Encode, TryDecode};
 
 #[derive(Debug, Format)]
 pub(crate) enum MessageType {
@@ -16,23 +18,6 @@ pub(crate) enum HardwareAddressType {
 pub(crate) enum ReplyType {
     Unicast = 0x00,
     Broadcast = 0x01,
-}
-
-#[derive(Debug, Format)]
-pub(crate) struct Packet<'a> {
-    pub(crate) option: MessageType,
-    pub(crate) address_type: HardwareAddressType,
-    pub(crate) hardware_address_length: u8,
-    pub(crate) hops_count: u8,
-    pub(crate) transaction_id: u32,
-    pub(crate) seconds_elapsed: u16,
-    pub(crate) flags: ReplyType,
-    pub(crate) client_address: embassy_net::Ipv4Address,
-    pub(crate) your_address: embassy_net::Ipv4Address,
-    pub(crate) server_address: embassy_net::Ipv4Address,
-    pub(crate) gateway_address: embassy_net::Ipv4Address,
-    pub(crate) client_hardware_address: EthernetAddress,
-    pub(crate) options: Options<'a>,
 }
 
 #[derive(Debug, Format)]
@@ -83,6 +68,12 @@ pub(crate) enum MaybeString<'a> {
 
 #[derive(Debug, Format, Default)]
 pub(crate) struct Options<'a> {
+    // Option 1
+    pub(crate) subnet_mask: Option<Ipv4Address>,
+    // Option 3
+    pub(crate) router: Option<Ipv4Address>,
+    // Option 51
+    pub(crate) address_time: Option<u32>,
     pub(crate) host_name: Option<MaybeString<'a>>,
     pub(crate) message_type: Option<DhcpMessageType>,
     pub(crate) parameter_request_list: Option<&'a [u8]>,
@@ -91,6 +82,12 @@ pub(crate) struct Options<'a> {
     pub(crate) client_identifier: Option<&'a [u8]>,
     pub(crate) rapid_commit: Option<()>,
     pub(crate) lease_seconds: Option<u32>,
+}
+
+impl Encode for Options<'_> {
+    fn encode(&self, buffer: &mut [u8], offset: &mut usize) {
+        todo!()
+    }
 }
 
 #[derive(Debug, Format)]
@@ -107,6 +104,23 @@ pub(crate) enum DecodeError {
         expected: usize,
         actual: usize,
     },
+}
+
+#[derive(Debug, Format)]
+pub(crate) struct Packet<'a> {
+    pub(crate) option: MessageType,
+    pub(crate) address_type: HardwareAddressType,
+    pub(crate) hardware_address_length: u8,
+    pub(crate) hops_count: u8,
+    pub(crate) transaction_id: u32,
+    pub(crate) seconds_elapsed: u16,
+    pub(crate) flags: ReplyType,
+    pub(crate) client_address: Ipv4Address,
+    pub(crate) your_address: Ipv4Address,
+    pub(crate) server_address: Ipv4Address,
+    pub(crate) gateway_address: Ipv4Address,
+    pub(crate) client_hardware_address: EthernetAddress,
+    pub(crate) options: Options<'a>,
 }
 
 impl<'a> Packet<'a> {
@@ -301,5 +315,59 @@ impl<'a> Packet<'a> {
             client_hardware_address,
             options,
         })
+    }
+
+    fn encode(&self, buffer: &mut [u8], offset: &mut usize) {
+        buffer[*offset] = match self.option {
+            MessageType::Request => 0,
+            MessageType::Reply => 1,
+        };
+        *offset += 1;
+
+        buffer[*offset] = match self.address_type {
+            HardwareAddressType::Ethernet => 0x01,
+        };
+        *offset += 1;
+
+        buffer[*offset] = self.hardware_address_length;
+        *offset += 1;
+
+        buffer[*offset] = self.hops_count;
+        *offset += 1;
+
+        let bytes = self.transaction_id.to_be_bytes();
+        buffer[*offset..*offset + 4].copy_from_slice(&bytes);
+        *offset += 4;
+
+        // buffer[offset] = self.seconds_elapsed;
+        buffer[*offset..*offset + 2].copy_from_slice(&self.seconds_elapsed.to_be_bytes());
+        *offset += 2;
+
+        buffer[*offset] = match self.flags {
+            ReplyType::Unicast => 0,
+            ReplyType::Broadcast => 0b1000_0000,
+        };
+        *offset += 1;
+        let bytes = self.client_address.as_bytes();
+        buffer[*offset..*offset + 4].copy_from_slice(&bytes);
+        *offset += 4;
+
+        let bytes = self.your_address.as_bytes();
+        buffer[*offset..*offset + 4].copy_from_slice(&bytes);
+        *offset += 4;
+
+        let bytes = self.server_address.as_bytes();
+        buffer[*offset..*offset + 4].copy_from_slice(&bytes);
+        *offset += 4;
+
+        let bytes = self.gateway_address.as_bytes();
+        buffer[*offset..*offset + 4].copy_from_slice(&bytes);
+        *offset += 4;
+
+        let bytes = self.client_hardware_address.0;
+        buffer[*offset..*offset + 6].copy_from_slice(&bytes);
+        *offset += 6;
+
+        self.options.encode(buffer, offset);
     }
 }

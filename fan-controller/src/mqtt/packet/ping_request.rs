@@ -1,4 +1,4 @@
-use crate::mqtt::Encode;
+use crate::encoding::Encode;
 use core::convert::Infallible;
 use core::pin::Pin;
 

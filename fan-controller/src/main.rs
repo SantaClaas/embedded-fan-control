@@ -1,7 +1,5 @@
 #![no_std]
 #![no_main]
-//TODO remove this 🥴
-#![allow(warnings)]
 
 use configuration::DISCOVERY_TOPIC;
 use core::convert::Infallible;
@@ -49,8 +47,8 @@ use embassy_sync::watch::Watch;
 use embassy_time::{with_deadline, with_timeout, Duration, Instant, Ticker, TimeoutError, Timer};
 use embedded_io_async::{Read, Write};
 use embedded_nal_async::{AddrType, Dns, SocketAddr, TcpConnect};
+use encoding::{Encode, TryDecode};
 use mqtt::packet::disconnect::Disconnect;
-use mqtt::{Encode, TryDecode};
 use rand::RngCore;
 use reqwless::client::{TlsConfig, TlsVerify};
 use static_cell::StaticCell;
@@ -61,6 +59,7 @@ use {defmt_rtt as _, panic_probe as _};
 use self::mqtt::packet;
 use self::mqtt::packet::Packet;
 use crate::async_callback::AsyncCallback;
+use crate::encoding::TryEncode;
 use crate::mqtt::non_zero_u16;
 use crate::mqtt::packet::connect::Connect;
 use crate::mqtt::packet::connect_acknowledgement::ConnectReasonCode;
@@ -73,12 +72,12 @@ use crate::mqtt::packet::{connect, publish, subscribe};
 use crate::mqtt::packet::{get_parts, FromPublish, FromSubscribeAcknowledgement};
 use crate::mqtt::task::send;
 use crate::mqtt::QualityOfService;
-use crate::mqtt::TryEncode;
 
 mod async_callback;
 mod configuration;
 mod debounce;
 mod dhcp;
+mod encoding;
 mod fan;
 mod modbus;
 mod mqtt;
@@ -1415,7 +1414,6 @@ async fn main(spawner: Spawner) {
             unwrap!(spawner.spawn(network_task(stack)));
             // Use it
             // Try out DHCP
-
             let mut transmit_buffer = [0; 4096];
             let mut receive_buffer = [0; 4096];
             let mut buffer = [0; 4096];
@@ -1487,7 +1485,14 @@ async fn main(spawner: Spawner) {
                                 gateway_address: Ipv4Address::default(),
                                 client_hardware_address: packet.client_hardware_address,
                                 //TODO
-                                options: Options::default(),
+                                options: Options {
+                                    message_type: Some(DhcpMessageType::Offer),
+                                    subnet_mask: Some(Ipv4Address::new(255, 255, 255, 0)),
+                                    router: Some(DEVICE_ADDRESS),
+                                    address_time: Some(86400),
+                                    //TODO try without DNS server
+                                    ..Default::default()
+                                },
                             };
                         }
                         other => warn!("Received unsupported DHCP message type: {:?}", other),
