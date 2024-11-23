@@ -1,12 +1,9 @@
 //! Module containing all the MQTT things to enable the fan controller to be integrated with Home
 //! Assistant
 
-use core::convert::Infallible;
 
 use defmt::Format;
-use embedded_io_async::Write;
 
-use crate::mqtt::packet::connect::Connect;
 use crate::mqtt::variable_byte_integer::DecodeError;
 
 pub(crate) mod client;

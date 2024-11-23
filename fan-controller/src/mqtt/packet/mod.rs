@@ -7,7 +7,7 @@ use crate::mqtt::packet::subscribe_acknowledgement::{
     SubscribeAcknowledgement, SubscribeAcknowledgementError,
 };
 use crate::mqtt::variable_byte_integer;
-use defmt::{info, Format};
+use defmt::Format;
 
 pub(crate) mod connect;
 pub(crate) mod connect_acknowledgement;

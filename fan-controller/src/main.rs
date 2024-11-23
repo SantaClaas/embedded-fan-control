@@ -1,75 +1,60 @@
 #![no_std]
 #![no_main]
 
-use configuration::DISCOVERY_TOPIC;
-use core::convert::Infallible;
-use core::fmt::Error;
-use core::future::{poll_fn, Future};
+use core::future::poll_fn;
 use core::num::NonZeroU16;
-use core::ops::{Deref, DerefMut, Div, Sub};
-use core::pin::pin;
-use core::str::{self, from_utf8, Utf8Error};
-use core::sync::atomic::AtomicBool;
+use core::ops::DerefMut;
+use core::str::{self, from_utf8};
 use core::task::Poll;
-use cortex_m::interrupt::CriticalSection;
-use crc::{Crc, CRC_16_MODBUS};
 use cyw43::{Control, NetDriver};
 use cyw43_pio::PioSpi;
 use debounce::Debouncer;
 use defmt::*;
 use dhcp::{DhcpMessageType, MessageType, Options};
 use embassy_executor::Spawner;
-use embassy_futures::join::{join, join3, join5, Join};
+use embassy_futures::join::{join, join5};
 use embassy_net::dns::{DnsQueryType, DnsSocket};
 use embassy_net::driver::Driver;
-use embassy_net::tcp::client::{TcpClient, TcpClientState};
 use embassy_net::tcp::{TcpReader, TcpSocket, TcpWriter};
 use embassy_net::udp::PacketMetadata;
-use embassy_net::{tcp, Config, IpAddress, IpEndpoint, Ipv4Address, Stack, StackResources};
+use embassy_net::{tcp, Config, IpEndpoint, Ipv4Address, Stack, StackResources};
 use embassy_rp::clocks::RoscRng;
-use embassy_rp::flash::{Async, Flash};
-use embassy_rp::gpio::{Input, Level, Output, Pin, Pull};
+use embassy_rp::gpio::{Input, Level, Output, Pull};
 use embassy_rp::peripherals::{
-    DMA_CH0, FLASH, PIN_12, PIN_13, PIN_18, PIN_20, PIN_21, PIN_23, PIN_24, PIN_25, PIN_29, PIN_4,
+    DMA_CH0, PIN_18, PIN_20, PIN_21, PIN_23, PIN_25, PIN_4,
     PIO0, UART0,
 };
 use embassy_rp::pio::{InterruptHandler as PioInterruptHandler, Pio, PioPin};
-use embassy_rp::uart::{BufferedInterruptHandler, InterruptHandler as UartInterruptHandler, Uart};
-use embassy_rp::{bind_interrupts, dma, pio, uart, Peripheral, Peripherals};
-use embassy_sync::blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex};
-use embassy_sync::channel;
+use embassy_rp::uart::BufferedInterruptHandler;
+use embassy_rp::{bind_interrupts, Peripherals};
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
-use embassy_sync::mutex::{Mutex, MutexGuard, TryLockError};
+use embassy_sync::mutex::Mutex;
 use embassy_sync::pubsub::PubSubChannel;
 use embassy_sync::signal::Signal;
 use embassy_sync::waitqueue::AtomicWaker;
 use embassy_sync::watch::Watch;
-use embassy_time::{with_deadline, with_timeout, Duration, Instant, Ticker, TimeoutError, Timer};
+use embassy_time::{with_deadline, with_timeout, Duration, Instant, TimeoutError, Timer};
 use embedded_io_async::{Read, Write};
-use embedded_nal_async::{AddrType, Dns, SocketAddr, TcpConnect};
-use encoding::{Encode, TryDecode};
+use embedded_nal_async::TcpConnect;
+use encoding::TryDecode;
 use mqtt::packet::disconnect::Disconnect;
 use rand::RngCore;
-use reqwless::client::{TlsConfig, TlsVerify};
 use static_cell::StaticCell;
 use storage::{Ssid, Storage, WifiPassword};
 
 use {defmt_rtt as _, panic_probe as _};
 
 use self::mqtt::packet;
-use self::mqtt::packet::Packet;
-use crate::async_callback::AsyncCallback;
-use crate::encoding::TryEncode;
 use crate::mqtt::non_zero_u16;
 use crate::mqtt::packet::connect::Connect;
-use crate::mqtt::packet::connect_acknowledgement::ConnectReasonCode;
 use crate::mqtt::packet::ping_request::PingRequest;
 use crate::mqtt::packet::ping_response::PingResponse;
 use crate::mqtt::packet::publish::Publish;
 use crate::mqtt::packet::subscribe::{Subscribe, Subscription};
 use crate::mqtt::packet::subscribe_acknowledgement::SubscribeAcknowledgement;
 use crate::mqtt::packet::{connect, publish, subscribe};
-use crate::mqtt::packet::{get_parts, FromPublish, FromSubscribeAcknowledgement};
+use crate::mqtt::packet::get_parts;
 use crate::mqtt::task::send;
 use crate::mqtt::QualityOfService;
 
@@ -658,7 +643,7 @@ async fn mqtt_task(
         }
     }
 
-    let (mut reader, mut writer) = socket.split();
+    let (mut reader, writer) = socket.split();
     // Future 1
     let listen = listen(&mut reader);
 
@@ -1331,7 +1316,7 @@ async fn main(spawner: Spawner) {
     //     }
     // }
     // storage.write();
-    let mut storage = Storage::create(flash).await.unwrap();
+    let storage = Storage::create(flash).await.unwrap();
 
     info!("Reading SSID from flash storage");
     let ssid: Option<Ssid> = match storage.get().await {

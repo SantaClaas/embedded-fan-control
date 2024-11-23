@@ -1,5 +1,5 @@
 use crate::mqtt::{
-    variable_byte_integer, ConnectErrorReasonCode, QualityOfService, UnknownConnectErrorReasonCode,
+    variable_byte_integer, ConnectErrorReasonCode, UnknownConnectErrorReasonCode,
 };
 use crate::TryDecode;
 use defmt::{info, Format};
@@ -114,7 +114,7 @@ impl TryDecode<'_> for ConnectAcknowledgement {
                     0x26 => {
                         info!("Skipping User Property");
                         // What is the length of a UTF-8 string pair?
-                        let mut length_1 = variable_byte_integer::decode(buffer, &mut offset)
+                        let length_1 = variable_byte_integer::decode(buffer, &mut offset)
                             .map_err(|error| DecodeError::InvalidPropertyStringLength {
                                 property_identifier: 0x26,
                                 error,

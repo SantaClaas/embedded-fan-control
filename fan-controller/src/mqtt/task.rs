@@ -2,7 +2,7 @@ use crate::encoding::{TryDecode, TryEncode};
 use crate::mqtt::packet::connect::{Connect, EncodeError};
 use crate::mqtt::packet::connect_acknowledgement::{ConnectAcknowledgement, ConnectReasonCode};
 use crate::mqtt::packet::GetPartsError;
-use crate::mqtt::{packet, ConnectErrorReasonCode, DecodeError};
+use crate::mqtt::{packet, ConnectErrorReasonCode};
 use core::fmt::Debug;
 use defmt::{info, warn, Format};
 use embassy_net::tcp;

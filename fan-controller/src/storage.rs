@@ -105,15 +105,12 @@
 // }
 //-------------------------------------------------------------------------------------
 /////! Code from ekv example. I don't fully understand it
-use crate::storage;
 use defmt::*;
 use ekv::flash::{self, PageID};
 use ekv::{config, Database, FormatError, ReadError};
-use embassy_executor::Spawner;
 use embassy_rp::flash::Flash;
 use embassy_rp::peripherals::FLASH;
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
-use embassy_time::Duration;
 use embedded_storage::nor_flash::{NorFlash, ReadNorFlash};
 
 use {defmt_rtt as _, panic_probe as _};
@@ -175,7 +172,6 @@ impl<T: NorFlash + ReadNorFlash> flash::Flash for DbFlash<T> {
     }
 }
 
-use core::num::NonZero;
 use core::str::Utf8Error;
 
 /// Implementers can be read from storage

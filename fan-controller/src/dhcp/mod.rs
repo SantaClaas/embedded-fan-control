@@ -1,7 +1,7 @@
 use defmt::{info, Format};
 use embassy_net::{EthernetAddress, Ipv4Address};
 
-use crate::encoding::{Encode, TryDecode};
+use crate::encoding::Encode;
 
 #[derive(Debug, Format)]
 pub(crate) enum MessageType {
