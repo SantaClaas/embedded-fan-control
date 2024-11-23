@@ -19,6 +19,7 @@ use cyw43::{Control, NetDriver};
 use cyw43_pio::PioSpi;
 use debounce::Debouncer;
 use defmt::*;
+use dhcp::{DhcpMessageType, MessageType, Options};
 use embassy_executor::Spawner;
 use embassy_futures::join::{join, join3, join5, Join};
 use embassy_net::dns::{DnsQueryType, DnsSocket};
@@ -26,7 +27,7 @@ use embassy_net::driver::Driver;
 use embassy_net::tcp::client::{TcpClient, TcpClientState};
 use embassy_net::tcp::{TcpReader, TcpSocket, TcpWriter};
 use embassy_net::udp::PacketMetadata;
-use embassy_net::{tcp, Config, IpAddress, IpEndpoint, Stack, StackResources};
+use embassy_net::{tcp, Config, IpAddress, IpEndpoint, Ipv4Address, Stack, StackResources};
 use embassy_rp::clocks::RoscRng;
 use embassy_rp::flash::{Async, Flash};
 use embassy_rp::gpio::{Input, Level, Output, Pin, Pull};
@@ -1376,12 +1377,10 @@ async fn main(spawner: Spawner) {
             // Create wifi network and host web server to configure wifi
 
             // Need to probably use link local addresses
+            const DEVICE_ADDRESS: Ipv4Address = Ipv4Address::new(192, 168, 178, 1);
             let configuration = embassy_net::StaticConfigV4 {
-                address: embassy_net::Ipv4Cidr::new(
-                    embassy_net::Ipv4Address::new(192, 168, 178, 1),
-                    24,
-                ),
-                gateway: Some(embassy_net::Ipv4Address::new(192, 168, 178, 1)),
+                address: embassy_net::Ipv4Cidr::new(DEVICE_ADDRESS, 24),
+                gateway: Some(DEVICE_ADDRESS),
                 // gateway: None,
                 dns_servers: heapless::Vec::new(),
             };
@@ -1453,13 +1452,45 @@ async fn main(spawner: Spawner) {
                     };
 
                     info!("Received UDP packet {:x}", &buffer[..bytes_read]);
-                    match dhcp::Packet::try_decode(&buffer[..bytes_read]) {
-                        Ok(packet) => info!("Received DHCP packet: {:#?}", packet),
-                        Err(error) => error!("Error decoding DHCP packet: {:#?}", error),
-                    }
+                    let packet = match dhcp::Packet::try_decode(&buffer[..bytes_read]) {
+                        Ok(packet) => {
+                            info!("Received DHCP packet: {:#?}", packet);
+                            packet
+                        }
+                        Err(error) => {
+                            error!("Error decoding DHCP packet: {:#?}", error);
+                            continue;
+                        }
+                    };
 
-                    if let Ok(string) = core::str::from_utf8(&buffer[..bytes_read]) {
-                        info!("Received UDP packet: {}", string);
+                    let Some(message_type) = packet.options.message_type else {
+                        warn!("No message type in DHCP packet");
+                        continue;
+                    };
+
+                    match message_type {
+                        DhcpMessageType::Discover => {
+                            info!("Received DHCP discover packet");
+
+                            // Send DHCP offer
+                            let offer = dhcp::Packet {
+                                option: MessageType::Reply,
+                                address_type: dhcp::HardwareAddressType::Ethernet,
+                                hardware_address_length: 6,
+                                hops_count: 0,
+                                transaction_id: packet.transaction_id,
+                                seconds_elapsed: 0,
+                                flags: dhcp::ReplyType::Unicast,
+                                client_address: Ipv4Address::default(),
+                                your_address: Ipv4Address::new(192, 168, 178, 2),
+                                server_address: DEVICE_ADDRESS,
+                                gateway_address: Ipv4Address::default(),
+                                client_hardware_address: packet.client_hardware_address,
+                                //TODO
+                                options: Options::default(),
+                            };
+                        }
+                        other => warn!("Received unsupported DHCP message type: {:?}", other),
                     }
                 }
             }

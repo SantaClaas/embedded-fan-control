@@ -2,40 +2,41 @@ use defmt::{info, Format};
 use embassy_net::EthernetAddress;
 
 #[derive(Debug, Format)]
-enum MessageType {
+pub(crate) enum MessageType {
     Request = 0x01,
     Reply = 0x02,
 }
 
 #[derive(Debug, Format)]
-enum HardwareAddressType {
+pub(crate) enum HardwareAddressType {
     Ethernet = 0x01,
 }
 
 #[derive(Debug, Format)]
-enum Reply {
-    Unicast = 0x01,
-    Broadcast = 0x02,
+pub(crate) enum ReplyType {
+    Unicast = 0x00,
+    Broadcast = 0x01,
 }
 
 #[derive(Debug, Format)]
 pub(crate) struct Packet<'a> {
-    option: MessageType,
-    address_type: HardwareAddressType,
-    hardware_address_length: u8,
-    hops_count: u8,
-    transaction_id: u32,
-    seconds_elapsed: u16,
-    flags: Reply,
-    client_address: embassy_net::Ipv4Address,
-    your_address: embassy_net::Ipv4Address,
-    gateway_address: embassy_net::Ipv4Address,
-    client_hardware_address: EthernetAddress,
-    options: Options<'a>,
+    pub(crate) option: MessageType,
+    pub(crate) address_type: HardwareAddressType,
+    pub(crate) hardware_address_length: u8,
+    pub(crate) hops_count: u8,
+    pub(crate) transaction_id: u32,
+    pub(crate) seconds_elapsed: u16,
+    pub(crate) flags: ReplyType,
+    pub(crate) client_address: embassy_net::Ipv4Address,
+    pub(crate) your_address: embassy_net::Ipv4Address,
+    pub(crate) server_address: embassy_net::Ipv4Address,
+    pub(crate) gateway_address: embassy_net::Ipv4Address,
+    pub(crate) client_hardware_address: EthernetAddress,
+    pub(crate) options: Options<'a>,
 }
 
 #[derive(Debug, Format)]
-enum DhcpMessageType {
+pub(crate) enum DhcpMessageType {
     Discover = 1,
     Offer = 2,
     Request = 3,
@@ -75,21 +76,21 @@ impl TryFrom<u8> for DhcpMessageType {
 }
 
 #[derive(Debug, Format)]
-enum MaybeString<'a> {
+pub(crate) enum MaybeString<'a> {
     String(&'a str),
     Bytes(&'a [u8]),
 }
 
 #[derive(Debug, Format, Default)]
-struct Options<'a> {
-    host_name: Option<MaybeString<'a>>,
-    messagge_type: Option<DhcpMessageType>,
-    parameter_request_list: Option<&'a [u8]>,
-    maximum_dhcp_message_size: Option<u16>,
-    vendor_class_identifier: Option<MaybeString<'a>>,
-    client_identifier: Option<&'a [u8]>,
-    rapid_commit: Option<()>,
-    lease_seconds: Option<u32>,
+pub(crate) struct Options<'a> {
+    pub(crate) host_name: Option<MaybeString<'a>>,
+    pub(crate) message_type: Option<DhcpMessageType>,
+    pub(crate) parameter_request_list: Option<&'a [u8]>,
+    pub(crate) maximum_dhcp_message_size: Option<u16>,
+    pub(crate) vendor_class_identifier: Option<MaybeString<'a>>,
+    pub(crate) client_identifier: Option<&'a [u8]>,
+    pub(crate) rapid_commit: Option<()>,
+    pub(crate) lease_seconds: Option<u32>,
 }
 
 #[derive(Debug, Format)]
@@ -133,29 +134,33 @@ impl<'a> Packet<'a> {
         let transaction_id = u32::from_be_bytes([buffer[4], buffer[5], buffer[6], buffer[7]]);
         let seconds_elapsed = u16::from_be_bytes([buffer[8], buffer[9]]);
         let flags = match buffer[10] {
-            0 => Reply::Unicast,
-            0b1000_0000 => Reply::Broadcast,
+            0 => ReplyType::Unicast,
+            0b1000_0000 => ReplyType::Broadcast,
             other => return Err(DecodeError::UnkownFlag(other)),
         };
 
         let client_address =
-            embassy_net::Ipv4Address::new(buffer[11], buffer[12], buffer[13], buffer[14]);
+            embassy_net::Ipv4Address::new(buffer[12], buffer[13], buffer[14], buffer[15]);
 
         // Address assigned by the server
         let your_address =
-            embassy_net::Ipv4Address::new(buffer[15], buffer[16], buffer[17], buffer[18]);
+            embassy_net::Ipv4Address::new(buffer[16], buffer[17], buffer[18], buffer[19]);
+
+        let server_address =
+            embassy_net::Ipv4Address::new(buffer[20], buffer[21], buffer[22], buffer[23]);
 
         let gateway_address =
-            embassy_net::Ipv4Address::new(buffer[19], buffer[20], buffer[21], buffer[22]);
+            embassy_net::Ipv4Address::new(buffer[24], buffer[25], buffer[26], buffer[27]);
 
         // The length matches hardware address length earlier which we ensured is 6
-        // The 5 bytes padding left and right of the address is apparently a remnant of the BOOTP protocol which DHCP is based on
-        let client_hardware_address = &buffer[23..23 + 16];
+        let client_hardware_address = &buffer[28..28 + 16];
         // 5 zero bytes + 6 hardware address bytes + 5 zero bytes = 16 bytes
         info!("Client address: {:x}", &client_hardware_address);
-        let client_hardware_address = EthernetAddress::from_bytes(&client_hardware_address[5..11]);
+        let client_hardware_address = EthernetAddress::from_bytes(
+            &client_hardware_address[..hardware_address_length as usize],
+        );
         // Then there are 192 octets of 0s apparently
-        const MAGIC_COOKIE_START: usize = 23 + 16 + 5 + 192;
+        const MAGIC_COOKIE_START: usize = 28 + 16 + 192;
         const MAGIC_COOKIE_END: usize = MAGIC_COOKIE_START + 4;
         let magic_cookie = &buffer[MAGIC_COOKIE_START..MAGIC_COOKIE_END];
         info!("Magic cookie: {:x}", &magic_cookie);
@@ -210,7 +215,7 @@ impl<'a> Packet<'a> {
                     // Should be 1 byte length for this option
                     let message_type: DhcpMessageType = buffer[offset].try_into()?;
                     info!("DHCP Message Type: {:?}", message_type);
-                    options.messagge_type = Some(message_type);
+                    options.message_type = Some(message_type);
                 }
                 55 => {
                     // Parameter request list
@@ -291,6 +296,7 @@ impl<'a> Packet<'a> {
             flags,
             client_address,
             your_address,
+            server_address,
             gateway_address,
             client_hardware_address,
             options,
