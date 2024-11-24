@@ -4,17 +4,18 @@
 use core::future::poll_fn;
 use core::num::NonZeroU16;
 use core::ops::DerefMut;
+use core::option;
 use core::str::{self, from_utf8};
 use core::task::{Context, Poll};
 use cyw43::{Control, NetDriver};
 use cyw43_pio::PioSpi;
 use debounce::Debouncer;
 use defmt::*;
-use dhcp::{DhcpMessageType, MessageType, Options};
+use dhcp::{DhcpMessageType as MyDhcpMessageType, MessageType, Options};
 use embassy_executor::Spawner;
 use embassy_futures::join::{join, join5};
 use embassy_net::dns::{DnsQueryType, DnsSocket};
-use embassy_net::driver::Driver;
+use embassy_net::driver::{Driver, HardwareAddress};
 use embassy_net::tcp::{TcpReader, TcpSocket, TcpWriter};
 use embassy_net::udp::PacketMetadata;
 use embassy_net::{tcp, Config, EthernetAddress, IpEndpoint, Ipv4Address, Stack, StackResources};
@@ -40,6 +41,10 @@ use embedded_nal_async::TcpConnect;
 use encoding::{Encode, TryDecode};
 use mqtt::packet::disconnect::Disconnect;
 use rand::RngCore;
+use smoltcp::wire::{
+    DhcpMessageType, DhcpPacket, DhcpRepr, EthernetFrame, EthernetRepr, Ipv4Packet, Ipv4Repr,
+    UdpPacket, DHCP_CLIENT_PORT, DHCP_SERVER_PORT,
+};
 use static_cell::StaticCell;
 use storage::{Ssid, Storage, WifiPassword};
 
@@ -1350,6 +1355,20 @@ async fn main(spawner: Spawner) {
     let (mut net_device, mut control) =
         gain_control(spawner, pin_23, pin_25, pio0, dma_ch0, pin_24, pin_29).await;
 
+    let HardwareAddress::Ethernet(address) = net_device.hardware_address() else {
+        error!("Expected ethernet address");
+        return;
+    };
+
+    let device_hardware_address = EthernetAddress(address);
+
+    // match net_device.hardware_address() {
+    //     embassy_net::driver::HardwareAddress::Ethernet(add) => todo!(),
+    //     embassy_net::driver::HardwareAddress::Ieee802154(_) => todo!(),
+    //     embassy_net::driver::HardwareAddress::Ip => todo!(),
+    //     _ => todo!(),
+    // }
+
     //TODO limit retries until we go back into configuration mode
 
     //TODO read mac from stack
@@ -1362,6 +1381,7 @@ async fn main(spawner: Spawner) {
 
             // Need to probably use link local addresses
             const DEVICE_ADDRESS: Ipv4Address = Ipv4Address::new(192, 168, 178, 1);
+            const SUBNET_MASK: Ipv4Address = Ipv4Address::new(255, 255, 255, 0);
             let configuration = embassy_net::StaticConfigV4 {
                 address: embassy_net::Ipv4Cidr::new(DEVICE_ADDRESS, 24),
                 gateway: Some(DEVICE_ADDRESS),
@@ -1384,10 +1404,10 @@ async fn main(spawner: Spawner) {
 
             info!("Starting my horrible experiment");
             static WAKER: AtomicWaker = AtomicWaker::new();
-            let mut receive_buffer = [0; 1024];
+            let mut buffer = [0; 1024];
 
             loop {
-                let length = receive_buffer.len();
+                let length = buffer.len();
                 // Don't worry I don't know what I am doing
                 // Who needs smoltcp if you can write your own?
                 let bytes_read = poll_fn(|context| {
@@ -1401,7 +1421,7 @@ async fn main(spawner: Spawner) {
                                 return Poll::Ready(0);
                             }
 
-                            let slice = &mut receive_buffer[..data.len()];
+                            let slice = &mut buffer[..data.len()];
                             slice.copy_from_slice(data);
                             Poll::Ready(slice.len())
                         })
@@ -1414,22 +1434,133 @@ async fn main(spawner: Spawner) {
 
                 info!("Received packet of length {}", bytes_read);
 
-                let buffer = &receive_buffer[..bytes_read];
-                // Read eathernet frame
-                let destination_mac = &buffer[..6];
-                let destination_mac = EthernetAddress::from_bytes(destination_mac);
-                // info!("Destination MAC: {:02x}", destination_mac);
-                info!(
-                    "\n Destination MAC: {:?}\n is broadcast: {}\n is multicast: {}\n is unicast: {}\n is local: {}",
-                    destination_mac,
-                    destination_mac.is_broadcast(),
-                    destination_mac.is_multicast(),
-                    destination_mac.is_unicast(),
-                    destination_mac.is_local(),
-                );
+                let mut buffer = &mut buffer[..bytes_read];
+                let result = EthernetFrame::new_checked(&buffer);
+                let mut frame = match result {
+                    Ok(frame) => frame,
+                    Err(error) => {
+                        warn!("Error reading Ethernet frame: {:?}", error);
+                        continue;
+                    }
+                };
 
-                let source_mac = &buffer[6..12];
-                info!("Source MAC: {:x}", source_mac);
+                // Remember for response
+                let source_address = frame.src_addr();
+
+                let packet = match Ipv4Packet::new_checked(frame.payload()) {
+                    Ok(packet) => packet,
+                    Err(error) => {
+                        warn!("Error reading IPv4 packet: {:?}", error);
+                        continue;
+                    }
+                };
+
+                info!("IPv4 packet:\n {:#?}", packet);
+
+                let packet = match UdpPacket::new_checked(packet.payload()) {
+                    Ok(packet) => packet,
+                    Err(error) => {
+                        warn!("Error reading UDP packet: {:?}", error);
+                        continue;
+                    }
+                };
+
+                let dhcp_packet = match DhcpPacket::new_checked(packet.payload()) {
+                    Ok(packet) => packet,
+                    Err(error) => {
+                        warn!("Error reading DHCP packet: {:?}", error);
+                        continue;
+                    }
+                };
+
+                let dhcp_packet_parsed = match DhcpRepr::parse(&dhcp_packet) {
+                    Ok(packet) => packet,
+                    Err(error) => {
+                        warn!("Error reading DHCP packet: {:?}", error);
+                        continue;
+                    }
+                };
+
+                match dhcp_packet_parsed.message_type {
+                    DhcpMessageType::Discover => {
+                        //TODO determine offered address
+                        let offered_address = Ipv4Address::new(192, 168, 178, 2);
+                        // Ethernet frame
+                        // Reusing the buffer as we don't need the data for reading anymore
+                        let mut ethernet_frame = EthernetFrame::new_unchecked(buffer);
+                        // Read source for target before overwriting it
+                        ethernet_frame.set_src_addr(device_hardware_address);
+                        ethernet_frame.set_dst_addr(source_address);
+                        // Type stays the same
+
+                        let mut ip_packet = Ipv4Packet::new_unchecked(ethernet_frame.payload_mut());
+                        ip_packet.set_src_addr(DEVICE_ADDRESS);
+                        ip_packet.set_dst_addr(offered_address);
+
+                        let mut udp_packet = UdpPacket::new_unchecked(ip_packet.payload_mut());
+                        udp_packet.set_dst_port(DHCP_CLIENT_PORT);
+                        udp_packet.set_src_port(DHCP_SERVER_PORT);
+
+                        ip_packet.fill_checksum();
+                        continue;
+
+                        // DHCP
+
+                        let offer = DhcpRepr {
+                            message_type: DhcpMessageType::Offer,
+                            transaction_id: dhcp_packet_parsed.transaction_id,
+                            secs: 0,
+                            client_hardware_address: dhcp_packet_parsed.client_hardware_address,
+                            client_ip: Ipv4Address::default(),
+                            your_ip: offered_address,
+                            server_ip: DEVICE_ADDRESS,
+                            router: Some(DEVICE_ADDRESS),
+                            subnet_mask: Some(SUBNET_MASK),
+                            relay_agent_ip: Ipv4Address::default(),
+                            broadcast: bool::default(),
+                            requested_ip: None,
+                            client_identifier: None,
+                            server_identifier: None,
+                            parameter_request_list: None,
+                            //TODO might need this as Wikipedia example has it set
+                            dns_servers: None,
+                            //TODO might be useful too
+                            max_size: None,
+                            // Is this "address time"?
+                            lease_duration: Some(86400),
+                            renew_duration: None,
+                            rebind_duration: None,
+                            additional_options: &[],
+                        };
+
+                        // Write it into the request buffer as we don't need the request data anymore
+                        // if let Err(error) = offer.emit(&dhcp_packet) {
+                        //     warn!("Error writing DHCP packet: {:?}", error);
+                        //     continue;
+                        // }
+                    }
+                    other => {
+                        warn!("Received unsupported DHCP message type: {:?}", other);
+                        continue;
+                    }
+                }
+                // Form response
+
+                // // Read eathernet frame
+                // let destination_mac = &buffer[..6];
+                // let destination_mac = EthernetAddress::from_bytes(destination_mac);
+                // // info!("Destination MAC: {:02x}", destination_mac);
+                // info!(
+                //     "\n Destination MAC: {:?}\n is broadcast: {}\n is multicast: {}\n is unicast: {}\n is local: {}",
+                //     destination_mac,
+                //     destination_mac.is_broadcast(),
+                //     destination_mac.is_multicast(),
+                //     destination_mac.is_unicast(),
+                //     destination_mac.is_local(),
+                // );
+
+                // let source_mac = &buffer[6..12];
+                // info!("Source MAC: {:x}", source_mac);
             }
 
             // Stack
@@ -1503,7 +1634,7 @@ async fn main(spawner: Spawner) {
                     };
 
                     match message_type {
-                        DhcpMessageType::Discover => {
+                        MyDhcpMessageType::Discover => {
                             info!("Received DHCP discover packet from {:?}", endpoint);
 
                             info!("Sending DHCP offer");
@@ -1524,8 +1655,8 @@ async fn main(spawner: Spawner) {
                                 client_hardware_address: packet.client_hardware_address,
                                 //TODO
                                 options: Options {
-                                    message_type: Some(DhcpMessageType::Offer),
-                                    subnet_mask: Some(Ipv4Address::new(255, 255, 255, 0)),
+                                    message_type: Some(MyDhcpMessageType::Offer),
+                                    subnet_mask: Some(SUBNET_MASK),
                                     router: Some(DEVICE_ADDRESS),
                                     address_time: Some(86400),
                                     //TODO try without DNS server
@@ -1536,7 +1667,7 @@ async fn main(spawner: Spawner) {
                             // For discover the IP is 0.0.0.0:68 but we can't use that to send to try broadcast
                             // endpoint.addr = Ipv4Address::BROADCAST.into();
                             endpoint.addr = offered_address.into();
-                            endpoint.port = 68;
+                            endpoint.port = DHCP_CLIENT_PORT;
                             let mut buffer = [0; 512];
                             offer.encode(&mut buffer, &mut 0);
                             if let Err(send_error) = socket.send_to(&buffer, endpoint).await {

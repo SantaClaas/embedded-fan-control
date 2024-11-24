@@ -42,6 +42,7 @@ panic-probe = "0.3.2"
 portable-atomic = { version = "1.7", features = ["critical-section"] }
 rand = { version = "0.8.5", default-features = false }
 reqwless = { version = "0.12.1", features = ["defmt"] }
+smoltcp = { version = "0.11.0", default-features = false }
 static_cell = "2"
 thiserror = { version = "2.0.3", default-features = false }
 

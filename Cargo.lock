@@ -1119,6 +1119,7 @@ dependencies = [
  "portable-atomic",
  "rand",
  "reqwless",
+ "smoltcp",
  "static_cell",
  "thiserror 2.0.3",
 ]
