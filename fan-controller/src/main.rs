@@ -1,5 +1,6 @@
 #![no_std]
 #![no_main]
+#![allow(warnings)]
 
 use core::future::poll_fn;
 use core::num::NonZeroU16;
@@ -39,11 +40,15 @@ use embassy_time::{with_deadline, with_timeout, Duration, Instant, TimeoutError,
 use embedded_io_async::{Read, Write};
 use embedded_nal_async::TcpConnect;
 use encoding::{Encode, TryDecode};
+use heapless::Vec;
 use mqtt::packet::disconnect::Disconnect;
+use mqtt::packet::subscribe_acknowledgement::SubscribeErrorReasonCode;
 use rand::RngCore;
+use smoltcp::phy::ChecksumCapabilities;
 use smoltcp::wire::{
-    DhcpMessageType, DhcpPacket, DhcpRepr, EthernetFrame, EthernetRepr, Ipv4Packet, Ipv4Repr,
-    UdpPacket, DHCP_CLIENT_PORT, DHCP_SERVER_PORT,
+    DhcpMessageType, DhcpPacket, DhcpRepr, EthernetFrame, EthernetProtocol, EthernetRepr,
+    IpProtocol, IpRepr, Ipv4Packet, Ipv4Repr, UdpPacket, UdpRepr, DHCP_CLIENT_PORT,
+    DHCP_MAX_DNS_SERVER_COUNT, DHCP_SERVER_PORT,
 };
 use static_cell::StaticCell;
 use storage::{Ssid, Storage, WifiPassword};
@@ -1231,9 +1236,6 @@ async fn display_status(pin_21: PIN_21, pin_20: PIN_20) {
     }
 }
 
-// #[embassy_executor::task]
-// async fn
-
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
     // Glossary:
@@ -1434,9 +1436,9 @@ async fn main(spawner: Spawner) {
 
                 info!("Received packet of length {}", bytes_read);
 
-                let mut buffer = &mut buffer[..bytes_read];
-                let result = EthernetFrame::new_checked(&buffer);
-                let mut frame = match result {
+                let mut frame_buffer = &mut buffer[..bytes_read];
+                let result = EthernetFrame::new_checked(frame_buffer);
+                let mut frame_raw = match result {
                     Ok(frame) => frame,
                     Err(error) => {
                         warn!("Error reading Ethernet frame: {:?}", error);
@@ -1445,9 +1447,14 @@ async fn main(spawner: Spawner) {
                 };
 
                 // Remember for response
-                let source_address = frame.src_addr();
+                let source_address = frame_raw.src_addr();
 
-                let packet = match Ipv4Packet::new_checked(frame.payload()) {
+                let EthernetProtocol::Ipv4 = frame_raw.ethertype() else {
+                    warn!("Unexpected Ethernet type {:?}", frame_raw.ethertype());
+                    continue;
+                };
+
+                let mut packet_raw = match Ipv4Packet::new_checked(frame_raw.payload_mut()) {
                     Ok(packet) => packet,
                     Err(error) => {
                         warn!("Error reading IPv4 packet: {:?}", error);
@@ -1455,9 +1462,20 @@ async fn main(spawner: Spawner) {
                     }
                 };
 
-                info!("IPv4 packet:\n {:#?}", packet);
+                // let parsed = match Ipv4Repr::parse(&packet_raw, &ChecksumCapabilities::default()) {
+                //     Ok(packet) => packet,
+                //     Err(error) => {
+                //         warn!("Error reading IPv4 packet: {:?}", error);
+                //         continue;
+                //     }
+                // };
 
-                let packet = match UdpPacket::new_checked(packet.payload()) {
+                let IpProtocol::Udp = packet_raw.next_header() else {
+                    warn!("Unexpected IPv4 protocol {:?}", packet_raw.next_header());
+                    continue;
+                };
+
+                let mut packet = match UdpPacket::new_checked(packet_raw.payload_mut()) {
                     Ok(packet) => packet,
                     Err(error) => {
                         warn!("Error reading UDP packet: {:?}", error);
@@ -1465,7 +1483,7 @@ async fn main(spawner: Spawner) {
                     }
                 };
 
-                let dhcp_packet = match DhcpPacket::new_checked(packet.payload()) {
+                let dhcp_raw = match DhcpPacket::new_checked(packet.payload_mut()) {
                     Ok(packet) => packet,
                     Err(error) => {
                         warn!("Error reading DHCP packet: {:?}", error);
@@ -1473,44 +1491,50 @@ async fn main(spawner: Spawner) {
                     }
                 };
 
-                let dhcp_packet_parsed = match DhcpRepr::parse(&dhcp_packet) {
-                    Ok(packet) => packet,
-                    Err(error) => {
-                        warn!("Error reading DHCP packet: {:?}", error);
-                        continue;
+                // let dhcp_packet_parsed = match DhcpRepr::parse(&dhcp_raw) {
+                //     Ok(packet) => packet,
+                //     Err(error) => {
+                //         warn!("Error reading DHCP packet: {:?}", error);
+                //         continue;
+                //     }
+                // };
+
+                let mut message_type = None;
+                for option in dhcp_raw.options() {
+                    match option.kind {
+                        // The constants for the option codes are sadly private to smoltcp
+                        53 => {
+                            message_type = Some(DhcpMessageType::from(option.data[0]));
+                            break;
+                        }
+                        _ => continue,
                     }
+                }
+
+                let Some(message_type) = message_type else {
+                    warn!("No message type in DHCP packet");
+                    continue;
                 };
 
-                match dhcp_packet_parsed.message_type {
+                let transaction_id = dhcp_raw.transaction_id();
+                let client_hardware_address = dhcp_raw.client_hardware_address();
+
+                match message_type {
                     DhcpMessageType::Discover => {
                         //TODO determine offered address
                         let offered_address = Ipv4Address::new(192, 168, 178, 2);
-                        // Ethernet frame
-                        // Reusing the buffer as we don't need the data for reading anymore
-                        let mut ethernet_frame = EthernetFrame::new_unchecked(buffer);
-                        // Read source for target before overwriting it
-                        ethernet_frame.set_src_addr(device_hardware_address);
-                        ethernet_frame.set_dst_addr(source_address);
-                        // Type stays the same
 
-                        let mut ip_packet = Ipv4Packet::new_unchecked(ethernet_frame.payload_mut());
-                        ip_packet.set_src_addr(DEVICE_ADDRESS);
-                        ip_packet.set_dst_addr(offered_address);
-
-                        let mut udp_packet = UdpPacket::new_unchecked(ip_packet.payload_mut());
-                        udp_packet.set_dst_port(DHCP_CLIENT_PORT);
-                        udp_packet.set_src_port(DHCP_SERVER_PORT);
-
-                        ip_packet.fill_checksum();
-                        continue;
-
-                        // DHCP
-
+                        let dns_servers = Vec::from_slice(&[
+                            Ipv4Address::new(9, 7, 10, 15),
+                            Ipv4Address::new(9, 7, 10, 16),
+                            Ipv4Address::new(9, 7, 10, 18),
+                        ])
+                        .unwrap();
                         let offer = DhcpRepr {
                             message_type: DhcpMessageType::Offer,
-                            transaction_id: dhcp_packet_parsed.transaction_id,
+                            transaction_id,
                             secs: 0,
-                            client_hardware_address: dhcp_packet_parsed.client_hardware_address,
+                            client_hardware_address,
                             client_ip: Ipv4Address::default(),
                             your_ip: offered_address,
                             server_ip: DEVICE_ADDRESS,
@@ -1523,7 +1547,7 @@ async fn main(spawner: Spawner) {
                             server_identifier: None,
                             parameter_request_list: None,
                             //TODO might need this as Wikipedia example has it set
-                            dns_servers: None,
+                            dns_servers: Some(dns_servers),
                             //TODO might be useful too
                             max_size: None,
                             // Is this "address time"?
@@ -1532,6 +1556,157 @@ async fn main(spawner: Spawner) {
                             rebind_duration: None,
                             additional_options: &[],
                         };
+
+                        // UDP
+                        let udp_packet = UdpRepr {
+                            src_port: DHCP_SERVER_PORT,
+                            dst_port: DHCP_CLIENT_PORT,
+                        };
+
+                        // IP
+                        let ip_packet = Ipv4Repr {
+                            dst_addr: offered_address,
+                            src_addr: DEVICE_ADDRESS,
+                            //TODO
+                            hop_limit: 69,
+                            next_header: IpProtocol::Udp,
+                            // UDP representation length + UDP payload length (DHCP packet length)
+                            payload_len: udp_packet.header_len() + offer.buffer_len(),
+                        };
+
+                        // Ethernet frame
+                        let ethernet_frame = EthernetRepr {
+                            dst_addr: source_address,
+                            src_addr: device_hardware_address,
+                            ethertype: EthernetProtocol::Ipv4,
+                        };
+
+                        let mut buffer = [0; 1500];
+                        // Reusing the buffer as we don't need the data for reading anymore
+                        let mut ethernet_frame_raw = EthernetFrame::new_unchecked(buffer);
+                        ethernet_frame.emit(&mut ethernet_frame_raw);
+                        let mut ip_raw =
+                            Ipv4Packet::new_unchecked(ethernet_frame_raw.payload_mut());
+
+                        ip_packet.emit(&mut ip_raw, &ChecksumCapabilities::default());
+
+                        let mut udp_raw = UdpPacket::new_unchecked(ip_raw.payload_mut());
+                        // Need to awkwardly route this error out of the closure
+                        let mut emit_error = None;
+                        udp_packet.emit(
+                            &mut udp_raw,
+                            &ip_packet.src_addr.into_address(),
+                            &ip_packet.dst_addr.into_address(),
+                            offer.buffer_len(),
+                            |udp_paypload| {
+                                // Write DHCP payload into UDP packet
+                                let mut dhcp_raw = DhcpPacket::new_unchecked(&mut *udp_paypload);
+                                if let Err(error) = offer.emit(&mut dhcp_raw) {
+                                    emit_error = Some(error);
+                                }
+
+                                // udp_paypload.copy_from_slice(dhcp_raw.into_inner());
+                            },
+                            &ChecksumCapabilities::default(),
+                        );
+
+                        if let Some(error) = emit_error {
+                            error!("Error emitting DHCP packet {:?}", error);
+                            continue;
+                        }
+
+                        // let send_data = ethernet_frame_raw.into_inner();
+                        // Validate ethernet frame
+                        // let frame_raw = match EthernetFrame::new_checked(&send_data) {
+                        //     Ok(frame) => frame,
+                        //     Err(error) => {
+                        //         error!("Error validating ethernet frame: {:?}", error);
+                        //         continue;
+                        //     }
+                        // };
+
+                        // info!("Valid ethernet frame");
+
+                        // let frame = match EthernetRepr::parse(&frame_raw) {
+                        //     Ok(frame) => frame,
+                        //     Err(error) => {
+                        //         error!("Error validating ethernet frame: {:?}", error);
+                        //         continue;
+                        //     }
+                        // };
+
+                        // info!("Validated ethernet frame");
+
+                        // let packet = match Ipv4Packet::new_checked(frame_raw.payload_mut()) {
+                        //     Ok(packet) => packet,
+                        //     Err(error) => {
+                        //         error!("Error validating IPv4 packet: {:?}", error);
+                        //         continue;
+                        //     }
+                        // };
+
+                        // info!("Validated IPv4 packet");
+
+                        // let packet =
+                        //     match Ipv4Repr::parse(&packet, &ChecksumCapabilities::default()) {
+                        //         Ok(packet) => packet,
+                        //         Err(error) => {
+                        //             error!("Error validating IPv4 packet: {:?}", error);
+                        //             continue;
+                        //         }
+                        //     };
+
+                        let send_data = ethernet_frame_raw.into_inner();
+                        //TODO find better way to get end of packet
+                        let mut end = send_data.len();
+                        while (end >= 0) {
+                            let index = end - 1;
+
+                            // The last option byte is 0xFF marking the end of options and DHCP offer and therefore packet
+                            if send_data[index] == 0xFF {
+                                break;
+                            }
+
+                            end = index;
+                        }
+
+                        info!("Rawrr {:02x}", &send_data[..end]);
+
+                        poll_fn(|context| {
+                            let token = net_device.transmit(context);
+
+                            if let Some(transmit) = token {
+                                use embassy_net::driver::TxToken;
+                                transmit.consume(end, |send_buffer| {
+                                    send_buffer.copy_from_slice(&send_data[..end]);
+                                });
+                                info!("Transmitted DHCP packet");
+                                Poll::Ready(())
+                            } else {
+                                // Can I reuse this?
+                                WAKER.register(context.waker());
+                                Poll::Pending
+                            }
+                        })
+                        .await;
+
+                        info!("Sent DHCP packet");
+                        // Type stays the same
+
+                        // let mut ip_packet = Ipv4Packet::new_unchecked(ethernet_frame.payload_mut());
+                        // ip_packet.set_src_addr(DEVICE_ADDRESS);
+                        // ip_packet.set_dst_addr(offered_address);
+
+                        // let mut udp_packet = UdpPacket::new_unchecked(ip_packet.payload_mut());
+                        // udp_packet.set_dst_port(DHCP_CLIENT_PORT);
+                        // udp_packet.set_src_port(DHCP_SERVER_PORT);
+                        // // udp_packet.fill_checksum(&ip_packet.src_addr(), &ip_packet.dst_addr());
+                        // udp_packet.fill_checksum(DEVICE_ADDRESS, &ip_packet.dst_addr());
+
+                        // ip_packet.fill_checksum();
+                        continue;
+
+                        // DHCP
 
                         // Write it into the request buffer as we don't need the request data anymore
                         // if let Err(error) = offer.emit(&dhcp_packet) {
@@ -1759,14 +1934,16 @@ mod tests {
     // The tests don't run on the embedded target, so we need to import the std crate
 
     extern crate std;
+    use crate::fan::{SetPointOutOfBoundsError, Setting};
+
     use super::*;
 
     /// These are important hardcoded values I want to make sure are not changed accidentally
     #[test]
     fn setting_does_not_exceed_max_set_point() {
-        assert_eq!(fan::MAX_SET_POINT, 64_000);
-        assert_eq!(Setting::new(64_000), Ok(Setting(64_000)));
-        assert_eq!(Setting::new(64_000 + 1), Err(SetPointOutOfBoundsError));
-        assert_eq!(Setting::new(u16::MAX), Err(SetPointOutOfBoundsError));
+        core::assert_eq!(fan::MAX_SET_POINT, 64_000);
+        core::assert_eq!(Setting::new(64_000), Ok(Setting(64_000)));
+        core::assert_eq!(Setting::new(64_000 + 1), Err(SetPointOutOfBoundsError));
+        core::assert_eq!(Setting::new(u16::MAX), Err(SetPointOutOfBoundsError));
     }
 }

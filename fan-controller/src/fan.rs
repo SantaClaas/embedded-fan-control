@@ -33,7 +33,7 @@ pub(crate) const MAX_SET_POINT: u16 = 64_000;
 #[derive(Debug, Format, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct Setting(pub(crate) u16);
 
-#[derive(Debug, Format)]
+#[derive(Debug, Format, PartialEq)]
 pub(crate) struct SetPointOutOfBoundsError;
 
 impl Setting {
