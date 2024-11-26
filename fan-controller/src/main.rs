@@ -1462,14 +1462,6 @@ async fn main(spawner: Spawner) {
                     }
                 };
 
-                // let parsed = match Ipv4Repr::parse(&packet_raw, &ChecksumCapabilities::default()) {
-                //     Ok(packet) => packet,
-                //     Err(error) => {
-                //         warn!("Error reading IPv4 packet: {:?}", error);
-                //         continue;
-                //     }
-                // };
-
                 let IpProtocol::Udp = packet_raw.next_header() else {
                     warn!("Unexpected IPv4 protocol {:?}", packet_raw.next_header());
                     continue;
@@ -1490,14 +1482,6 @@ async fn main(spawner: Spawner) {
                         continue;
                     }
                 };
-
-                // let dhcp_packet_parsed = match DhcpRepr::parse(&dhcp_raw) {
-                //     Ok(packet) => packet,
-                //     Err(error) => {
-                //         warn!("Error reading DHCP packet: {:?}", error);
-                //         continue;
-                //     }
-                // };
 
                 let mut message_type = None;
                 for option in dhcp_raw.options() {
@@ -1615,47 +1599,6 @@ async fn main(spawner: Spawner) {
                             continue;
                         }
 
-                        // let send_data = ethernet_frame_raw.into_inner();
-                        // Validate ethernet frame
-                        // let frame_raw = match EthernetFrame::new_checked(&send_data) {
-                        //     Ok(frame) => frame,
-                        //     Err(error) => {
-                        //         error!("Error validating ethernet frame: {:?}", error);
-                        //         continue;
-                        //     }
-                        // };
-
-                        // info!("Valid ethernet frame");
-
-                        // let frame = match EthernetRepr::parse(&frame_raw) {
-                        //     Ok(frame) => frame,
-                        //     Err(error) => {
-                        //         error!("Error validating ethernet frame: {:?}", error);
-                        //         continue;
-                        //     }
-                        // };
-
-                        // info!("Validated ethernet frame");
-
-                        // let packet = match Ipv4Packet::new_checked(frame_raw.payload_mut()) {
-                        //     Ok(packet) => packet,
-                        //     Err(error) => {
-                        //         error!("Error validating IPv4 packet: {:?}", error);
-                        //         continue;
-                        //     }
-                        // };
-
-                        // info!("Validated IPv4 packet");
-
-                        // let packet =
-                        //     match Ipv4Repr::parse(&packet, &ChecksumCapabilities::default()) {
-                        //         Ok(packet) => packet,
-                        //         Err(error) => {
-                        //             error!("Error validating IPv4 packet: {:?}", error);
-                        //             continue;
-                        //         }
-                        //     };
-
                         let send_data = ethernet_frame_raw.into_inner();
                         //TODO find better way to get end of packet
                         let mut end = send_data.len();
@@ -1691,19 +1634,7 @@ async fn main(spawner: Spawner) {
                         .await;
 
                         info!("Sent DHCP packet");
-                        // Type stays the same
 
-                        // let mut ip_packet = Ipv4Packet::new_unchecked(ethernet_frame.payload_mut());
-                        // ip_packet.set_src_addr(DEVICE_ADDRESS);
-                        // ip_packet.set_dst_addr(offered_address);
-
-                        // let mut udp_packet = UdpPacket::new_unchecked(ip_packet.payload_mut());
-                        // udp_packet.set_dst_port(DHCP_CLIENT_PORT);
-                        // udp_packet.set_src_port(DHCP_SERVER_PORT);
-                        // // udp_packet.fill_checksum(&ip_packet.src_addr(), &ip_packet.dst_addr());
-                        // udp_packet.fill_checksum(DEVICE_ADDRESS, &ip_packet.dst_addr());
-
-                        // ip_packet.fill_checksum();
                         continue;
 
                         // DHCP
@@ -1719,23 +1650,6 @@ async fn main(spawner: Spawner) {
                         continue;
                     }
                 }
-                // Form response
-
-                // // Read eathernet frame
-                // let destination_mac = &buffer[..6];
-                // let destination_mac = EthernetAddress::from_bytes(destination_mac);
-                // // info!("Destination MAC: {:02x}", destination_mac);
-                // info!(
-                //     "\n Destination MAC: {:?}\n is broadcast: {}\n is multicast: {}\n is unicast: {}\n is local: {}",
-                //     destination_mac,
-                //     destination_mac.is_broadcast(),
-                //     destination_mac.is_multicast(),
-                //     destination_mac.is_unicast(),
-                //     destination_mac.is_local(),
-                // );
-
-                // let source_mac = &buffer[6..12];
-                // info!("Source MAC: {:x}", source_mac);
             }
 
             // Stack
