@@ -1406,7 +1406,7 @@ async fn main(spawner: Spawner) {
 
             info!("Starting my horrible experiment");
             static WAKER: AtomicWaker = AtomicWaker::new();
-            let mut buffer = [0; 1024];
+            let mut buffer = [0; 2048];
 
             loop {
                 let length = buffer.len();
@@ -1463,7 +1463,7 @@ async fn main(spawner: Spawner) {
                 };
 
                 let IpProtocol::Udp = packet_raw.next_header() else {
-                    warn!("Unexpected IPv4 protocol {:?}", packet_raw.next_header());
+                    warn!("Unsupported IPv4 protocol {:?}", packet_raw.next_header());
                     continue;
                 };
 
@@ -1475,23 +1475,38 @@ async fn main(spawner: Spawner) {
                     }
                 };
 
+                let a = &packet.payload_mut()[..];
+                let b = DhcpPacket::new_unchecked(a);
+                let parsed = DhcpRepr::parse(&b);
+                info!("Parsed {:#?}", &parsed);
+
                 let dhcp_raw = match DhcpPacket::new_checked(packet.payload_mut()) {
                     Ok(packet) => packet,
                     Err(error) => {
-                        warn!("Error reading DHCP packet: {:?}", error);
+                        info!("UDP payload is not DHCP (or invalid DHCP): {:?}", error);
                         continue;
                     }
                 };
 
                 let mut message_type = None;
+                let mut lease_duration = None;
                 for option in dhcp_raw.options() {
                     match option.kind {
                         // The constants for the option codes are sadly private to smoltcp
+                        51 => {
+                            lease_duration = Some(u32::from_be_bytes([
+                                option.data[0],
+                                option.data[1],
+                                option.data[2],
+                                option.data[3],
+                            ]));
+                        }
                         53 => {
                             message_type = Some(DhcpMessageType::from(option.data[0]));
-                            break;
                         }
-                        _ => continue,
+                        55 => {}
+
+                        other => warn!("Unsupported DHCP option {}", other),
                     }
                 }
 
@@ -1505,15 +1520,18 @@ async fn main(spawner: Spawner) {
 
                 match message_type {
                     DhcpMessageType::Discover => {
+                        info!("Received DHCP discover");
                         //TODO determine offered address
                         let offered_address = Ipv4Address::new(192, 168, 178, 2);
 
+                        //TODO what to do with DNS?
                         let dns_servers = Vec::from_slice(&[
                             Ipv4Address::new(9, 7, 10, 15),
                             Ipv4Address::new(9, 7, 10, 16),
                             Ipv4Address::new(9, 7, 10, 18),
                         ])
                         .unwrap();
+
                         let offer = DhcpRepr {
                             message_type: DhcpMessageType::Offer,
                             transaction_id,
@@ -1532,10 +1550,11 @@ async fn main(spawner: Spawner) {
                             parameter_request_list: None,
                             //TODO might need this as Wikipedia example has it set
                             dns_servers: Some(dns_servers),
+                            // dns_servers: None,
                             //TODO might be useful too
                             max_size: None,
                             // Is this "address time"?
-                            lease_duration: Some(86400),
+                            lease_duration: lease_duration.or(Some(86400)),
                             renew_duration: None,
                             rebind_duration: None,
                             additional_options: &[],
@@ -1636,14 +1655,140 @@ async fn main(spawner: Spawner) {
                         info!("Sent DHCP packet");
 
                         continue;
+                    }
+                    DhcpMessageType::Request => {
+                        info!("Received DHCP request");
+                        //TODO determine offered address
+                        let offered_address = Ipv4Address::new(192, 168, 178, 2);
 
-                        // DHCP
+                        //TODO what to do with DNS?
+                        let dns_servers = Vec::from_slice(&[
+                            Ipv4Address::new(9, 7, 10, 15),
+                            Ipv4Address::new(9, 7, 10, 16),
+                            Ipv4Address::new(9, 7, 10, 18),
+                        ])
+                        .unwrap();
+                        let acknowledgement = DhcpRepr {
+                            message_type: DhcpMessageType::Ack,
+                            transaction_id,
+                            secs: 0,
+                            client_hardware_address,
+                            client_ip: Ipv4Address::default(),
+                            your_ip: offered_address,
+                            server_ip: DEVICE_ADDRESS,
+                            router: Some(DEVICE_ADDRESS),
+                            subnet_mask: Some(SUBNET_MASK),
+                            relay_agent_ip: Ipv4Address::default(),
+                            broadcast: bool::default(),
+                            requested_ip: None,
+                            client_identifier: None,
+                            server_identifier: None,
+                            parameter_request_list: None,
+                            //TODO might need this as Wikipedia example has it set
+                            dns_servers: Some(dns_servers),
+                            // dns_servers: None,
+                            //TODO might be useful too
+                            max_size: None,
+                            // Is this "address time"?
+                            lease_duration: lease_duration.or(Some(86400)),
+                            renew_duration: None,
+                            rebind_duration: None,
+                            additional_options: &[],
+                        };
 
-                        // Write it into the request buffer as we don't need the request data anymore
-                        // if let Err(error) = offer.emit(&dhcp_packet) {
-                        //     warn!("Error writing DHCP packet: {:?}", error);
-                        //     continue;
-                        // }
+                        // UDP
+                        let udp_packet = UdpRepr {
+                            src_port: DHCP_SERVER_PORT,
+                            dst_port: DHCP_CLIENT_PORT,
+                        };
+
+                        // IP
+                        let ip_packet = Ipv4Repr {
+                            dst_addr: offered_address,
+                            src_addr: DEVICE_ADDRESS,
+                            //TODO
+                            hop_limit: 69,
+                            next_header: IpProtocol::Udp,
+                            // UDP representation length + UDP payload length (DHCP packet length)
+                            payload_len: udp_packet.header_len() + acknowledgement.buffer_len(),
+                        };
+
+                        // Ethernet frame
+                        let ethernet_frame = EthernetRepr {
+                            dst_addr: source_address,
+                            src_addr: device_hardware_address,
+                            ethertype: EthernetProtocol::Ipv4,
+                        };
+
+                        let mut buffer = [0; 1500];
+                        // Reusing the buffer as we don't need the data for reading anymore
+                        let mut ethernet_frame_raw = EthernetFrame::new_unchecked(buffer);
+                        ethernet_frame.emit(&mut ethernet_frame_raw);
+                        let mut ip_raw =
+                            Ipv4Packet::new_unchecked(ethernet_frame_raw.payload_mut());
+
+                        ip_packet.emit(&mut ip_raw, &ChecksumCapabilities::default());
+
+                        let mut udp_raw = UdpPacket::new_unchecked(ip_raw.payload_mut());
+                        // Need to awkwardly route this error out of the closure
+                        let mut emit_error = None;
+                        udp_packet.emit(
+                            &mut udp_raw,
+                            &ip_packet.src_addr.into_address(),
+                            &ip_packet.dst_addr.into_address(),
+                            acknowledgement.buffer_len(),
+                            |udp_paypload| {
+                                // Write DHCP payload into UDP packet
+                                let mut dhcp_raw = DhcpPacket::new_unchecked(&mut *udp_paypload);
+                                if let Err(error) = acknowledgement.emit(&mut dhcp_raw) {
+                                    emit_error = Some(error);
+                                }
+
+                                // udp_paypload.copy_from_slice(dhcp_raw.into_inner());
+                            },
+                            &ChecksumCapabilities::default(),
+                        );
+
+                        if let Some(error) = emit_error {
+                            error!("Error emitting DHCP packet {:?}", error);
+                            continue;
+                        }
+
+                        let send_data = ethernet_frame_raw.into_inner();
+                        //TODO find better way to get end of packet
+                        let mut end = send_data.len();
+                        while (end >= 0) {
+                            let index = end - 1;
+
+                            // The last option byte is 0xFF marking the end of options and DHCP offer and therefore packet
+                            if send_data[index] == 0xFF {
+                                break;
+                            }
+
+                            end = index;
+                        }
+
+                        info!("Rawrr {:02x}", &send_data[..end]);
+
+                        poll_fn(|context| {
+                            let token = net_device.transmit(context);
+
+                            if let Some(transmit) = token {
+                                use embassy_net::driver::TxToken;
+                                transmit.consume(end, |send_buffer| {
+                                    send_buffer.copy_from_slice(&send_data[..end]);
+                                });
+                                info!("Transmitted DHCP packet");
+                                Poll::Ready(())
+                            } else {
+                                // Can I reuse this?
+                                WAKER.register(context.waker());
+                                Poll::Pending
+                            }
+                        })
+                        .await;
+
+                        info!("Sent DHCP packet");
                     }
                     other => {
                         warn!("Received unsupported DHCP message type: {:?}", other);
