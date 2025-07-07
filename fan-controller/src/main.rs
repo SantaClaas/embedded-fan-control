@@ -818,6 +818,8 @@ async fn mqtt_task(
     }
 
     async fn set_up_discovery() {
+        // Resources:
+        // - https://www.youtube.com/watch?v=n9QXRcFqbLY
         // Send discovery packet
         // Configuration is like the YAML configuration that would be added in Home Assistant but as JSON
         // Command topic: The MQTT topic to publish commands to change the state of the fan
@@ -845,20 +847,7 @@ async fn mqtt_task(
         // Don't need to set speed_range_min because it is 1 by default
 
         // Speed set to max 32000 which is 50% of what the fans can do but more is not needed. This way the fans last longer
-        const DISCOVERY_PAYLOAD: &[u8] = br#"{
-            "name": "Fans",
-            "uniq_id": "fancontroller",
-            "stat_t": "fancontroller/on/state",
-            "cmd_t": "fancontroller/on/set",
-            "pct_stat_t": "fancontroller/speed/percentage_state",
-            "pct_cmd_t": "fancontroller/speed/percentage",
-            "spd_rng_max": 32000,
-            "dev": {
-                "ids": "fancontroller-device",
-                "name": "Fan Controller",
-                "model": "Raspberry Pi Pico W 1"
-            }
-        }"#;
+        const DISCOVERY_PAYLOAD: &[u8] = env!("FAN_CONTROLLER_DISCOVERY_PAYLOAD").as_bytes();
 
         // "~": "fancontroller",
         //

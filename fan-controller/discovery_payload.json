@@ -1,0 +1,14 @@
+{
+  "name": "Fans",
+  "uniq_id": "fancontroller",
+  "stat_t": "fancontroller/on/state",
+  "cmd_t": "fancontroller/on/set",
+  "pct_stat_t": "fancontroller/speed/percentage_state",
+  "pct_cmd_t": "fancontroller/speed/percentage",
+  "spd_rng_max": 32000,
+  "dev": {
+    "ids": "fancontroller-device",
+    "name": "Fan Controller",
+    "model": "Raspberry Pi Pico W 1"
+  }
+}

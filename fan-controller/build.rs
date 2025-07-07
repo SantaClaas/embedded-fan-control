@@ -9,7 +9,7 @@
 //! new memory settings.
 
 use std::env::{self, VarError};
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::Write;
 use std::path::PathBuf;
 
@@ -23,6 +23,15 @@ enum BuildError {
 
     #[error("Missing variable {1} in .env file: {0}")]
     MissingEnvVar(VarError, &'static str),
+
+    #[error("Error with discovery payload")]
+    DiscoveryPayloadError(#[from] DiscoveryPayloadError),
+}
+
+#[derive(Debug, thiserror::Error)]
+enum DiscoveryPayloadError {
+    #[error("Failed to read discovery payload file at \"{1}\": {0}")]
+    ReadDiscoveryPayload(std::io::Error, &'static str),
 }
 
 fn ensure_memory_x_file() -> Result<(), BuildError> {
@@ -48,7 +57,7 @@ fn ensure_memory_x_file() -> Result<(), BuildError> {
     Ok(())
 }
 
-fn setup_wifi_credentials() -> Result<(), BuildError> {
+fn setup_configuration() -> Result<(), BuildError> {
     const WIFI_NETWORK: &str = "FAN_CONTROL_WIFI_NETWORK";
     const WIFI_PASSWORD: &str = "FAN_CONTROL_WIFI_PASSWORD";
     const MQTT_BROKER_USERNAME: &str = "FAN_CONTROL_MQTT_BROKER_USERNAME";
@@ -81,8 +90,38 @@ fn setup_wifi_credentials() -> Result<(), BuildError> {
     Ok(())
 }
 
+fn setup_discovery_payload() -> Result<(), DiscoveryPayloadError> {
+    const PATH_DISCOVER_JSON: &str = "discovery_payload.json";
+    //TODO validate discovery payload
+    let json = fs::read_to_string(PATH_DISCOVER_JSON)
+        .map_err(|error| DiscoveryPayloadError::ReadDiscoveryPayload(error, PATH_DISCOVER_JSON))?;
+
+    let mut is_in_string = false;
+    let mut result = String::new();
+    for character in json.chars() {
+        // Do not trim strings
+        if character == '"' {
+            is_in_string = !is_in_string;
+            continue;
+        }
+
+        if is_in_string {
+            continue;
+        }
+
+        result.push(character);
+    }
+
+    println!(
+        "cargo:rustc-env=FAN_CONTROLLER_DISCOVERY_PAYLOAD={}",
+        result
+    );
+    Ok(())
+}
+
 fn main() -> Result<(), BuildError> {
     ensure_memory_x_file()?;
-    setup_wifi_credentials()?;
+    setup_configuration()?;
+    setup_discovery_payload()?;
     Ok(())
 }
