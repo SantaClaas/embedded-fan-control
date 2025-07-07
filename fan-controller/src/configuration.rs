@@ -1,6 +1,25 @@
 use embassy_net::IpAddress;
 use embassy_time::Duration;
 
+/// Thanks!
+/// - https://users.rust-lang.org/t/pass-numeric-compile-time-arguments/59093/2
+/// - https://www.reddit.com/r/rust/comments/10ol38k/comment/j6jrpvd
+const fn parse_u16(string: &str) -> u16 {
+    let mut out: u16 = 0;
+    let mut index: usize = 0;
+    while index < string.len() {
+        out *= 10;
+        let byte = string.as_bytes()[index];
+        assert!(
+            b'0' <= byte && byte <= b'9',
+            "invalid digit. Needs to be a number",
+        );
+        out += (byte - b'0') as u16;
+        index += 1;
+    }
+    out
+}
+
 //TODO make configurable
 /// Don't put credentials in the source code
 pub(crate) const WIFI_NETWORK: &str = env!("FAN_CONTROL_WIFI_NETWORK");
@@ -10,10 +29,10 @@ pub(crate) const WIFI_NETWORK: &str = env!("FAN_CONTROL_WIFI_NETWORK");
 pub(crate) const WIFI_PASSWORD: &str = env!("FAN_CONTROL_WIFI_PASSWORD");
 
 //TODO make configurable
-pub(crate) const MQTT_BROKER_ADDRESS: &str = "homeassistant";
+pub(crate) const MQTT_BROKER_ADDRESS: &str = env!("FAN_CONTROL_MQTT_BROKER_ADDRESS");
 
 //TODO make configurable
-pub(crate) const MQTT_BROKER_PORT: u16 = 1883;
+pub(crate) const MQTT_BROKER_PORT: u16 = parse_u16(env!("FAN_CONTROL_MQTT_BROKER_PORT"));
 
 //TODO make configurable
 /// The broker IP address can be configured manually. It will be used instead of the [MQTT_BROKER_ADDRESS]
@@ -30,8 +49,8 @@ pub(crate) struct MqttBrokerCredentials<'a> {
 }
 
 pub(crate) const MQTT_BROKER_CREDENTIALS: MqttBrokerCredentials = MqttBrokerCredentials {
-    username: "fancontroller",
-    password: b"test",
+    username: env!("FAN_CONTROL_MQTT_BROKER_USERNAME"),
+    password: env!("FAN_CONTROL_MQTT_BROKER_PASSWORD").as_bytes(),
 };
 
 //TODO make configurable

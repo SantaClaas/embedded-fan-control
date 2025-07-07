@@ -1,7 +1,5 @@
 #![no_std]
 #![no_main]
-//TODO remove this 🥴
-#![allow(warnings)]
 
 use configuration::DISCOVERY_TOPIC;
 use core::convert::Infallible;

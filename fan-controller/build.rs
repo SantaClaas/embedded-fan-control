@@ -51,6 +51,10 @@ fn ensure_memory_x_file() -> Result<(), BuildError> {
 fn setup_wifi_credentials() -> Result<(), BuildError> {
     const WIFI_NETWORK: &str = "FAN_CONTROL_WIFI_NETWORK";
     const WIFI_PASSWORD: &str = "FAN_CONTROL_WIFI_PASSWORD";
+    const MQTT_BROKER_USERNAME: &str = "FAN_CONTROL_MQTT_BROKER_USERNAME";
+    const MQTT_BROKER_PASSWORD: &str = "FAN_CONTROL_MQTT_BROKER_PASSWORD";
+    const MQTT_BROKER_ADDRESS: &str = "FAN_CONTROL_MQTT_BROKER_ADDRESS";
+    const MQTT_BROKER_PORT: &str = "FAN_CONTROL_MQTT_BROKER_PORT";
 
     dotenvy::dotenv()?;
     let wifi_network =
@@ -58,8 +62,21 @@ fn setup_wifi_credentials() -> Result<(), BuildError> {
     let wifi_password =
         env::var(WIFI_PASSWORD).map_err(|error| BuildError::MissingEnvVar(error, WIFI_PASSWORD))?;
 
+    let mqtt_broker_username = env::var(MQTT_BROKER_USERNAME)
+        .map_err(|error| BuildError::MissingEnvVar(error, MQTT_BROKER_USERNAME))?;
+    let mqtt_broker_password = env::var(MQTT_BROKER_PASSWORD)
+        .map_err(|error| BuildError::MissingEnvVar(error, MQTT_BROKER_PASSWORD))?;
+    let mqtt_broker_address = env::var(MQTT_BROKER_ADDRESS)
+        .map_err(|error| BuildError::MissingEnvVar(error, MQTT_BROKER_ADDRESS))?;
+    let mqtt_broker_port = env::var(MQTT_BROKER_PORT)
+        .map_err(|error| BuildError::MissingEnvVar(error, MQTT_BROKER_PORT))?;
+
     println!("cargo:rustc-env=FAN_CONTROL_WIFI_NETWORK={wifi_network}");
     println!("cargo:rustc-env=FAN_CONTROL_WIFI_PASSWORD={wifi_password}");
+    println!("cargo:rustc-env=FAN_CONTROL_MQTT_BROKER_USERNAME={mqtt_broker_username}");
+    println!("cargo:rustc-env=FAN_CONTROL_MQTT_BROKER_PASSWORD={mqtt_broker_password}");
+    println!("cargo:rustc-env=FAN_CONTROL_MQTT_BROKER_ADDRESS={mqtt_broker_address}");
+    println!("cargo:rustc-env=FAN_CONTROL_MQTT_BROKER_PORT={mqtt_broker_port}");
 
     Ok(())
 }
