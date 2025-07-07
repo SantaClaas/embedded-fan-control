@@ -8,10 +8,14 @@
 //! updating `memory.x` ensures a rebuild of the application with the
 //! new memory settings.
 
+use std::collections::HashMap;
 use std::env::{self, VarError};
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::PathBuf;
+use std::rc::Rc;
+
+use ruff_python_ast::{DictItem, Expr, Stmt};
 
 #[derive(Debug, thiserror::Error)]
 enum BuildError {
@@ -90,6 +94,66 @@ fn setup_configuration() -> Result<(), BuildError> {
     Ok(())
 }
 
+fn extract_abreviations() -> HashMap<Rc<str>, Rc<str>> {
+    const PATH: &str = "home-assistant/core/homeassistant/components/mqtt/abbreviations.py";
+    println!("cargo::rerun-if-changed={PATH}");
+    let module = fs::read_to_string(&PATH).unwrap();
+    let module = ruff_python_parser::parse_module(&module).unwrap();
+    let syntax = module.syntax();
+
+    let mut abbreviations = HashMap::new();
+    for statement in &syntax.body {
+        //TODO can I remove clone-clowning?
+        let Some(assignment) = statement.clone().assign_stmt() else {
+            continue;
+        };
+
+        let Some(name_expression) = assignment
+            .targets
+            .first()
+            .cloned()
+            .and_then(|expression| expression.name_expr())
+        else {
+            continue;
+        };
+
+        if name_expression.id.as_str() != "ABBREVIATIONS" {
+            continue;
+        }
+
+        let Some(dictionary) = assignment.value.dict_expr() else {
+            continue;
+        };
+
+        for item in dictionary.items {
+            let Some(key) = item.key else {
+                todo!("Expected abbreviations dictionary to have a key")
+            };
+
+            let Some(key_string_literal) = key.string_literal_expr() else {
+                todo!("Expected key to be a string literal")
+            };
+
+            let key = key_string_literal.value.to_str();
+
+            let Some(value_string_literal) = item.value.string_literal_expr() else {
+                todo!("Expected value to be a string literal")
+            };
+
+            let value = value_string_literal.value.to_str();
+            abbreviations.insert(Rc::from(value), Rc::from(key));
+        }
+
+        // Early return as we have what we want
+        return abbreviations;
+    }
+
+    return abbreviations;
+}
+
+/// Overengineering saving a couple of bytes from a JSON string.
+/// Minimizes payload with abbreviations and removing whitespace.
+/// Abbreviations are loaded from the official home assistant repository.
 fn setup_discovery_payload() -> Result<(), DiscoveryPayloadError> {
     const PATH_DISCOVER_JSON: &str = "discovery_payload.json";
     //TODO validate discovery payload
@@ -98,14 +162,47 @@ fn setup_discovery_payload() -> Result<(), DiscoveryPayloadError> {
 
     let mut is_in_string = false;
     let mut result = String::new();
+    let abbreviations = extract_abreviations();
+    let mut current_key = String::new();
+    let mut is_in_key = true;
     for character in json.chars() {
         // Do not trim strings
         if character == '"' {
+            // End of key
+            if is_in_string && is_in_key {
+                let key = Rc::from(current_key.as_ref());
+                let abbreviation = abbreviations.get(&key);
+                if let Some(abbreviation) = abbreviation {
+                    println!("Abbreviation {} -> {}", key, abbreviation);
+                    result.push_str(&abbreviation);
+                } else {
+                    result.push_str(&current_key);
+                }
+                current_key.clear();
+                result.push('"');
+                is_in_string = false;
+                is_in_key = false;
+                continue;
+            }
+
             is_in_string = !is_in_string;
+            result.push('"');
             continue;
         }
 
-        if is_in_string {
+        // End of value
+        if character == ',' || character == '}' {
+            is_in_key = true;
+            result.push(',');
+            continue;
+        }
+
+        if !is_in_string && character.is_whitespace() {
+            continue;
+        }
+
+        if is_in_key {
+            current_key.push(character);
             continue;
         }
 
@@ -116,6 +213,7 @@ fn setup_discovery_payload() -> Result<(), DiscoveryPayloadError> {
         "cargo:rustc-env=FAN_CONTROLLER_DISCOVERY_PAYLOAD={}",
         result
     );
+
     Ok(())
 }
 
