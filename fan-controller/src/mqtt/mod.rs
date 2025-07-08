@@ -42,26 +42,6 @@ pub(super) enum ConnectErrorReasonCode {
 #[derive(Debug, Clone, Format)]
 pub struct UnknownConnectErrorReasonCode(u8);
 
-#[derive(Format)]
-pub(super) enum QualityOfService {
-    /// At most once delivery or 0
-    AtMostOnceDelivery = 0x00,
-    /// At least once delivery or 1
-    AtLeastOnceDelivery = 0x01,
-    /// Exactly once delivery or 2
-    ExactlyOnceDelivery = 0x02,
-}
-
-impl QualityOfService {
-    const fn to_byte(&self) -> u8 {
-        match self {
-            QualityOfService::AtMostOnceDelivery => 0,
-            QualityOfService::AtLeastOnceDelivery => 1,
-            QualityOfService::ExactlyOnceDelivery => 2,
-        }
-    }
-}
-
 pub(crate) trait Encode {
     fn encode(&self, buffer: &mut [u8], offset: &mut usize);
 }

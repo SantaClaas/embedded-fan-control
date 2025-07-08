@@ -1,4 +1,5 @@
-use crate::mqtt::{variable_byte_integer, QualityOfService};
+use crate::mqtt::variable_byte_integer;
+use ::mqtt::QualityOfService;
 use defmt::Format;
 
 #[derive(Debug, Clone, Format)]

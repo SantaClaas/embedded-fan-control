@@ -9,7 +9,7 @@ cortex-m-rt = "0.7.3"
 crc = "3.2.1"
 cyw43 = { version = "0.1.0", features = ["defmt", "firmware-logs"] }
 cyw43-pio = { version = "0.1.0", features = ["defmt", "overclock"] }
-defmt = "0.3.8"
+defmt = { workspace = true }
 defmt-rtt = "0.4.1"
 embassy-executor = { version = "0.5.0", features = [
     "task-arena-size-98304",
@@ -40,6 +40,7 @@ embassy-time = { version = "0.3.1", features = ["defmt"] }
 embedded-io-async = "0.6.1"
 embedded-nal-async = "0.7.1"
 heapless = "0.8.0"
+mqtt = { version = "0.1.0", path = "../mqtt", features = ["defmt"] }
 nb = "1.1.0"
 panic-probe = "0.3.2"
 portable-atomic = { version = "1.7", features = ["critical-section"] }
@@ -52,6 +53,9 @@ debug = 2
 
 [build-dependencies]
 dotenvy = "0.15.7"
+mqtt = { version = "0.1.0", path = "../mqtt", features = ["serde"] }
 ruff_python_ast = { git = "https://github.com/astral-sh/ruff", version = "0.0.0" }
 ruff_python_parser = { git = "https://github.com/astral-sh/ruff", rev = "9bee8376a17401f9736b45fdefffb62edc2f1668", version = "0.0.0" }
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.140"
 thiserror = "2.0.12"

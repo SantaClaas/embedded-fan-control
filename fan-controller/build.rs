@@ -15,7 +15,119 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::rc::Rc;
 
+use mqtt::QualityOfService;
 use ruff_python_ast::{DictItem, Expr, Stmt};
+use serde::Serialize;
+
+#[derive(Serialize, Clone, Debug)]
+#[serde(untagged)]
+enum ListOrString {
+    List(Vec<String>),
+    String(&'static str),
+}
+
+/// Information about the device this fan is a part of to tie it into the device registry. Only works when unique_id is set. At least one of identifiers or connections must be present to identify the device.
+#[derive(Serialize, Default)]
+struct Device {
+    /// A list of IDs that uniquely identify the device. For example a serial number.
+    #[serde(rename = "ids")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    identifiers: Option<ListOrString>,
+    /// The name of the device.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<&'static str>,
+    /// The model of the device.
+    #[serde(rename = "mdl")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    model: Option<&'static str>,
+    /// The manufacturer of the device.
+    #[serde(rename = "mf")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    manufacturer: Option<&'static str>,
+    /// The hardware version of the device.
+    #[serde(rename = "hw")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    hardware_version: Option<&'static str>,
+    /// The firmware version of the device.
+    #[serde(rename = "sw")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    software_version: Option<&'static str>,
+}
+
+#[derive(Serialize, Default)]
+struct Origin {
+    /// The name of the application that is the origin of the discovered MQTT item. (Required)
+    name: &'static str,
+    /// Software version of the application that supplies the discovered MQTT item.
+    #[serde(rename = "sw")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    software_version: Option<&'static str>,
+    /// Support URL of the application that supplies the discovered MQTT item.
+    #[serde(rename = "url")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    support_url: Option<&'static str>,
+}
+
+/// Internally tagged by the required `platform` (`p`) field
+#[derive(Serialize)]
+#[serde(tag = "p")]
+enum Component {
+    Fan {
+        /// The name of the fan. Can be set to null if only the device name is relevant.
+        name: Option<&'static str>,
+        /// An ID that uniquely identifies this fan. If two fans have the same unique ID, Home Assistant will raise an exception. Required when used with device-based discovery.
+        #[serde(rename = "uniq_id")]
+        #[serde(skip_serializing_if = "Option::is_none")]
+        unique_id: Option<&'static str>,
+        /// The MQTT topic subscribed to receive state updates. A “None” payload resets to an unknown state. An empty payload is ignored. By default, valid state payloads are OFF and ON. The accepted payloads can be overridden with the payload_off and payload_on config options.
+        #[serde(rename = "stat_t")]
+        #[serde(skip_serializing_if = "Option::is_none")]
+        state_topic: Option<&'static str>,
+
+        /// The MQTT topic to publish commands to change the fan state.
+        #[serde(rename = "cmd_t")]
+        command_topic: &'static str,
+        /// The MQTT topic subscribed to receive fan speed based on percentage.
+        #[serde(rename = "pct_stat_t")]
+        percentage_state_topic: Option<&'static str>,
+        /// The MQTT topic to publish commands to change the fan speed state based on a percentage.
+        #[serde(rename = "pct_cmd_t")]
+        percentage_command_topic: Option<&'static str>,
+        /// The maximum of numeric output range (representing 100 %). The percentage_step is defined by 100 / the number of speeds within the speed range.
+        /// Default: 100
+        #[serde(rename = "spd_rng_max")]
+        speed_range_max: Option<u16>,
+    },
+}
+
+/// Home Assistant MQTT device-based Discovery Payload
+/// This is for the multi [device discovery payload](https://www.home-assistant.io/integrations/mqtt/#device-discovery-payload).
+/// It requires
+/// - device
+/// - origin
+#[derive(Serialize, Default)]
+struct DiscoveryPayload {
+    #[serde(rename = "dev")]
+    device: Device,
+    #[serde(rename = "o")]
+    origin: Origin,
+    #[serde(rename = "cmps")]
+    components: HashMap<String, Component>,
+    #[serde(rename = "qos")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    quality_of_service: Option<QualityOfService>,
+    #[serde(rename = "stat_t")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    state_topic: Option<&'static str>,
+    #[serde(rename = "cmd_t")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    command_topic: Option<&'static str>,
+    /// The encoding of the payloads received and published messages. Set to "" to disable decoding of incoming payload.
+    /// Default is "utf-8"
+    #[serde(rename = "e")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    encoding: Option<String>,
+}
 
 #[derive(Debug, thiserror::Error)]
 enum BuildError {
@@ -154,6 +266,7 @@ fn extract_abreviations() -> HashMap<Rc<str>, Rc<str>> {
 /// Overengineering saving a couple of bytes from a JSON string.
 /// Minimizes payload with abbreviations and removing whitespace.
 /// Abbreviations are loaded from the official home assistant repository.
+/// TODO: device and origin abbreviations
 fn setup_discovery_payload() -> Result<(), DiscoveryPayloadError> {
     const PATH_DISCOVER_JSON: &str = "discovery_payload.json";
     //TODO validate discovery payload
@@ -217,9 +330,64 @@ fn setup_discovery_payload() -> Result<(), DiscoveryPayloadError> {
     Ok(())
 }
 
+fn set_discovery_payload() {
+    // No way to const a HashMap
+    let payload = DiscoveryPayload {
+        device: Device {
+            identifiers: Some(ListOrString::String("fancontroller-device")),
+            name: Some("Fan Controller"),
+            model: Some("Raspberry Pi Pico W 1"),
+            manufacturer: Some("claas.dev"),
+            hardware_version: Some("1.0"),
+            software_version: Some(env!("CARGO_PKG_VERSION")),
+        },
+        origin: Origin {
+            name: "fan-controller",
+            software_version: Some(env!("CARGO_PKG_VERSION")),
+            support_url: Some("https://github.com/SantaClaas/embedded-fan-control"),
+        },
+        components: HashMap::from([
+            // Fan 1
+            (
+                "fan-1".to_string(),
+                Component::Fan {
+                    name: Some("Fan 1"),
+                    unique_id: Some("fancontroller/fan-1"),
+                    state_topic: Some("fancontroller/fan-1/on/state"),
+                    command_topic: "fancontroller/fan-1/on/set",
+                    percentage_state_topic: Some("fancontroller/fan-1/speed/percentage_state"),
+                    percentage_command_topic: Some("fancontroller/fan-1/speed/percentage"),
+                    speed_range_max: Some(32_000),
+                },
+            ),
+            // Fan 2
+            (
+                "fan-2".to_string(),
+                Component::Fan {
+                    name: Some("Fan 2"),
+                    unique_id: Some("fancontroller/fan-2"),
+                    state_topic: Some("fancontroller/fan-2/on/state"),
+                    command_topic: "fancontroller/fan-2/on/set",
+                    percentage_state_topic: Some("fancontroller/fan-2/speed/percentage_state"),
+                    percentage_command_topic: Some("fancontroller/fan-2/speed/percentage"),
+                    speed_range_max: Some(32_000),
+                },
+            ),
+        ]),
+        quality_of_service: None,
+        state_topic: Some("fancontroller/on/state"),
+        command_topic: Some("fancontroller/on/set"),
+        encoding: None,
+    };
+
+    let payload = serde_json::to_string(&payload).unwrap();
+    println!("cargo:rustc-env=FAN_CONTROLLER_DISCOVERY_PAYLOAD={payload}",);
+}
+
 fn main() -> Result<(), BuildError> {
     ensure_memory_x_file()?;
     setup_configuration()?;
-    setup_discovery_payload()?;
+    // setup_discovery_payload()?;
+    set_discovery_payload();
     Ok(())
 }

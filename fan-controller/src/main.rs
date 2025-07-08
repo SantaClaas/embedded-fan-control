@@ -63,8 +63,8 @@ use crate::mqtt::packet::subscribe_acknowledgement::SubscribeAcknowledgement;
 use crate::mqtt::packet::{connect, publish, subscribe};
 use crate::mqtt::packet::{get_parts, FromPublish, FromSubscribeAcknowledgement};
 use crate::mqtt::task::send;
-use crate::mqtt::QualityOfService;
 use crate::mqtt::TryEncode;
+use ::mqtt::QualityOfService;
 
 mod async_callback;
 mod configuration;

@@ -1,4 +1,10 @@
 {
+  "device": {
+    "ids": "fancontroller-device",
+    "name": "Fan Controller",
+    "manufacturer": "claas.dev",
+    "model": "Raspberry Pi Pico W 1"
+  },
   "name": "Fans",
   "unique_id": "fancontroller",
   "stat_t": "fancontroller/on/state",
@@ -6,9 +12,5 @@
   "pct_stat_t": "fancontroller/speed/percentage_state",
   "pct_cmd_t": "fancontroller/speed/percentage",
   "spd_rng_max": 32000,
-  "dev": {
-    "ids": "fancontroller-device",
-    "name": "Fan Controller",
-    "model": "Raspberry Pi Pico W 1"
-  }
+  "origin": {}
 }

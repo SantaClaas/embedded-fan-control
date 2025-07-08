@@ -1,7 +1,6 @@
-use crate::mqtt::{
-    variable_byte_integer, ConnectErrorReasonCode, QualityOfService, UnknownConnectErrorReasonCode,
-};
+use crate::mqtt::{variable_byte_integer, ConnectErrorReasonCode, UnknownConnectErrorReasonCode};
 use crate::TryDecode;
+use ::mqtt::QualityOfService;
 use defmt::{info, Format};
 
 // pub(crate) struct Properties {

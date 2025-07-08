@@ -1,9 +1,8 @@
-use core::num::NonZeroU16;
-
-use defmt::{info, Format};
-
+use crate::mqtt::variable_byte_integer;
 use crate::mqtt::TryEncode;
-use crate::mqtt::{variable_byte_integer, QualityOfService};
+use ::mqtt::QualityOfService;
+use core::num::NonZeroU16;
+use defmt::{info, Format};
 
 #[derive(Debug)]
 pub(crate) struct Options(u8);
