@@ -16,9 +16,9 @@ use super::packet::connect_acknowledgement;
 
 #[derive(Debug, Format)]
 pub(crate) enum SendError<T: Debug + Format> {
-    EncodeError(T),
-    SendError(tcp::Error),
-    FlushError(tcp::Error),
+    Encode(T),
+    Write(tcp::Error),
+    Flush(tcp::Error),
 }
 
 pub(crate) async fn send<'a, T>(
@@ -33,13 +33,13 @@ where
     let mut send_buffer = [0; 1024];
     packet
         .try_encode(&mut send_buffer, &mut offset)
-        .map_err(SendError::EncodeError)?;
+        .map_err(SendError::Encode)?;
 
     socket
         .write(&send_buffer[..offset])
         .await
-        .map_err(SendError::SendError)?;
-    socket.flush().await.map_err(SendError::FlushError)?;
+        .map_err(SendError::Write)?;
+    socket.flush().await.map_err(SendError::Flush)?;
     Ok(())
 }
 

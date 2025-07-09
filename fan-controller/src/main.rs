@@ -408,7 +408,7 @@ async fn mqtt_task(
 
     use mqtt::task;
     let packet = Connect {
-        client_identifier: "fancontroller",
+        client_identifier: env!("CARGO_PKG_NAME"),
         username: configuration::MQTT_BROKER_CREDENTIALS.username,
         password: configuration::MQTT_BROKER_CREDENTIALS.password,
         keep_alive_seconds: configuration::KEEP_ALIVE.as_secs() as u16,
