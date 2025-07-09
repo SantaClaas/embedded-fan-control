@@ -1,3 +1,4 @@
+use super::packet::connect_acknowledgement;
 use crate::mqtt::packet::connect::{Connect, EncodeError};
 use crate::mqtt::packet::connect_acknowledgement::{ConnectAcknowledgement, ConnectReasonCode};
 use crate::mqtt::packet::GetPartsError;
@@ -8,8 +9,6 @@ use defmt::{info, warn, Format};
 use embassy_net::tcp;
 use embassy_net::tcp::TcpSocket;
 use embedded_io_async::Write;
-
-use super::packet::connect_acknowledgement;
 
 ///! Tasks that need to be done to run MQTT
 ///! - Keep alive
@@ -45,11 +44,11 @@ where
 
 #[derive(Format)]
 pub(crate) enum ConnectError {
-    SendError(SendError<EncodeError>),
-    ReadError(tcp::Error),
-    PartsError(GetPartsError),
+    Send(SendError<EncodeError>),
+    Read(tcp::Error),
+    Parts(GetPartsError),
     InvalidResponsePacketType(u8),
-    DecodeAcknowledgementError(connect_acknowledgement::DecodeError),
+    DecodeAcknowledgement(connect_acknowledgement::DecodeError),
     ErrorReasonCode(ConnectErrorReasonCode),
 }
 
@@ -57,9 +56,7 @@ pub(crate) async fn connect<'a, 'b>(
     socket: &mut TcpSocket<'a>,
     packet: Connect<'b>,
 ) -> Result<(), ConnectError> {
-    send(socket, packet)
-        .await
-        .map_err(ConnectError::SendError)?;
+    send(socket, packet).await.map_err(ConnectError::Send)?;
 
     // Wait for connect acknowledgement
     // Discard all messages before the connect acknowledgement
@@ -68,10 +65,9 @@ pub(crate) async fn connect<'a, 'b>(
     let bytes_read = socket
         .read(&mut receive_buffer)
         .await
-        .map_err(ConnectError::ReadError)?;
+        .map_err(ConnectError::Read)?;
 
-    let parts =
-        packet::get_parts(&receive_buffer[..bytes_read]).map_err(ConnectError::PartsError)?;
+    let parts = packet::get_parts(&receive_buffer[..bytes_read]).map_err(ConnectError::Parts)?;
 
     if parts.r#type != ConnectAcknowledgement::TYPE {
         warn!(
@@ -85,7 +81,7 @@ pub(crate) async fn connect<'a, 'b>(
 
     let acknowledgement =
         ConnectAcknowledgement::try_decode(parts.flags, parts.variable_header_and_payload)
-            .map_err(ConnectError::DecodeAcknowledgementError)?;
+            .map_err(ConnectError::DecodeAcknowledgement)?;
 
     info!("Connect acknowledgement read");
     if let ConnectReasonCode::ErrorCode(error_code) = acknowledgement.connect_reason_code {
