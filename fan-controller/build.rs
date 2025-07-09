@@ -7,6 +7,7 @@
 //! Cargo re-run the build script whenever `memory.x` is changed,
 //! updating `memory.x` ensures a rebuild of the application with the
 //! new memory settings.
+#![allow(unused)]
 
 use std::collections::HashMap;
 use std::env::{self, VarError};
@@ -353,10 +354,12 @@ fn set_discovery_payload() {
                 Component::Fan {
                     name: Some("Fan 1"),
                     unique_id: Some("fancontroller/fan-1"),
-                    state_topic: Some("fancontroller/fan-1/on/state"),
-                    command_topic: "fancontroller/fan-1/on/set",
-                    percentage_state_topic: Some("fancontroller/fan-1/speed/percentage_state"),
-                    percentage_command_topic: Some("fancontroller/fan-1/speed/percentage"),
+                    state_topic: Some(topic::fan_controller::fan_1::STATE),
+                    command_topic: topic::fan_controller::fan_1::COMMAND,
+                    percentage_state_topic: Some(topic::fan_controller::fan_1::percentage::STATE),
+                    percentage_command_topic: Some(
+                        topic::fan_controller::fan_1::percentage::COMMAND,
+                    ),
                     speed_range_max: Some(32_000),
                 },
             ),
@@ -366,21 +369,24 @@ fn set_discovery_payload() {
                 Component::Fan {
                     name: Some("Fan 2"),
                     unique_id: Some("fancontroller/fan-2"),
-                    state_topic: Some("fancontroller/fan-2/on/state"),
-                    command_topic: "fancontroller/fan-2/on/set",
-                    percentage_state_topic: Some("fancontroller/fan-2/speed/percentage_state"),
-                    percentage_command_topic: Some("fancontroller/fan-2/speed/percentage"),
+                    state_topic: Some(topic::fan_controller::fan_2::STATE),
+                    command_topic: topic::fan_controller::fan_2::COMMAND,
+                    percentage_state_topic: Some(topic::fan_controller::fan_2::percentage::STATE),
+                    percentage_command_topic: Some(
+                        topic::fan_controller::fan_2::percentage::COMMAND,
+                    ),
                     speed_range_max: Some(32_000),
                 },
             ),
         ]),
         quality_of_service: None,
-        state_topic: Some("fancontroller/on/state"),
-        command_topic: Some("fancontroller/on/set"),
+        state_topic: Some(topic::fan_controller::STATE),
+        command_topic: Some(topic::fan_controller::COMMAND),
         encoding: None,
     };
 
     let payload = serde_json::to_string(&payload).unwrap();
+
     println!("cargo:rustc-env=FAN_CONTROLLER_DISCOVERY_PAYLOAD={payload}",);
 }
 

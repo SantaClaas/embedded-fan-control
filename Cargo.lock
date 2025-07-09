@@ -1105,6 +1105,7 @@ dependencies = [
  "serde_json",
  "static_cell",
  "thiserror 2.0.12",
+ "topic",
 ]
 
 [[package]]
@@ -2754,6 +2755,10 @@ dependencies = [
  "quote",
  "syn 2.0.87",
 ]
+
+[[package]]
+name = "topic"
+version = "0.1.0"
 
 [[package]]
 name = "typenum"

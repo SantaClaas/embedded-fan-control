@@ -4,6 +4,7 @@ members = [
     "exponential_distribution",
     "fan-controller",
     "mqtt",
+    "topic",
 ]
 resolver = "3"
 

@@ -1,5 +1,6 @@
 #![no_std]
 #![no_main]
+#![allow(unused)]
 
 use configuration::DISCOVERY_TOPIC;
 use core::convert::Infallible;
@@ -461,8 +462,8 @@ async fn mqtt_task(
                 if *packet {
                     Poll::Ready(())
                 } else {
-                    // Waker needs to be overwritten on each poll. Read the Rust async book on wakers
-                    // for more details
+                    // Waker needs to be overwritten on each poll.
+                    // Read the Rust async book on wakers for more details
                     let waker = context.waker();
                     WAKER.register(waker);
                     Poll::Pending
@@ -478,7 +479,7 @@ async fn mqtt_task(
     /// A handler that takes MQTT publishes and sets the fan settings accordingly
     async fn handle_publish<'f>(publish: &'f Publish<'f>) {
         info!("Handling publish");
-        let sender = FAN_STATE.sender();
+        let sender = FAN_1_STATE.sender();
 
         // This part is not MQTT and application specific
         match publish.topic_name {
@@ -520,7 +521,7 @@ async fn mqtt_task(
                 });
                 // Home assistant and fan update will be done by receiver
             }
-            "fancontroller/on/set" => {
+            topic::fan_controller::COMMAND => {
                 info!("Received fan set on command from homeassistant");
                 info!(
                     "Payload: {:?}",
@@ -782,7 +783,7 @@ async fn mqtt_task(
     // Subscribe to home assistant topics
     const SUBSCRIPTIONS: [Subscription; 2] = [
         Subscription {
-            topic_filter: "fancontroller/on/set",
+            topic_filter: topic::fan_controller::COMMAND,
             options: mqtt::packet::subscribe::Options::new(
                 QualityOfService::AtMostOnceDelivery,
                 false,
@@ -948,7 +949,7 @@ async fn mqtt_task(
 
     // Future 5 update homeassistant when change occurs
     async fn update_homeassistant() {
-        let Some(mut receiver) = FAN_STATE.receiver() else {
+        let Some(mut receiver) = FAN_1_STATE.receiver() else {
             error!("Fan state receiver was not set up. Cannot update Homeassistant");
             return;
         };
@@ -1028,7 +1029,7 @@ async fn input_task(pin_18: PIN_18) {
     let mut button = Debouncer::new(Input::new(pin_18, Pull::Up), Duration::from_millis(250));
 
     let mut fan_state = fan::State::default();
-    let sender = FAN_STATE.sender();
+    let sender = FAN_1_STATE.sender();
 
     loop {
         // Falling edge for our button -> button down (pressing down
@@ -1040,18 +1041,11 @@ async fn input_task(pin_18: PIN_18) {
         let start = Instant::now();
 
         // Advance to next fan state
-        // Could make this a state machine with phantom data, but chose not to as long as it is this simple
-        fan_state = match fan_state {
-            fan::State::Off => fan::State::Low,
-            fan::State::Low => fan::State::Medium,
-            fan::State::Medium => fan::State::High,
-            fan::State::High => fan::State::Off,
-        };
+        fan_state = fan_state.next();
 
-        // Setting values low on purpose for testing
         let state = match fan_state {
             fan::State::Off => {
-                let setting = FAN_STATE
+                let setting = FAN_1_STATE
                     .try_get()
                     .map(|state| state.setting)
                     .unwrap_or(fan::Setting::ZERO);
@@ -1078,17 +1072,18 @@ async fn input_task(pin_18: PIN_18) {
         sender.send(state);
     }
 }
+
 /// Update fans whenenver the fan setting or on state changes
 #[embassy_executor::task]
 async fn update_fans() {
-    let Some(mut receiver) = FAN_STATE.receiver() else {
+    let Some(mut receiver) = FAN_1_STATE.receiver() else {
         // Not using asserts because they are hard to debug on embedded where it crashed
         error!("No receiver for fan is on state. This should never happen.");
         return;
     };
 
     // Only comparing on state causes button triggers to be ignored
-    let mut previous = FAN_STATE.try_get().unwrap_or(FanState {
+    let mut previous = FAN_1_STATE.try_get().unwrap_or(FanState {
         is_on: false,
         setting: fan::Setting::ZERO,
     });
@@ -1153,7 +1148,8 @@ struct FanState {
 /// Receivers:
 /// - Fan
 /// - MQTT (client to server)
-static FAN_STATE: Watch<CriticalSectionRawMutex, FanState, 3> = Watch::new();
+static FAN_1_STATE: Watch<CriticalSectionRawMutex, FanState, 3> = Watch::new();
+static FAN_2_STATE: Watch<CriticalSectionRawMutex, FanState, 3> = Watch::new();
 
 /// Displays fan status with 2 LEDs:
 /// Off Off -> Fans Off
@@ -1174,14 +1170,14 @@ async fn display_status(pin_21: PIN_21, pin_20: PIN_20) {
     led_1.set_low();
     led_2.set_low();
 
-    let Some(mut receiver) = FAN_STATE.receiver() else {
+    let Some(mut receiver) = FAN_1_STATE.receiver() else {
         // Not using asserts because they are hard to debug on embedded where it crashed
         error!("No receiver for fan is on state. This should never happen.");
         return;
     };
 
     // Set initial state
-    let mut current_state = FAN_STATE.try_get().unwrap_or(FanState {
+    let mut current_state = FAN_1_STATE.try_get().unwrap_or(FanState {
         is_on: false,
         setting: fan::Setting::ZERO,
     });

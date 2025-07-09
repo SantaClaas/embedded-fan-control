@@ -89,6 +89,16 @@ pub(crate) enum State {
     Medium,
     High,
 }
+impl State {
+    pub(crate) const fn next(&self) -> Self {
+        match self {
+            Self::Off => Self::Low,
+            Self::Low => Self::Medium,
+            Self::Medium => Self::High,
+            Self::High => Self::Off,
+        }
+    }
+}
 
 pub(crate) mod address {
     pub(crate) const FAN_1: u8 = 0x02;
