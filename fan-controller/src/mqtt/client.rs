@@ -86,7 +86,6 @@ impl Acknowledgements {
 
     async fn wait_for_acknowledgement(&self, packet_identifier: NonZeroU16) {
         info!("Waiting for subscribe acknowledgements");
-        let cell = RefCell::new(3);
 
         //TODO if this function gets called multiple times it might never be woken up because there
         // is only one waker and the other call of this function will lock the mutex. To solve this
