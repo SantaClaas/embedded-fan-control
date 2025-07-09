@@ -1,3 +1,5 @@
+#![no_std]
+
 pub mod fan_controller {
     /// The topic to publish the on/off state of the fan controller.
     pub const STATE: &str = "fancontroller/on/state";
