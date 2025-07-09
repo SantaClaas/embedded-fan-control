@@ -73,6 +73,7 @@ mod debounce;
 mod fan;
 mod modbus;
 mod mqtt;
+mod task;
 
 bind_interrupts!(struct Irqs {
     PIO0_IRQ_0 => PioInterruptHandler<PIO0>;
@@ -479,7 +480,7 @@ async fn mqtt_task(
     /// A handler that takes MQTT publishes and sets the fan settings accordingly
     async fn handle_publish<'f>(publish: &'f Publish<'f>) {
         info!("Handling publish");
-        let sender = FAN_1_STATE.sender();
+        let sender = FAN_CONTROLLER.fan_states.0.sender();
 
         // This part is not MQTT and application specific
         match publish.topic_name {
@@ -949,7 +950,7 @@ async fn mqtt_task(
 
     // Future 5 update homeassistant when change occurs
     async fn update_homeassistant() {
-        let Some(mut receiver) = FAN_1_STATE.receiver() else {
+        let Some(mut receiver) = FAN_CONTROLLER.fan_states.0.receiver() else {
             error!("Fan state receiver was not set up. Cannot update Homeassistant");
             return;
         };
@@ -1023,13 +1024,13 @@ async fn mqtt_task(
 
 /// This task handles inputs from physical buttons to change the fan speed
 #[embassy_executor::task]
-async fn input_task(pin_18: PIN_18) {
+async fn input(pin_18: PIN_18) {
     // The button just rotates through fan settings. This is because we currently only have one button
     // Will probably use something more advanced in the future
     let mut button = Debouncer::new(Input::new(pin_18, Pull::Up), Duration::from_millis(250));
 
     let mut fan_state = fan::State::default();
-    let sender = FAN_1_STATE.sender();
+    let sender = FAN_CONTROLLER.fan_states.0.sender();
 
     loop {
         // Falling edge for our button -> button down (pressing down
@@ -1045,7 +1046,9 @@ async fn input_task(pin_18: PIN_18) {
 
         let state = match fan_state {
             fan::State::Off => {
-                let setting = FAN_1_STATE
+                let setting = FAN_CONTROLLER
+                    .fan_states
+                    .0
                     .try_get()
                     .map(|state| state.setting)
                     .unwrap_or(fan::Setting::ZERO);
@@ -1076,14 +1079,14 @@ async fn input_task(pin_18: PIN_18) {
 /// Update fans whenenver the fan setting or on state changes
 #[embassy_executor::task]
 async fn update_fans() {
-    let Some(mut receiver) = FAN_1_STATE.receiver() else {
+    let Some(mut receiver) = FAN_CONTROLLER.fan_states.0.receiver() else {
         // Not using asserts because they are hard to debug on embedded where it crashed
         error!("No receiver for fan is on state. This should never happen.");
         return;
     };
 
     // Only comparing on state causes button triggers to be ignored
-    let mut previous = FAN_1_STATE.try_get().unwrap_or(FanState {
+    let mut previous = FAN_CONTROLLER.fan_states.0.try_get().unwrap_or(FanState {
         is_on: false,
         setting: fan::Setting::ZERO,
     });
@@ -1139,17 +1142,31 @@ struct FanState {
     setting: fan::Setting,
 }
 
-/// Is on and the setting update independent of each other on homeassistant.
-/// Update this state even though it might not yet be set on the fan devices.
-/// Use optimistic updates.
-/// Senders:
-/// - MQTT (server to client)
-/// - Button
-/// Receivers:
-/// - Fan
-/// - MQTT (client to server)
-static FAN_1_STATE: Watch<CriticalSectionRawMutex, FanState, 3> = Watch::new();
-static FAN_2_STATE: Watch<CriticalSectionRawMutex, FanState, 3> = Watch::new();
+struct FanController {
+    /// Is on and the setting update independent of each other on homeassistant.
+    /// Update this state even though it might not yet be set on the fan devices.
+    /// Use optimistic updates.
+    /// Senders:
+    /// - MQTT (server to client)
+    /// - Button
+    /// Receivers:
+    /// - Fan
+    /// - MQTT (client to server)
+    fan_states: (
+        Watch<CriticalSectionRawMutex, FanState, 3>,
+        Watch<CriticalSectionRawMutex, FanState, 3>,
+    ),
+}
+
+impl FanController {
+    const fn new() -> Self {
+        Self {
+            fan_states: (Watch::new(), Watch::new()),
+        }
+    }
+}
+
+static FAN_CONTROLLER: FanController = FanController::new();
 
 /// Displays fan status with 2 LEDs:
 /// Off Off -> Fans Off
@@ -1170,14 +1187,14 @@ async fn display_status(pin_21: PIN_21, pin_20: PIN_20) {
     led_1.set_low();
     led_2.set_low();
 
-    let Some(mut receiver) = FAN_1_STATE.receiver() else {
+    let Some(mut receiver) = FAN_CONTROLLER.fan_states.0.receiver() else {
         // Not using asserts because they are hard to debug on embedded where it crashed
         error!("No receiver for fan is on state. This should never happen.");
         return;
     };
 
     // Set initial state
-    let mut current_state = FAN_1_STATE.try_get().unwrap_or(FanState {
+    let mut current_state = FAN_CONTROLLER.fan_states.0.try_get().unwrap_or(FanState {
         is_on: false,
         setting: fan::Setting::ZERO,
     });
@@ -1256,7 +1273,7 @@ async fn main(spawner: Spawner) {
     }
 
     // Button input task waits for button presses and send according signals to the modbus task
-    unwrap!(spawner.spawn(input_task(pin_18)));
+    unwrap!(spawner.spawn(input(pin_18)));
     unwrap!(spawner.spawn(update_fans()));
     // The MQTT task waits for publishes from MQTT and sends them to the modbus task.
     // It also sends updates from the modbus task that happen through button inputs to MQTT
