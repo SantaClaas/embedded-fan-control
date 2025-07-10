@@ -5,6 +5,9 @@ use crate::{
             self,
             connect::Connect,
             connect_acknowledgement::{ConnectAcknowledgement, ConnectReasonCode},
+            disconnect::Disconnect,
+            ping_response::PingResponse,
+            publish::Publish,
             subscribe_acknowledgement::SubscribeAcknowledgement,
         },
         task::{self, ConnectError, SendError},
@@ -18,7 +21,7 @@ use core::{
     num::NonZeroU16,
     task::Poll,
 };
-use defmt::{info, warn, Format};
+use defmt::{error, info, warn, Format};
 use embassy_net::tcp::{TcpReader, TcpSocket, TcpWriter};
 use embassy_sync::{
     blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex, signal::Signal,
@@ -27,6 +30,13 @@ use embassy_sync::{
 
 pub(crate) struct ClientBuilder<'socket> {
     socket: TcpSocket<'socket>,
+}
+
+/// The client state
+enum State {
+    Disconnected,
+    Connected,
+    ConnectionLost,
 }
 
 // impl<'socket> ClientBuilder<'socket> {
@@ -87,6 +97,7 @@ impl Acknowledgements {
     async fn wait_for_acknowledgement(&self, packet_identifier: NonZeroU16) {
         info!("Waiting for subscribe acknowledgements");
 
+        //TODO make this into a future?
         //TODO if this function gets called multiple times it might never be woken up because there
         // is only one waker and the other call of this function will lock the mutex. To solve this
         // we could use structs from [embassy-sync::waitqueue] and/or a blocking mutex to remove the
@@ -132,6 +143,8 @@ pub(crate) struct Client<'socket> {
     reader: TcpReader<'socket>,
     writer: TcpWriter<'socket>,
     acknowledgements: Acknowledgements,
+    ping_response: Signal<CriticalSectionRawMutex, PingResponse>,
+    state: Signal<CriticalSectionRawMutex, State>,
 }
 
 impl<'socket> Client<'socket> {
@@ -163,6 +176,8 @@ impl<'socket> Client<'socket> {
             reader,
             writer,
             acknowledgements: Acknowledgements::new(),
+            ping_response: Signal::new(),
+            state: Signal::new(),
         };
 
         // Send
@@ -209,5 +224,100 @@ impl<'socket> Client<'socket> {
 
         info!("Connection complete");
         Ok(client)
+    }
+
+    async fn handle_ping_response(&self, ping_response: PingResponse) {
+        info!("Received ping response");
+        self.ping_response.signal(ping_response);
+    }
+
+    async fn listen(&mut self) {
+        let mut buffer = [0; 1024];
+        loop {
+            info!("Waiting for packet");
+            let result = self.reader.read(&mut buffer).await;
+            let bytes_read = match result {
+                // This indicates the TCP connection was closed. (See embassy-net documentation)
+                Ok(0) => {
+                    warn!("MQTT broker closed connection");
+                    self.state.signal(State::ConnectionLost);
+                    return;
+                }
+                Ok(bytes_read) => bytes_read,
+                Err(error) => {
+                    warn!("Error reading from MQTT broker: {:?}", error);
+                    return;
+                }
+            };
+
+            info!("Packet received");
+
+            let parts = match packet::get_parts(&buffer[..bytes_read]) {
+                Ok(parts) => parts,
+                Err(error) => {
+                    warn!("Error reading MQTT packet: {:?}", error);
+                    return;
+                }
+            };
+
+            info!("Handling packet");
+
+            match parts.r#type {
+                Publish::TYPE => {
+                    info!("Received publish");
+                    let publish = match Publish::try_decode(
+                        parts.flags,
+                        &parts.variable_header_and_payload,
+                    ) {
+                        Ok(publish) => publish,
+                        Err(error) => {
+                            error!("Error reading publish: {:?}", error);
+                            continue;
+                        }
+                    };
+
+                    defmt::todo!("Handle publish");
+                    info!("Handled publish");
+                }
+                SubscribeAcknowledgement::TYPE => {
+                    let subscribe_acknowledgement =
+                        match SubscribeAcknowledgement::read(&parts.variable_header_and_payload) {
+                            Ok(acknowledgement) => acknowledgement,
+                            Err(error) => {
+                                error!("Error reading subscribe acknowledgement: {:?}", error);
+                                continue;
+                            }
+                        };
+
+                    self.acknowledgements
+                        .handle_subscribe_acknowledgement(&subscribe_acknowledgement)
+                        .await;
+                }
+                PingResponse::TYPE => {
+                    info!("Received ping response");
+                    let ping_response = match PingResponse::try_decode(
+                        parts.flags,
+                        &parts.variable_header_and_payload,
+                    ) {
+                        Ok(response) => response,
+                        // Matching to get compiler error if this changes
+                        Err(Infallible) => {
+                            defmt::unreachable!("Ping response is always empty so decode should always succeed if the protocol did not change")
+                        }
+                    };
+
+                    self.handle_ping_response(ping_response).await;
+                }
+                Disconnect::TYPE => {
+                    info!("Received disconnect");
+
+                    let disconnect =
+                        Disconnect::try_decode(parts.flags, &parts.variable_header_and_payload);
+                    info!("Disconnect {:?}", disconnect);
+                    //TODO disconnect TCP connection
+                }
+                other => info!("Unsupported packet type {}", other),
+            }
+        }
     }
 }
