@@ -11,6 +11,7 @@ use crate::mqtt::{non_zero_u16, TryDecode};
 use crate::Fans;
 use crate::PingRequest;
 use crate::{configuration, fan, gain_control, FanState, FAN_CONTROLLER};
+use ::mqtt::QualityOfService;
 use core::future::poll_fn;
 use core::num::NonZeroU16;
 use core::ops::DerefMut;
@@ -31,13 +32,31 @@ use embassy_sync::mutex::Mutex;
 use embassy_sync::signal::Signal;
 use embassy_sync::waitqueue::AtomicWaker;
 use embassy_time::{with_deadline, with_timeout, Instant, Timer};
-use ::mqtt::QualityOfService;
 use rand::RngCore;
 use static_cell::StaticCell;
 
 #[embassy_executor::task]
 async fn network_task(stack: &'static Stack<NetDriver<'static>>) -> ! {
     stack.run().await
+}
+
+async fn handle_subscribe_acknowledgement<'f>(
+    acknowledgement: &'f SubscribeAcknowledgement<'f>,
+    acknowledgements: &Mutex<CriticalSectionRawMutex, [bool; 2]>,
+) {
+    info!("Received subscribe acknowledgement");
+    let mut acknowledgements = acknowledgements.lock().await;
+    info!("Locked ACKNOWLEDGEMENTS");
+    // Validate server sends a valid packet identifier or we get bamboozled and panic
+    let Some(value) = acknowledgements.get_mut(acknowledgement.packet_identifier as usize) else {
+        warn!("Received subscribe acknowledgement for out of bounds packet identifier");
+        return;
+    };
+
+    info!(
+        "Received acknowledgement {} Reason codes: {:#04x}",
+        acknowledgement.packet_identifier, acknowledgement.reason_codes
+    );
 }
 
 #[embassy_executor::task]
@@ -178,24 +197,6 @@ pub(super) async fn mqtt_task(
     /// The embassy documentation does not explain when to use [`AtomicWaker`] but I am assuming
     /// it is useful for cases like this where I need to mutate a static.
     static WAKER: AtomicWaker = AtomicWaker::new();
-    async fn handle_subscribe_acknowledgement<'f>(
-        acknowledgement: &'f SubscribeAcknowledgement<'f>,
-    ) {
-        info!("Received subscribe acknowledgement");
-        let mut acknowledgements = ACKNOWLEDGEMENTS.lock().await;
-        info!("Locked ACKNOWLEDGEMENTS");
-        // Validate server sends a valid packet identifier or we get bamboozled and panic
-        let Some(value) = acknowledgements.get_mut(acknowledgement.packet_identifier as usize)
-        else {
-            warn!("Received subscribe acknowledgement for out of bounds packet identifier");
-            return;
-        };
-
-        info!(
-            "Received acknowledgement {} Reason codes: {:#04x}",
-            acknowledgement.packet_identifier, acknowledgement.reason_codes
-        );
-    }
 
     async fn wait_for_acknowledgement(packet_identifier: NonZeroU16) {
         info!("Waiting for subscribe acknowledgements");
@@ -365,7 +366,8 @@ pub(super) async fn mqtt_task(
                             }
                         };
 
-                    handle_subscribe_acknowledgement(&subscribe_acknowledgement).await;
+                    handle_subscribe_acknowledgement(&subscribe_acknowledgement, &ACKNOWLEDGEMENTS)
+                        .await;
                 }
                 PingResponse::TYPE => {
                     info!("Received ping response");
