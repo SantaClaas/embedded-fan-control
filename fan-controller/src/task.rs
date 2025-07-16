@@ -425,6 +425,66 @@ async fn set_up_discovery(outgoing: &Channel<CriticalSectionRawMutex, Message<'_
     //TODO wait for packet acknowledgement
 }
 
+/// Keep alive task
+async fn keep_alive(
+    writer: &Mutex<CriticalSectionRawMutex, TcpWriter<'_>>,
+    last_packet: &Signal<CriticalSectionRawMutex, Instant>,
+    client_state: &Signal<CriticalSectionRawMutex, ClientState>,
+    ping_response: &Signal<CriticalSectionRawMutex, PingResponse>,
+) {
+    // Send keep alive packets after connection with connect packet is established.
+    // Wait for a packet to be sent or the keep alive interval to time the wait out.
+    // If the keep alive timed the wait out, send a ping request packet.
+    // Else if a packet was sent, wait for the next packet to be sent with the keep alive
+    // interval as timeout.
+
+    let start = last_packet.try_take().unwrap_or(Instant::now());
+    let mut last_send = start;
+    loop {
+        // The server waits for 1.5 times the keep alive interval, so being off by a bit due to
+        // network, async overhead or the clock not being exactly precise is fine
+        let deadline = last_send + configuration::KEEP_ALIVE;
+        let result = with_deadline(deadline, last_packet.wait()).await;
+        match result {
+            Err(TimeoutError) => {
+                info!("Sending keep alive ping request");
+                let mut writer = writer.lock().await;
+                // Send keep alive ping request
+                if let Err(error) = send(&mut *writer, PingRequest).await {
+                    error!("Error sending keep alive ping request: {:?}", error);
+                    client_state.signal(ClientState::ConnectionLost);
+                    return;
+                }
+
+                // Keep alive is time from when the last packet was sent and not when the ping response
+                // was received. Therefore, we need to reset it here
+                last_send = Instant::now();
+
+                // Wait for ping response
+                if let Err(TimeoutError) =
+                    with_timeout(configuration::MQTT_TIMEOUT, ping_response.wait()).await
+                {
+                    // Assume disconnect from server
+                    error!("Timeout waiting for ping response. Disconnecting");
+                    client_state.signal(ClientState::ConnectionLost);
+                    return;
+                }
+
+                let response_duration = Instant::now() - last_send;
+                info!(
+                    "Received and processed ping response in {:?} ({}μs) after sending ping request",
+                    response_duration,
+                    response_duration.as_micros()
+                );
+            }
+            Ok(last_packet) => {
+                info!("Sent packet. Resetting timer to send keep alive");
+                last_send = last_packet;
+            }
+        }
+    }
+}
+
 #[embassy_executor::task]
 pub(super) async fn mqtt(
     spawner: Spawner,
@@ -625,63 +685,8 @@ pub(super) async fn mqtt(
         set_up_discovery(&OUTGOING),
     );
 
-    // Keep alive task
-    async fn keep_alive(writer: &Mutex<CriticalSectionRawMutex, TcpWriter<'_>>) {
-        // Send keep alive packets after connection with connect packet is established.
-        // Wait for a packet to be sent or the keep alive interval to time the wait out.
-        // If the keep alive timed the wait out, send a ping request packet.
-        // Else if a packet was sent, wait for the next packet to be sent with the keep alive
-        // interval as timeout.
-
-        let start = LAST_PACKET.try_take().unwrap_or(Instant::now());
-        let mut last_send = start;
-        loop {
-            // The server waits for 1.5 times the keep alive interval, so being off by a bit due to
-            // network, async overhead or the clock not being exactly precise is fine
-            let deadline = last_send + configuration::KEEP_ALIVE;
-            let result = with_deadline(deadline, LAST_PACKET.wait()).await;
-            match result {
-                Err(TimeoutError) => {
-                    info!("Sending keep alive ping request");
-                    let mut writer = writer.lock().await;
-                    // Send keep alive ping request
-                    if let Err(error) = send(&mut *writer, PingRequest).await {
-                        error!("Error sending keep alive ping request: {:?}", error);
-                        CLIENT_STATE.signal(ClientState::ConnectionLost);
-                        return;
-                    }
-
-                    // Keep alive is time from when the last packet was sent and not when the ping response
-                    // was received. Therefore, we need to reset it here
-                    last_send = Instant::now();
-
-                    // Wait for ping response
-                    if let Err(TimeoutError) =
-                        with_timeout(configuration::MQTT_TIMEOUT, PING_RESPONSE.wait()).await
-                    {
-                        // Assume disconnect from server
-                        error!("Timeout waiting for ping response. Disconnecting");
-                        CLIENT_STATE.signal(ClientState::ConnectionLost);
-                        return;
-                    }
-
-                    let response_duration = Instant::now() - last_send;
-                    info!(
-                        "Received and processed ping response in {:?} ({}μs) after sending ping request",
-                        response_duration,
-                        response_duration.as_micros()
-                    );
-                }
-                Ok(last_packet) => {
-                    info!("Sent packet. Resetting timer to send keep alive");
-                    last_send = last_packet;
-                }
-            }
-        }
-    }
-
     // Future 4
-    let keep_alive = keep_alive(&writer);
+    let keep_alive = keep_alive(&writer, &LAST_PACKET, &CLIENT_STATE, &PING_RESPONSE);
 
     // Future 5 update homeassistant when change occurs
     async fn update_homeassistant() {
