@@ -88,12 +88,14 @@ impl TryDecode<'_> for ConnectAcknowledgement {
                     }
                     0x12 => {
                         info!("Skipping Assigned Client Identifier");
-                        let identifier_length = variable_byte_integer::decode(buffer, &mut offset)
-                            .map_err(|error| DecodeError::InvalidPropertyStringLength {
+                        // Identifier length
+
+                        variable_byte_integer::decode(buffer, &mut offset).map_err(|error| {
+                            DecodeError::InvalidPropertyStringLength {
                                 property_identifier: 0x12,
                                 error,
-                            })?;
-                        identifier_length
+                            }
+                        })?
                     }
                     0x22 => {
                         info!("Skipping Topic Alias Maximum");
@@ -101,14 +103,14 @@ impl TryDecode<'_> for ConnectAcknowledgement {
                     }
                     0x1F => {
                         info!("Skipping Reason String");
-                        let reason_string_length =
-                            variable_byte_integer::decode(buffer, &mut offset).map_err(
-                                |error| DecodeError::InvalidPropertyStringLength {
-                                    property_identifier: 0x1F,
-                                    error,
-                                },
-                            )?;
-                        reason_string_length
+                        // Reason string length
+
+                        variable_byte_integer::decode(buffer, &mut offset).map_err(|error| {
+                            DecodeError::InvalidPropertyStringLength {
+                                property_identifier: 0x1F,
+                                error,
+                            }
+                        })?
                     }
                     0x26 => {
                         info!("Skipping User Property");
@@ -150,43 +152,43 @@ impl TryDecode<'_> for ConnectAcknowledgement {
                     }
                     0x1A => {
                         info!("Skipping Response Information");
-                        let length = variable_byte_integer::decode(buffer, &mut offset).map_err(
-                            |error| DecodeError::InvalidPropertyStringLength {
+
+                        variable_byte_integer::decode(buffer, &mut offset).map_err(|error| {
+                            DecodeError::InvalidPropertyStringLength {
                                 property_identifier: 0x1A,
                                 error,
-                            },
-                        )?;
-                        length
+                            }
+                        })?
                     }
                     0x1C => {
                         info!("Skipping Server Reference");
-                        let length = variable_byte_integer::decode(buffer, &mut offset).map_err(
-                            |error| DecodeError::InvalidPropertyStringLength {
+
+                        variable_byte_integer::decode(buffer, &mut offset).map_err(|error| {
+                            DecodeError::InvalidPropertyStringLength {
                                 property_identifier: 0x1C,
                                 error,
-                            },
-                        )?;
-                        length
+                            }
+                        })?
                     }
                     0x15 => {
                         info!("Skipping Authentication Method");
-                        let length = variable_byte_integer::decode(buffer, &mut offset).map_err(
-                            |error| DecodeError::InvalidPropertyStringLength {
+
+                        variable_byte_integer::decode(buffer, &mut offset).map_err(|error| {
+                            DecodeError::InvalidPropertyStringLength {
                                 property_identifier: 0x15,
                                 error,
-                            },
-                        )?;
-                        length
+                            }
+                        })?
                     }
                     0x16 => {
                         info!("Skipping Authentication Data");
-                        let length = variable_byte_integer::decode(buffer, &mut offset).map_err(
-                            |error| DecodeError::InvalidPropertyStringLength {
+
+                        variable_byte_integer::decode(buffer, &mut offset).map_err(|error| {
+                            DecodeError::InvalidPropertyStringLength {
                                 property_identifier: 0x16,
                                 error,
-                            },
-                        )?;
-                        length
+                            }
+                        })?
                     }
                     unknown => {
                         return Err(DecodeError::UnknownPropertyIdentifier(unknown));

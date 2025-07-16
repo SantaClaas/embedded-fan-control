@@ -218,7 +218,7 @@ async fn listen<'reader>(
             Publish::TYPE => {
                 info!("Received publish");
                 let publish =
-                    match Publish::try_decode(parts.flags, &parts.variable_header_and_payload) {
+                    match Publish::try_decode(parts.flags, parts.variable_header_and_payload) {
                         Ok(publish) => publish,
                         Err(error) => {
                             error!("Error reading publish: {:?}", error);
@@ -232,7 +232,7 @@ async fn listen<'reader>(
             }
             SubscribeAcknowledgement::TYPE => {
                 let subscribe_acknowledgement =
-                    match SubscribeAcknowledgement::read(&parts.variable_header_and_payload) {
+                    match SubscribeAcknowledgement::read(parts.variable_header_and_payload) {
                         Ok(acknowledgement) => acknowledgement,
                         Err(error) => {
                             error!("Error reading subscribe acknowledgement: {:?}", error);
@@ -247,7 +247,7 @@ async fn listen<'reader>(
                 info!("Received ping response");
                 let ping_response = match PingResponse::try_decode(
                     parts.flags,
-                    &parts.variable_header_and_payload,
+                    parts.variable_header_and_payload,
                 ) {
                     Ok(response) => response,
                     // Matching to get compiler error if this changes
@@ -262,7 +262,7 @@ async fn listen<'reader>(
                 info!("Received disconnect");
 
                 let disconnect =
-                    Disconnect::try_decode(parts.flags, &parts.variable_header_and_payload);
+                    Disconnect::try_decode(parts.flags, parts.variable_header_and_payload);
                 info!("Disconnect {:?}", disconnect);
                 //TODO disconnect TCP connection
             }
@@ -403,14 +403,14 @@ async fn set_up_subscriptions(
 ) {
     info!("Setting up subscriptions");
     let message = Message::Subscribe(Subscribe {
-        subscriptions: subscriptions,
+        subscriptions,
         //TODO free identifier management
         packet_identifier,
     });
 
     outgoing.send(message).await;
 
-    wait_for_acknowledgement(packet_identifier, &acknowledgements, &waker).await;
+    wait_for_acknowledgement(packet_identifier, acknowledgements, waker).await;
     info!("Set up subscriptions complete")
 }
 

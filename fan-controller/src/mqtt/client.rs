@@ -267,7 +267,7 @@ impl<'socket> Client<'socket> {
                     info!("Received publish");
                     let publish = match Publish::try_decode(
                         parts.flags,
-                        &parts.variable_header_and_payload,
+                        parts.variable_header_and_payload,
                     ) {
                         Ok(publish) => publish,
                         Err(error) => {
@@ -281,7 +281,7 @@ impl<'socket> Client<'socket> {
                 }
                 SubscribeAcknowledgement::TYPE => {
                     let subscribe_acknowledgement =
-                        match SubscribeAcknowledgement::read(&parts.variable_header_and_payload) {
+                        match SubscribeAcknowledgement::read(parts.variable_header_and_payload) {
                             Ok(acknowledgement) => acknowledgement,
                             Err(error) => {
                                 error!("Error reading subscribe acknowledgement: {:?}", error);
@@ -297,7 +297,7 @@ impl<'socket> Client<'socket> {
                     info!("Received ping response");
                     let ping_response = match PingResponse::try_decode(
                         parts.flags,
-                        &parts.variable_header_and_payload,
+                        parts.variable_header_and_payload,
                     ) {
                         Ok(response) => response,
                         // Matching to get compiler error if this changes
@@ -312,7 +312,7 @@ impl<'socket> Client<'socket> {
                     info!("Received disconnect");
 
                     let disconnect =
-                        Disconnect::try_decode(parts.flags, &parts.variable_header_and_payload);
+                        Disconnect::try_decode(parts.flags, parts.variable_header_and_payload);
                     info!("Disconnect {:?}", disconnect);
                     //TODO disconnect TCP connection
                 }

@@ -143,7 +143,7 @@ pub(crate) trait FromPublish {
 /// Temporary just for testing. TODO remove
 impl FromPublish for () {
     fn from_publish(publish: Publish) -> Self {
-        ()
+        
     }
 }
 

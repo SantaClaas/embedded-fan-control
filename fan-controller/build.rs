@@ -210,7 +210,7 @@ fn setup_configuration() -> Result<(), BuildError> {
 fn extract_abreviations() -> HashMap<Rc<str>, Rc<str>> {
     const PATH: &str = "home-assistant/core/homeassistant/components/mqtt/abbreviations.py";
     println!("cargo::rerun-if-changed={PATH}");
-    let module = fs::read_to_string(&PATH).unwrap();
+    let module = fs::read_to_string(PATH).unwrap();
     let module = ruff_python_parser::parse_module(&module).unwrap();
     let syntax = module.syntax();
 
@@ -261,7 +261,7 @@ fn extract_abreviations() -> HashMap<Rc<str>, Rc<str>> {
         return abbreviations;
     }
 
-    return abbreviations;
+    abbreviations
 }
 
 /// Overengineering saving a couple of bytes from a JSON string.
@@ -287,8 +287,8 @@ fn setup_discovery_payload() -> Result<(), DiscoveryPayloadError> {
                 let key = Rc::from(current_key.as_ref());
                 let abbreviation = abbreviations.get(&key);
                 if let Some(abbreviation) = abbreviation {
-                    println!("Abbreviation {} -> {}", key, abbreviation);
-                    result.push_str(&abbreviation);
+                    println!("Abbreviation {key} -> {abbreviation}");
+                    result.push_str(abbreviation);
                 } else {
                     result.push_str(&current_key);
                 }
@@ -324,8 +324,7 @@ fn setup_discovery_payload() -> Result<(), DiscoveryPayloadError> {
     }
 
     println!(
-        "cargo:rustc-env=FAN_CONTROLLER_DISCOVERY_PAYLOAD={}",
-        result
+        "cargo:rustc-env=FAN_CONTROLLER_DISCOVERY_PAYLOAD={result}"
     );
 
     Ok(())

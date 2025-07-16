@@ -37,7 +37,7 @@ pub(super) fn encode(
     let mut value = value as u32;
     loop {
         let mut encoded_byte = value % 0b1000_0000;
-        value = value / 0b1000_0000;
+        value /= 0b1000_0000;
         if value > 0 {
             encoded_byte |= 0b1000_0000;
         }
