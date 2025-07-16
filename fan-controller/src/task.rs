@@ -177,8 +177,8 @@ enum ClientState {
     ConnectionLost,
 }
 
-async fn listen<'reader>(
-    reader: &mut TcpReader<'reader>,
+async fn listen(
+    reader: &mut TcpReader<'_>,
     sender: &embassy_sync::watch::Sender<'_, CriticalSectionRawMutex, FanState, 3>,
     client_state: &Signal<CriticalSectionRawMutex, ClientState>,
     acknowledgements: &Mutex<CriticalSectionRawMutex, [bool; 2]>,
