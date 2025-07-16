@@ -9,7 +9,7 @@ use crate::mqtt::task::send;
 use crate::mqtt::{non_zero_u16, TryDecode};
 use crate::Fans;
 use crate::PingRequest;
-use crate::{configuration, fan, gain_control, FanState, FAN_CONTROLLER};
+use crate::{configuration, fan, gain_control, FanState};
 use crate::{mqtt, FanController};
 use ::mqtt::QualityOfService;
 use core::future::poll_fn;
