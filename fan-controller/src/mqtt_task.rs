@@ -1,10 +1,10 @@
 use crate::mqtt::packet::connect::Connect;
 use crate::mqtt::packet::disconnect::Disconnect;
-use crate::mqtt::packet::get_parts;
 use crate::mqtt::packet::ping_response::PingResponse;
 use crate::mqtt::packet::publish::Publish;
 use crate::mqtt::packet::subscribe::{Subscribe, Subscription};
 use crate::mqtt::packet::subscribe_acknowledgement::SubscribeAcknowledgement;
+use crate::mqtt::packet::{get_parts, ping_response};
 use crate::mqtt::task::send;
 use crate::mqtt::{non_zero_u16, TryDecode};
 use crate::Fans;
@@ -162,6 +162,115 @@ async fn handle_publish<'f>(
     }
 }
 
+/// Callback handler for pings received when listening
+async fn handle_ping_response(
+    ping_response: PingResponse,
+    signal: &Signal<CriticalSectionRawMutex, PingResponse>,
+) {
+    info!("Received ping response");
+    signal.signal(ping_response);
+}
+
+enum ClientState {
+    Disconnected,
+    Connected,
+    ConnectionLost,
+}
+
+async fn listen<'reader>(
+    reader: &mut TcpReader<'reader>,
+    fan_controller: &'static FanController,
+    client_state: &Signal<CriticalSectionRawMutex, ClientState>,
+    acknowledgements: &Mutex<CriticalSectionRawMutex, [bool; 2]>,
+    ping_response_signal: &Signal<CriticalSectionRawMutex, PingResponse>,
+) {
+    let mut buffer = [0; 1024];
+    loop {
+        info!("Waiting for packet");
+        let result = reader.read(&mut buffer).await;
+        let bytes_read = match result {
+            // This indicates the TCP connection was closed. (See embassy-net documentation)
+            Ok(0) => {
+                warn!("MQTT broker closed connection");
+                client_state.signal(ClientState::ConnectionLost);
+                return;
+            }
+            Ok(bytes_read) => bytes_read,
+            Err(error) => {
+                warn!("Error reading from MQTT broker: {:?}", error);
+                return;
+            }
+        };
+
+        info!("Packet received");
+
+        let parts = match mqtt::packet::get_parts(&buffer[..bytes_read]) {
+            Ok(parts) => parts,
+            Err(error) => {
+                warn!("Error reading MQTT packet: {:?}", error);
+                return;
+            }
+        };
+
+        info!("Handling packet");
+
+        match parts.r#type {
+            Publish::TYPE => {
+                info!("Received publish");
+                let publish =
+                    match Publish::try_decode(parts.flags, &parts.variable_header_and_payload) {
+                        Ok(publish) => publish,
+                        Err(error) => {
+                            error!("Error reading publish: {:?}", error);
+                            continue;
+                        }
+                    };
+
+                let sender = fan_controller.fan_states.0.sender();
+                handle_publish(&publish, sender).await;
+                info!("Handled publish");
+            }
+            SubscribeAcknowledgement::TYPE => {
+                let subscribe_acknowledgement =
+                    match SubscribeAcknowledgement::read(&parts.variable_header_and_payload) {
+                        Ok(acknowledgement) => acknowledgement,
+                        Err(error) => {
+                            error!("Error reading subscribe acknowledgement: {:?}", error);
+                            continue;
+                        }
+                    };
+
+                handle_subscribe_acknowledgement(&subscribe_acknowledgement, acknowledgements)
+                    .await;
+            }
+            PingResponse::TYPE => {
+                info!("Received ping response");
+                let ping_response = match PingResponse::try_decode(
+                    parts.flags,
+                    &parts.variable_header_and_payload,
+                ) {
+                    Ok(response) => response,
+                    // Matching to get compiler error if this changes
+                    Err(Infallible) => {
+                        defmt::unreachable!("Ping response is always empty so decode should always succeed if the protocol did not change")
+                    }
+                };
+
+                handle_ping_response(ping_response, ping_response_signal).await;
+            }
+            Disconnect::TYPE => {
+                info!("Received disconnect");
+
+                let disconnect =
+                    Disconnect::try_decode(parts.flags, &parts.variable_header_and_payload);
+                info!("Disconnect {:?}", disconnect);
+                //TODO disconnect TCP connection
+            }
+            other => info!("Unsupported packet type {}", other),
+        }
+    }
+}
+
 #[embassy_executor::task]
 pub(super) async fn mqtt_task(
     spawner: Spawner,
@@ -303,115 +412,18 @@ pub(super) async fn mqtt_task(
     static WAKER: AtomicWaker = AtomicWaker::new();
 
     static PING_RESPONSE: Signal<CriticalSectionRawMutex, PingResponse> = Signal::new();
-    /// Callback handler for pings received when listening
-    async fn handle_ping_response(ping_response: PingResponse) {
-        info!("Received ping response");
-        PING_RESPONSE.signal(ping_response);
-    }
 
-    enum ClientState {
-        Disconnected,
-        Connected,
-        ConnectionLost,
-    }
     static CLIENT_STATE: Signal<CriticalSectionRawMutex, ClientState> = Signal::new();
-
-    async fn listen<'reader>(
-        reader: &mut TcpReader<'reader>,
-        fan_controller: &'static FanController,
-    ) {
-        let mut buffer = [0; 1024];
-        loop {
-            info!("Waiting for packet");
-            let result = reader.read(&mut buffer).await;
-            let bytes_read = match result {
-                // This indicates the TCP connection was closed. (See embassy-net documentation)
-                Ok(0) => {
-                    warn!("MQTT broker closed connection");
-                    CLIENT_STATE.signal(ClientState::ConnectionLost);
-                    return;
-                }
-                Ok(bytes_read) => bytes_read,
-                Err(error) => {
-                    warn!("Error reading from MQTT broker: {:?}", error);
-                    return;
-                }
-            };
-
-            info!("Packet received");
-
-            let parts = match mqtt::packet::get_parts(&buffer[..bytes_read]) {
-                Ok(parts) => parts,
-                Err(error) => {
-                    warn!("Error reading MQTT packet: {:?}", error);
-                    return;
-                }
-            };
-
-            info!("Handling packet");
-
-            match parts.r#type {
-                Publish::TYPE => {
-                    info!("Received publish");
-                    let publish = match Publish::try_decode(
-                        parts.flags,
-                        &parts.variable_header_and_payload,
-                    ) {
-                        Ok(publish) => publish,
-                        Err(error) => {
-                            error!("Error reading publish: {:?}", error);
-                            continue;
-                        }
-                    };
-
-                    let sender = fan_controller.fan_states.0.sender();
-                    handle_publish(&publish, sender).await;
-                    info!("Handled publish");
-                }
-                SubscribeAcknowledgement::TYPE => {
-                    let subscribe_acknowledgement =
-                        match SubscribeAcknowledgement::read(&parts.variable_header_and_payload) {
-                            Ok(acknowledgement) => acknowledgement,
-                            Err(error) => {
-                                error!("Error reading subscribe acknowledgement: {:?}", error);
-                                continue;
-                            }
-                        };
-
-                    handle_subscribe_acknowledgement(&subscribe_acknowledgement, &ACKNOWLEDGEMENTS)
-                        .await;
-                }
-                PingResponse::TYPE => {
-                    info!("Received ping response");
-                    let ping_response = match PingResponse::try_decode(
-                        parts.flags,
-                        &parts.variable_header_and_payload,
-                    ) {
-                        Ok(response) => response,
-                        // Matching to get compiler error if this changes
-                        Err(Infallible) => {
-                            defmt::unreachable!("Ping response is always empty so decode should always succeed if the protocol did not change")
-                        }
-                    };
-
-                    handle_ping_response(ping_response).await;
-                }
-                Disconnect::TYPE => {
-                    info!("Received disconnect");
-
-                    let disconnect =
-                        Disconnect::try_decode(parts.flags, &parts.variable_header_and_payload);
-                    info!("Disconnect {:?}", disconnect);
-                    //TODO disconnect TCP connection
-                }
-                other => info!("Unsupported packet type {}", other),
-            }
-        }
-    }
 
     let (mut reader, mut writer) = socket.split();
     // Future 1
-    let listen = listen(&mut reader, fan_controller);
+    let listen = listen(
+        &mut reader,
+        fan_controller,
+        &CLIENT_STATE,
+        &ACKNOWLEDGEMENTS,
+        &PING_RESPONSE,
+    );
 
     enum PredefinedPublish {
         FanPercentageState {
