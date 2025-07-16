@@ -73,7 +73,6 @@ mod debounce;
 mod fan;
 mod modbus;
 mod mqtt;
-mod mqtt_task;
 mod task;
 
 bind_interrupts!(struct Irqs {
@@ -560,7 +559,7 @@ async fn main(spawner: Spawner) {
     unwrap!(spawner.spawn(update_fans()));
     // The MQTT task waits for publishes from MQTT and sends them to the modbus task.
     // It also sends updates from the modbus task that happen through button inputs to MQTT
-    unwrap!(spawner.spawn(crate::mqtt_task::mqtt_task(
+    unwrap!(spawner.spawn(crate::task::mqtt(
         spawner,
         pin_23,
         pin_25,
