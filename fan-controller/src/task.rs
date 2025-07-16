@@ -708,19 +708,19 @@ pub(super) async fn mqtt(
     // with futures so this will be refactored when I made it work
     /// Contains the status of the subscribe packets send out. The packet identifier represents the
     /// index in the array
-    static ACKNOWLEDGEMENTS: Mutex<CriticalSectionRawMutex, [bool; 2]> = Mutex::new([false, false]);
+    let acknowledgements: Mutex<CriticalSectionRawMutex, [bool; 2]> = Mutex::new([false, false]);
     /// The waker needs to be woken to complete the subscribe acknowledgement future.
     /// The embassy documentation does not explain when to use [`AtomicWaker`] but I am assuming
     /// it is useful for cases like this where I need to mutate a static.
-    static WAKER: AtomicWaker = AtomicWaker::new();
+    let waker: AtomicWaker = AtomicWaker::new();
 
-    static PING_RESPONSE: Signal<CriticalSectionRawMutex, PingResponse> = Signal::new();
+    let ping_response: Signal<CriticalSectionRawMutex, PingResponse> = Signal::new();
 
-    static CLIENT_STATE: Signal<CriticalSectionRawMutex, ClientState> = Signal::new();
+    let client_state: Signal<CriticalSectionRawMutex, ClientState> = Signal::new();
 
-    static OUTGOING: Channel<CriticalSectionRawMutex, Message, 8> = Channel::new();
+    let outgoing: Channel<CriticalSectionRawMutex, Message, 8> = Channel::new();
     /// The instant when the last packet was sent to determine when the next keep alive has to be sent
-    static LAST_PACKET: Signal<CriticalSectionRawMutex, Instant> = Signal::new();
+    let last_packet: Signal<CriticalSectionRawMutex, Instant> = Signal::new();
 
     let (mut reader, mut writer) = socket.split();
     // Using a mutex for the writer, so it can be shared between the task that sends messages (for
@@ -731,28 +731,28 @@ pub(super) async fn mqtt(
     let listen = listen(
         &mut reader,
         fan_controller,
-        &CLIENT_STATE,
-        &ACKNOWLEDGEMENTS,
-        &PING_RESPONSE,
+        &client_state,
+        &acknowledgements,
+        &ping_response,
     );
 
     // Future 2
-    let talk = talk(&writer, &OUTGOING, &LAST_PACKET);
+    let talk = talk(&writer, &outgoing, &last_packet);
 
     // Future 3
     let set_up = join(
         set_up_subscriptions(
             non_zero_u16!(1),
-            &ACKNOWLEDGEMENTS,
-            &OUTGOING,
+            &acknowledgements,
+            &outgoing,
             &SUBSCRIPTIONS,
-            &WAKER,
+            &waker,
         ),
-        set_up_discovery(&OUTGOING),
+        set_up_discovery(&outgoing),
     );
 
     // Future 4
-    let keep_alive = keep_alive(&writer, &LAST_PACKET, &CLIENT_STATE, &PING_RESPONSE);
+    let keep_alive = keep_alive(&writer, &last_packet, &client_state, &ping_response);
 
     let Some(mut receiver) = fan_controller.fan_states.0.receiver() else {
         error!("Fan states were not set up. Cannot receive fan state changes");
@@ -760,7 +760,7 @@ pub(super) async fn mqtt(
     };
 
     // Future 5 update homeassistant when change occurs
-    let update_homeassistant = update_homeassistant(&OUTGOING, &mut receiver);
+    let update_homeassistant = update_homeassistant(&outgoing, &mut receiver);
 
     // Future 6
     // let poll_sensors = poll_sensors(fans);
