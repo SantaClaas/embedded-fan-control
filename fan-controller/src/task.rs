@@ -414,6 +414,17 @@ async fn set_up_subscriptions(
     info!("Set up subscriptions complete")
 }
 
+async fn set_up_discovery(outgoing: &Channel<CriticalSectionRawMutex, Message<'_>, 8>) {
+    const DISCOVERY_PAYLOAD: &[u8] = env!("FAN_CONTROLLER_DISCOVERY_PAYLOAD").as_bytes();
+    const DISCOVERY_PUBLISH: Message = Message::Publish(Publish {
+        topic_name: configuration::DISCOVERY_TOPIC,
+        payload: DISCOVERY_PAYLOAD,
+    });
+
+    outgoing.send(DISCOVERY_PUBLISH).await;
+    //TODO wait for packet acknowledgement
+}
+
 #[embassy_executor::task]
 pub(super) async fn mqtt(
     spawner: Spawner,
@@ -602,74 +613,6 @@ pub(super) async fn mqtt(
         },
     ];
 
-    async fn set_up_discovery() {
-        // Resources:
-        // - https://www.youtube.com/watch?v=n9QXRcFqbLY
-        // Send discovery packet
-        // Configuration is like the YAML configuration that would be added in Home Assistant but as JSON
-        // Command topic: The MQTT topic to publish commands to change the state of the fan
-        //TODO set firmware version from Cargo.toml package version
-        //TODO think about setting hardware version, support url, and manufacturer
-        //TODO create single home assistant device with multiple entities for sensors in fan and the bypass
-        //TODO add diagnostic entity like IP address
-        //TODO availability topic
-        //TODO remove whitespace at compile time through macro, build script or const fn
-        //TODO support availability with will message https://www.home-assistant.io/integrations/mqtt/#using-availability-topics
-
-        // Using abbreviations to save space of binary and on the wire (haven't measured the effect though...)
-        // See https://www.home-assistant.io/integrations/mqtt/ or https://github.com/home-assistant/core/blob/dev/homeassistant/components/mqtt/abbreviations.py
-        // name -> name
-        // uniq_id -> unique_id
-        // stat_t -> state_topic
-        // cmd_t -> command_topic
-        // pct_stat_t -> percentage_state_topic
-        // pct_cmd_t -> percentage_command_topic
-        // spd_rng_max -> speed_range_max
-        // dev -> device
-        // mf -> manufacturer
-        // o -> origin (recommended https://www.home-assistant.io/integrations/mqtt/)
-        // unit_of_meas -> unit_of_measurement
-        // Don't need to set speed_range_min because it is 1 by default
-
-        // Speed set to max 32000 which is 50% of what the fans can do but more is not needed. This way the fans last longer
-        const DISCOVERY_PAYLOAD: &[u8] = env!("FAN_CONTROLLER_DISCOVERY_PAYLOAD").as_bytes();
-
-        // "~": "fancontroller",
-        //
-        // "o": {
-        //     "name": "Fan Controller",
-        //     "url": "github.com/santaclaas/embedded-fan-control/"
-        // }
-
-        const DISCOVERY_PUBLISH: Message = Message::Publish(Publish {
-            topic_name: configuration::DISCOVERY_TOPIC,
-            payload: DISCOVERY_PAYLOAD,
-        });
-
-        OUTGOING.send(DISCOVERY_PUBLISH).await;
-        //TODO wait for packet acknowledgement
-        return;
-
-        // Needs to be string because "°C" is not ASCII
-        const DISCOVERY_TEMPERATURE_SENSOR_1: &str = r#"{
-            "name": "Fan 1 Temperature Sensor",
-            "uniq_id": "fan-1-temperature-sensor",
-            "dev": {
-                "ids": "fancontroller-device"
-            },
-            "stat_t": "fancontroller/fan-1/temperature",
-            "value_template": "{{ value | float / 10 }}",
-            "unit_of_meas": "°C"
-        }"#;
-
-        const DISCOVERY_TEMPERATURE_SENSOR_1_PUBLISH: Message = Message::Publish(Publish {
-            topic_name: "homeassistant/sensor/fan-1-temperature-sensor/config",
-            payload: DISCOVERY_TEMPERATURE_SENSOR_1.as_bytes(),
-        });
-
-        OUTGOING.send(DISCOVERY_TEMPERATURE_SENSOR_1_PUBLISH).await;
-    }
-
     // Future 3
     let set_up = join(
         set_up_subscriptions(
@@ -679,7 +622,7 @@ pub(super) async fn mqtt(
             &SUBSCRIPTIONS,
             &WAKER,
         ),
-        set_up_discovery(),
+        set_up_discovery(&OUTGOING),
     );
 
     // Keep alive task
