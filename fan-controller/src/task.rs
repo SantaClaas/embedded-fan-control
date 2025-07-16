@@ -550,6 +550,30 @@ async fn poll_sensors(fans: Fans) {
     }
 }
 
+// Subscribe to home assistant topics
+const SUBSCRIPTIONS: [Subscription; 2] = [
+    Subscription {
+        topic_filter: topic::fan_controller::COMMAND,
+        options: mqtt::packet::subscribe::Options::new(
+            QualityOfService::AtMostOnceDelivery,
+            false,
+            false,
+            // mqtt::packet::subscribe::RetainHandling::DoNotSend,
+            mqtt::packet::subscribe::RetainHandling::SendAtSubscribe,
+        ),
+    },
+    Subscription {
+        topic_filter: "fancontroller/speed/percentage",
+        options: mqtt::packet::subscribe::Options::new(
+            QualityOfService::AtMostOnceDelivery,
+            false,
+            false,
+            // mqtt::packet::subscribe::RetainHandling::DoNotSend,
+            mqtt::packet::subscribe::RetainHandling::SendAtSubscribe,
+        ),
+    },
+];
+
 #[embassy_executor::task]
 pub(super) async fn mqtt(
     spawner: Spawner,
@@ -694,7 +718,15 @@ pub(super) async fn mqtt(
 
     static CLIENT_STATE: Signal<CriticalSectionRawMutex, ClientState> = Signal::new();
 
+    static OUTGOING: Channel<CriticalSectionRawMutex, Message, 8> = Channel::new();
+    /// The instant when the last packet was sent to determine when the next keep alive has to be sent
+    static LAST_PACKET: Signal<CriticalSectionRawMutex, Instant> = Signal::new();
+
     let (mut reader, mut writer) = socket.split();
+    // Using a mutex for the writer, so it can be shared between the task that sends messages (for
+    // subscribing and publishing fan speed updates) and the task that sends the keep alive ping
+    let writer = Mutex::<CriticalSectionRawMutex, TcpWriter<'_>>::new(writer);
+
     // Future 1
     let listen = listen(
         &mut reader,
@@ -704,39 +736,8 @@ pub(super) async fn mqtt(
         &PING_RESPONSE,
     );
 
-    static OUTGOING: Channel<CriticalSectionRawMutex, Message, 8> = Channel::new();
-    /// The instant when the last packet was sent to determine when the next keep alive has to be sent
-    static LAST_PACKET: Signal<CriticalSectionRawMutex, Instant> = Signal::new();
-
-    // Using a mutex for the writer, so it can be shared between the task that sends messages (for
-    // subscribing and publishing fan speed updates) and the task that sends the keep alive ping
-    let writer = Mutex::<CriticalSectionRawMutex, TcpWriter<'_>>::new(writer);
     // Future 2
     let talk = talk(&writer, &OUTGOING, &LAST_PACKET);
-
-    // Subscribe to home assistant topics
-    const SUBSCRIPTIONS: [Subscription; 2] = [
-        Subscription {
-            topic_filter: topic::fan_controller::COMMAND,
-            options: mqtt::packet::subscribe::Options::new(
-                QualityOfService::AtMostOnceDelivery,
-                false,
-                false,
-                // mqtt::packet::subscribe::RetainHandling::DoNotSend,
-                mqtt::packet::subscribe::RetainHandling::SendAtSubscribe,
-            ),
-        },
-        Subscription {
-            topic_filter: "fancontroller/speed/percentage",
-            options: mqtt::packet::subscribe::Options::new(
-                QualityOfService::AtMostOnceDelivery,
-                false,
-                false,
-                // mqtt::packet::subscribe::RetainHandling::DoNotSend,
-                mqtt::packet::subscribe::RetainHandling::SendAtSubscribe,
-            ),
-        },
-    ];
 
     // Future 3
     let set_up = join(
