@@ -1,4 +1,3 @@
-use crate::mqtt;
 use crate::mqtt::packet::connect::Connect;
 use crate::mqtt::packet::disconnect::Disconnect;
 use crate::mqtt::packet::get_parts;
@@ -11,6 +10,7 @@ use crate::mqtt::{non_zero_u16, TryDecode};
 use crate::Fans;
 use crate::PingRequest;
 use crate::{configuration, fan, gain_control, FanState, FAN_CONTROLLER};
+use crate::{mqtt, FanController};
 use ::mqtt::QualityOfService;
 use core::future::poll_fn;
 use core::num::NonZeroU16;
@@ -34,6 +34,7 @@ use embassy_sync::waitqueue::AtomicWaker;
 use embassy_time::{with_deadline, with_timeout, Instant, Timer};
 use rand::RngCore;
 use static_cell::StaticCell;
+use topic::fan_controller;
 
 #[embassy_executor::task]
 async fn network_task(stack: &'static Stack<NetDriver<'static>>) -> ! {
@@ -95,8 +96,6 @@ async fn handle_publish<'f>(
     sender: embassy_sync::watch::Sender<'_, CriticalSectionRawMutex, FanState, 3>,
 ) {
     info!("Handling publish");
-    // letsender: embassy_sync::watch::Sender<'_, CriticalSectionRawMutex, FanState, 3>  =
-    //     FAN_CONTROLLER.fan_states.0.sender();
 
     // This part is not MQTT and application specific
     match publish.topic_name {
@@ -173,6 +172,7 @@ pub(super) async fn mqtt_task(
     dio: impl PioPin,
     clk: impl PioPin,
     fans: &'static Fans,
+    fan_controller: &'static FanController,
 ) -> () {
     let (net_device, mut control) =
         gain_control(spawner, pwr_pin, cs_pin, pio, dma, dio, clk).await;
@@ -316,7 +316,10 @@ pub(super) async fn mqtt_task(
     }
     static CLIENT_STATE: Signal<CriticalSectionRawMutex, ClientState> = Signal::new();
 
-    async fn listen<'reader>(reader: &mut TcpReader<'reader>) {
+    async fn listen<'reader>(
+        reader: &mut TcpReader<'reader>,
+        fan_controller: &'static FanController,
+    ) {
         let mut buffer = [0; 1024];
         loop {
             info!("Waiting for packet");
@@ -361,7 +364,7 @@ pub(super) async fn mqtt_task(
                         }
                     };
 
-                    let sender = FAN_CONTROLLER.fan_states.0.sender();
+                    let sender = fan_controller.fan_states.0.sender();
                     handle_publish(&publish, sender).await;
                     info!("Handled publish");
                 }
@@ -408,7 +411,7 @@ pub(super) async fn mqtt_task(
 
     let (mut reader, mut writer) = socket.split();
     // Future 1
-    let listen = listen(&mut reader);
+    let listen = listen(&mut reader, fan_controller);
 
     enum PredefinedPublish {
         FanPercentageState {

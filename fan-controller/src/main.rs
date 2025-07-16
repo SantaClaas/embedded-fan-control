@@ -561,7 +561,15 @@ async fn main(spawner: Spawner) {
     // The MQTT task waits for publishes from MQTT and sends them to the modbus task.
     // It also sends updates from the modbus task that happen through button inputs to MQTT
     unwrap!(spawner.spawn(crate::mqtt_task::mqtt_task(
-        spawner, pin_23, pin_25, pio0, dma_ch0, pin_24, pin_29, &FANS
+        spawner,
+        pin_23,
+        pin_25,
+        pio0,
+        dma_ch0,
+        pin_24,
+        pin_29,
+        &FANS,
+        &FAN_CONTROLLER
     )));
     unwrap!(spawner.spawn(display_status(pin_21, pin_20)));
 }
