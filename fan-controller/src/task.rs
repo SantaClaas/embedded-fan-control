@@ -97,7 +97,7 @@ async fn handle_publish<'f>(
 ) {
     info!("Handling publish");
 
-    // This part is not MQTT and application specific
+    // This part is not MQTT but application specific
     match publish.topic_name {
         "fancontroller/speed/percentage" => {
             let payload = match core::str::from_utf8(publish.payload) {
@@ -177,17 +177,31 @@ enum ClientState {
     ConnectionLost,
 }
 
+struct Receiver {
+    buffer: [u8; 1024],
+}
+
+impl Receiver {
+    fn new() -> Self {
+        Receiver { buffer: [0; 1024] }
+    }
+
+    async fn handle_publish(&self, publish: &Publish<'_>) {
+        // Handle the publish message
+    }
+}
+
 async fn listen(
     reader: &mut TcpReader<'_>,
     sender: &embassy_sync::watch::Sender<'_, CriticalSectionRawMutex, FanState, 3>,
     client_state: &Signal<CriticalSectionRawMutex, ClientState>,
     acknowledgements: &Mutex<CriticalSectionRawMutex, [bool; 2]>,
     ping_response_signal: &Signal<CriticalSectionRawMutex, PingResponse>,
+    receiver: &mut Receiver,
 ) {
-    let mut buffer = [0; 1024];
     loop {
         info!("Waiting for packet");
-        let result = reader.read(&mut buffer).await;
+        let result = reader.read(&mut receiver.buffer).await;
         let bytes_read = match result {
             // This indicates the TCP connection was closed. (See embassy-net documentation)
             Ok(0) => {
@@ -204,7 +218,7 @@ async fn listen(
 
         info!("Packet received");
 
-        let parts = match mqtt::packet::get_parts(&buffer[..bytes_read]) {
+        let parts = match mqtt::packet::get_parts(&receiver.buffer[..bytes_read]) {
             Ok(parts) => parts,
             Err(error) => {
                 warn!("Error reading MQTT packet: {:?}", error);
@@ -226,7 +240,7 @@ async fn listen(
                         }
                     };
 
-                handle_publish(&publish, sender).await;
+                receiver.handle_publish(&publish);
                 info!("Handled publish");
             }
             SubscribeAcknowledgement::TYPE => {
@@ -728,12 +742,14 @@ pub(super) async fn mqtt(
 
     // Future 1
     let sender = fan_controller.fan_states.0.sender();
+    let mut receiver = Receiver::new();
     let listen = listen(
         &mut reader,
         &sender,
         &client_state,
         &acknowledgements,
         &ping_response,
+        &mut receiver,
     );
 
     // Future 2
