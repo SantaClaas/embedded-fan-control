@@ -59,6 +59,36 @@ async fn handle_subscribe_acknowledgement<'f>(
     );
 }
 
+async fn wait_for_acknowledgement(
+    packet_identifier: NonZeroU16,
+    acknowledgements: &Mutex<CriticalSectionRawMutex, [bool; 2]>,
+    waker: &AtomicWaker,
+) {
+    info!("Waiting for subscribe acknowledgements");
+    //TODO if this function gets called multiple times it might never be woken up because there
+    // is only one waker and the other call of this function will lock the mutex. To solve this
+    // we could use structs from [embassy-sync::waitqueue] and/or a blocking mutex to remove the
+    // try_lock which is used because the lock function is async and we can not easily await here
+    poll_fn(|context| match acknowledgements.try_lock() {
+        Ok(mut guard) => {
+            let packet = guard.get_mut(packet_identifier.get() as usize).unwrap();
+            if *packet {
+                Poll::Ready(())
+            } else {
+                // Waker needs to be overwritten on each poll.
+                // Read the Rust async book on wakers for more details
+                let context_waker = context.waker();
+                waker.register(context_waker);
+                Poll::Pending
+            }
+        }
+        Err(_error) => Poll::Pending,
+    })
+    .await;
+
+    info!("Subscribe acknowledgement received")
+}
+
 #[embassy_executor::task]
 pub(super) async fn mqtt_task(
     spawner: Spawner,
@@ -197,32 +227,6 @@ pub(super) async fn mqtt_task(
     /// The embassy documentation does not explain when to use [`AtomicWaker`] but I am assuming
     /// it is useful for cases like this where I need to mutate a static.
     static WAKER: AtomicWaker = AtomicWaker::new();
-
-    async fn wait_for_acknowledgement(packet_identifier: NonZeroU16) {
-        info!("Waiting for subscribe acknowledgements");
-        //TODO if this function gets called multiple times it might never be woken up because there
-        // is only one waker and the other call of this function will lock the mutex. To solve this
-        // we could use structs from [embassy-sync::waitqueue] and/or a blocking mutex to remove the
-        // try_lock which is used because the lock function is async and we can not easily await here
-        poll_fn(|context| match ACKNOWLEDGEMENTS.try_lock() {
-            Ok(mut guard) => {
-                let packet = guard.get_mut(packet_identifier.get() as usize).unwrap();
-                if *packet {
-                    Poll::Ready(())
-                } else {
-                    // Waker needs to be overwritten on each poll.
-                    // Read the Rust async book on wakers for more details
-                    let waker = context.waker();
-                    WAKER.register(waker);
-                    Poll::Pending
-                }
-            }
-            Err(_error) => Poll::Pending,
-        })
-        .await;
-
-        info!("Subscribe acknowledgement received")
-    }
 
     /// A handler that takes MQTT publishes and sets the fan settings accordingly
     async fn handle_publish<'f>(publish: &'f Publish<'f>) {
@@ -563,7 +567,7 @@ pub(super) async fn mqtt_task(
 
         OUTGOING.send(message).await;
 
-        wait_for_acknowledgement(packet_identifier).await;
+        wait_for_acknowledgement(packet_identifier, &ACKNOWLEDGEMENTS, &WAKER).await;
         info!("Set up subscriptions complete")
     }
 
