@@ -93,7 +93,7 @@ async fn wait_for_acknowledgement(
 /// A handler that takes MQTT publishes and sets the fan settings accordingly
 async fn handle_publish<'f>(
     publish: &'f Publish<'f>,
-    sender: embassy_sync::watch::Sender<'_, CriticalSectionRawMutex, FanState, 3>,
+    sender: &embassy_sync::watch::Sender<'_, CriticalSectionRawMutex, FanState, 3>,
 ) {
     info!("Handling publish");
 
@@ -179,7 +179,7 @@ enum ClientState {
 
 async fn listen<'reader>(
     reader: &mut TcpReader<'reader>,
-    fan_controller: &'static FanController,
+    sender: &embassy_sync::watch::Sender<'_, CriticalSectionRawMutex, FanState, 3>,
     client_state: &Signal<CriticalSectionRawMutex, ClientState>,
     acknowledgements: &Mutex<CriticalSectionRawMutex, [bool; 2]>,
     ping_response_signal: &Signal<CriticalSectionRawMutex, PingResponse>,
@@ -226,7 +226,6 @@ async fn listen<'reader>(
                         }
                     };
 
-                let sender = fan_controller.fan_states.0.sender();
                 handle_publish(&publish, sender).await;
                 info!("Handled publish");
             }
@@ -728,9 +727,10 @@ pub(super) async fn mqtt(
     let writer = Mutex::<CriticalSectionRawMutex, TcpWriter<'_>>::new(writer);
 
     // Future 1
+    let sender = fan_controller.fan_states.0.sender();
     let listen = listen(
         &mut reader,
-        fan_controller,
+        &sender,
         &client_state,
         &acknowledgements,
         &ping_response,
