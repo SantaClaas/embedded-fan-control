@@ -271,6 +271,129 @@ async fn listen<'reader>(
     }
 }
 
+enum PredefinedPublish {
+    FanPercentageState {
+        setting: fan::Setting,
+    },
+    FanOnState {
+        is_on: bool,
+    },
+    SensorTemperature {
+        /// Celsius temperature as read from the sensor. This is the raw value. To get the actual temperature, divide by 10.
+        /// e.g. 234 means 23.4 degrees Celsius
+        temperature: u16,
+        /// The fan the sensor is on
+        fan: fan::Fan,
+    },
+}
+
+enum Message<'a> {
+    Subscribe(Subscribe<'a>),
+    Publish(Publish<'a>),
+    PredefinedPublish(PredefinedPublish),
+}
+
+async fn talk(
+    writer: &Mutex<CriticalSectionRawMutex, TcpWriter<'_>>,
+    outgoing: &Channel<CriticalSectionRawMutex, Message<'_>, 8>,
+    last_packet: &Signal<CriticalSectionRawMutex, Instant>,
+) {
+    loop {
+        let message = outgoing.receive().await;
+
+        let mut writer = writer.lock().await;
+        match message {
+            Message::Subscribe(subscribe) => {
+                info!("Sending subscribe");
+                if let Err(error) = send(&mut *writer, subscribe).await {
+                    error!("Error sending subscribe: {:?}", error);
+                    continue;
+                }
+            }
+            Message::Publish(publish) => {
+                info!(
+                    "Sending publish {:?}",
+                    core::str::from_utf8(publish.payload).unwrap()
+                );
+                if let Err(error) = send(&mut *writer, publish).await {
+                    error!("Error sending publish: {:?}", error);
+                    continue;
+                }
+            }
+            Message::PredefinedPublish(publish) => match publish {
+                PredefinedPublish::FanPercentageState { setting } => {
+                    info!("Sending percentage state publish {}", setting);
+                    // let buffer: StringBuffer<5> = setting.into();
+                    let buffer = match heapless::String::<5>::try_from(setting.0) {
+                        Ok(buffer) => buffer,
+                        Err(error) => {
+                            error!("Error converting setting to string: {:?}", error);
+                            continue;
+                        }
+                    };
+
+                    let packet = Publish {
+                        topic_name: "fancontroller/speed/percentage_state",
+                        payload: buffer.as_bytes(),
+                    };
+
+                    if let Err(error) = send(&mut *writer, packet).await {
+                        error!("Error sending predefined publish: {:?}", error);
+                        continue;
+                    }
+                }
+                PredefinedPublish::FanOnState { is_on } => {
+                    //TODO update state
+                    let packet = if is_on {
+                        Publish {
+                            topic_name: "fancontroller/on/state",
+                            payload: b"ON",
+                        }
+                    } else {
+                        Publish {
+                            topic_name: "fancontroller/on/state",
+                            payload: b"OFF",
+                        }
+                    };
+
+                    info!("Sending on state publish");
+                    if let Err(error) = send(&mut *writer, packet).await {
+                        error!("Error sending predefined publish: {:?}", error);
+                        continue;
+                    }
+                }
+                PredefinedPublish::SensorTemperature { temperature, fan } => {
+                    // The value is divided by 10 in the value template that is submitted with home assistant discovery
+                    let formatted = match heapless::String::<3>::try_from(temperature) {
+                        Ok(formatted) => formatted,
+                        Err(error) => {
+                            error!(
+                                "Error writing temperature {} to heapless::String",
+                                temperature
+                            );
+                            continue;
+                        }
+                    };
+                    let packet = Publish {
+                        topic_name: match fan {
+                            fan::Fan::One => "fancontroller/sensor/fan-1/temperature",
+                            fan::Fan::Two => "fancontroller/sensor/fan-2/temperature",
+                        },
+                        payload: formatted.as_bytes(),
+                    };
+                    info!("Sending sensor temperature publish");
+                    if let Err(error) = send(&mut *writer, packet).await {
+                        error!("Error sending predefined publish: {:?}", error);
+                        continue;
+                    }
+                }
+            },
+        }
+
+        last_packet.signal(Instant::now());
+    }
+}
+
 #[embassy_executor::task]
 pub(super) async fn mqtt_task(
     spawner: Spawner,
@@ -425,133 +548,15 @@ pub(super) async fn mqtt_task(
         &PING_RESPONSE,
     );
 
-    enum PredefinedPublish {
-        FanPercentageState {
-            setting: fan::Setting,
-        },
-        FanOnState {
-            is_on: bool,
-        },
-        SensorTemperature {
-            /// Celsius temperature as read from the sensor. This is the raw value. To get the actual temperature, divide by 10.
-            /// e.g. 234 means 23.4 degrees Celsius
-            temperature: u16,
-            /// The fan the sensor is on
-            fan: fan::Fan,
-        },
-    }
-
-    enum Message<'a> {
-        Subscribe(Subscribe<'a>),
-        Publish(Publish<'a>),
-        PredefinedPublish(PredefinedPublish),
-    }
-
     static OUTGOING: Channel<CriticalSectionRawMutex, Message, 8> = Channel::new();
     /// The instant when the last packet was sent to determine when the next keep alive has to be sent
     static LAST_PACKET: Signal<CriticalSectionRawMutex, Instant> = Signal::new();
-    async fn talk(writer: &Mutex<CriticalSectionRawMutex, TcpWriter<'_>>) {
-        loop {
-            let message = OUTGOING.receive().await;
-
-            let mut writer = writer.lock().await;
-            match message {
-                Message::Subscribe(subscribe) => {
-                    info!("Sending subscribe");
-                    if let Err(error) = send(&mut *writer, subscribe).await {
-                        error!("Error sending subscribe: {:?}", error);
-                        continue;
-                    }
-                }
-                Message::Publish(publish) => {
-                    info!(
-                        "Sending publish {:?}",
-                        core::str::from_utf8(publish.payload).unwrap()
-                    );
-                    if let Err(error) = send(&mut *writer, publish).await {
-                        error!("Error sending publish: {:?}", error);
-                        continue;
-                    }
-                }
-                Message::PredefinedPublish(publish) => match publish {
-                    PredefinedPublish::FanPercentageState { setting } => {
-                        info!("Sending percentage state publish {}", setting);
-                        // let buffer: StringBuffer<5> = setting.into();
-                        let buffer = match heapless::String::<5>::try_from(setting.0) {
-                            Ok(buffer) => buffer,
-                            Err(error) => {
-                                error!("Error converting setting to string: {:?}", error);
-                                continue;
-                            }
-                        };
-
-                        let packet = Publish {
-                            topic_name: "fancontroller/speed/percentage_state",
-                            payload: buffer.as_bytes(),
-                        };
-
-                        if let Err(error) = send(&mut *writer, packet).await {
-                            error!("Error sending predefined publish: {:?}", error);
-                            continue;
-                        }
-                    }
-                    PredefinedPublish::FanOnState { is_on } => {
-                        //TODO update state
-                        let packet = if is_on {
-                            Publish {
-                                topic_name: "fancontroller/on/state",
-                                payload: b"ON",
-                            }
-                        } else {
-                            Publish {
-                                topic_name: "fancontroller/on/state",
-                                payload: b"OFF",
-                            }
-                        };
-
-                        info!("Sending on state publish");
-                        if let Err(error) = send(&mut *writer, packet).await {
-                            error!("Error sending predefined publish: {:?}", error);
-                            continue;
-                        }
-                    }
-                    PredefinedPublish::SensorTemperature { temperature, fan } => {
-                        // The value is divided by 10 in the value template that is submitted with home assistant discovery
-                        let formatted = match heapless::String::<3>::try_from(temperature) {
-                            Ok(formatted) => formatted,
-                            Err(error) => {
-                                error!(
-                                    "Error writing temperature {} to heapless::String",
-                                    temperature
-                                );
-                                continue;
-                            }
-                        };
-                        let packet = Publish {
-                            topic_name: match fan {
-                                fan::Fan::One => "fancontroller/sensor/fan-1/temperature",
-                                fan::Fan::Two => "fancontroller/sensor/fan-2/temperature",
-                            },
-                            payload: formatted.as_bytes(),
-                        };
-                        info!("Sending sensor temperature publish");
-                        if let Err(error) = send(&mut *writer, packet).await {
-                            error!("Error sending predefined publish: {:?}", error);
-                            continue;
-                        }
-                    }
-                },
-            }
-
-            LAST_PACKET.signal(Instant::now());
-        }
-    }
 
     // Using a mutex for the writer, so it can be shared between the task that sends messages (for
     // subscribing and publishing fan speed updates) and the task that sends the keep alive ping
     let writer = Mutex::<CriticalSectionRawMutex, TcpWriter<'_>>::new(writer);
     // Future 2
-    let talk = talk(&writer);
+    let talk = talk(&writer, &OUTGOING, &LAST_PACKET);
 
     // Subscribe to home assistant topics
     const SUBSCRIPTIONS: [Subscription; 2] = [
