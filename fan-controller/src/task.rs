@@ -485,6 +485,46 @@ async fn keep_alive(
     }
 }
 
+async fn update_homeassistant(
+    outgoing: &Channel<CriticalSectionRawMutex, Message<'_>, 8>,
+    receiver: &mut embassy_sync::watch::Receiver<'_, CriticalSectionRawMutex, FanState, 3>,
+) {
+    // let Some(mut receiver): Option<
+    //     embassy_sync::watch::Receiver<'_, CriticalSectionRawMutex, FanState, 3>,
+    // > = FAN_CONTROLLER.fan_states.0.receiver() else {
+    //     error!("Fan state receiver was not set up. Cannot update Homeassistant");
+    //     return;
+    // };
+
+    // If there is no initial value this will cause an initial update to homeassistant
+    // which is good as we don't know the state on homeassistant
+    let mut previous_state = receiver.try_get().unwrap_or(FanState {
+        is_on: false,
+        setting: fan::Setting::ZERO,
+    });
+
+    loop {
+        let state = receiver.changed().await;
+
+        info!(
+            "UPDATING HOMEASSISTANT {}",
+            if state.is_on { "ON" } else { "OFF" }
+        );
+        let message =
+            Message::PredefinedPublish(PredefinedPublish::FanOnState { is_on: state.is_on });
+        outgoing.send(message).await;
+
+        // Update setting before is on state for smoother transition in homeassistant UI
+        info!("UPDATING HOMEASSISTANT {}", state.setting);
+        let message = Message::PredefinedPublish(PredefinedPublish::FanPercentageState {
+            setting: state.setting,
+        });
+        outgoing.send(message).await;
+
+        previous_state = state;
+    }
+}
+
 #[embassy_executor::task]
 pub(super) async fn mqtt(
     spawner: Spawner,
@@ -688,44 +728,15 @@ pub(super) async fn mqtt(
     // Future 4
     let keep_alive = keep_alive(&writer, &LAST_PACKET, &CLIENT_STATE, &PING_RESPONSE);
 
+    let Some(mut receiver) = fan_controller.fan_states.0.receiver() else {
+        error!("Fan states were not set up. Cannot receive fan state changes");
+        return;
+    };
+
     // Future 5 update homeassistant when change occurs
-    async fn update_homeassistant() {
-        let Some(mut receiver) = FAN_CONTROLLER.fan_states.0.receiver() else {
-            error!("Fan state receiver was not set up. Cannot update Homeassistant");
-            return;
-        };
-
-        // If there is no initial value this will cause an initial update to homeassistant
-        // which is good as we don't know the state on homeassistant
-        let mut previous_state = receiver.try_get().unwrap_or(FanState {
-            is_on: false,
-            setting: fan::Setting::ZERO,
-        });
-
-        loop {
-            let state = receiver.changed().await;
-
-            info!(
-                "UPDATING HOMEASSISTANT {}",
-                if state.is_on { "ON" } else { "OFF" }
-            );
-            let message =
-                Message::PredefinedPublish(PredefinedPublish::FanOnState { is_on: state.is_on });
-            OUTGOING.send(message).await;
-
-            // Update setting before is on state for smoother transition in homeassistant UI
-            info!("UPDATING HOMEASSISTANT {}", state.setting);
-            let message = Message::PredefinedPublish(PredefinedPublish::FanPercentageState {
-                setting: state.setting,
-            });
-            OUTGOING.send(message).await;
-
-            previous_state = state;
-        }
-    }
+    let update_homeassistant = update_homeassistant(&OUTGOING, &mut receiver);
 
     // Future 6
-
     async fn poll_sensors(fans: Fans) {
         loop {
             let mut fans = fans.lock().await;
@@ -758,7 +769,7 @@ pub(super) async fn mqtt(
         set_up,
         // Join because there is only a join with max 5 arguments 😬
         // join(update_homeassistant(), poll_sensors(fans)),
-        update_homeassistant(),
+        update_homeassistant,
     )
     .await;
 }
