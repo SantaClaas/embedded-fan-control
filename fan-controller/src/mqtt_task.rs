@@ -89,6 +89,80 @@ async fn wait_for_acknowledgement(
     info!("Subscribe acknowledgement received")
 }
 
+/// A handler that takes MQTT publishes and sets the fan settings accordingly
+async fn handle_publish<'f>(
+    publish: &'f Publish<'f>,
+    sender: embassy_sync::watch::Sender<'_, CriticalSectionRawMutex, FanState, 3>,
+) {
+    info!("Handling publish");
+    // letsender: embassy_sync::watch::Sender<'_, CriticalSectionRawMutex, FanState, 3>  =
+    //     FAN_CONTROLLER.fan_states.0.sender();
+
+    // This part is not MQTT and application specific
+    match publish.topic_name {
+        "fancontroller/speed/percentage" => {
+            let payload = match core::str::from_utf8(publish.payload) {
+                Ok(payload) => payload,
+                Err(error) => {
+                    warn!("Expected percentage_command_topic payload (speed percentage) to be a valid UTF-8 string with a number");
+                    return;
+                }
+            };
+
+            // And then to an integer...
+            let set_point = payload.parse::<u16>();
+            let set_point = match set_point {
+                Ok(set_point) => set_point,
+                Err(error) => {
+                    warn!(
+                        "Expected speed percentage to be a number string. Payload is: {}",
+                        payload
+                    );
+                    return;
+                }
+            };
+
+            info!("SETTING FAN {}", set_point);
+            let Ok(setting) = fan::Setting::new(set_point) else {
+                warn!(
+                    "Setting fan speed out of bounds. Not accepting new setting: {}",
+                    set_point
+                );
+                return;
+            };
+
+            sender.send(FanState {
+                setting,
+                // Set to on when there is a value set
+                is_on: true,
+            });
+            // Home assistant and fan update will be done by receiver
+        }
+        topic::fan_controller::COMMAND => {
+            info!("Received fan set on command from homeassistant");
+            info!(
+                "Payload: {:?}",
+                core::str::from_utf8(publish.payload).unwrap()
+            );
+            let is_on = publish.payload == b"ON";
+            info!("TURNING FAN {}", if is_on { "ON" } else { "OFF" });
+
+            sender.send(FanState {
+                setting: sender
+                    .try_get()
+                    .map(|state| state.setting)
+                    .unwrap_or(fan::Setting::ZERO),
+                is_on,
+            });
+            // Home assistant and fan update will be done by receiver
+        }
+        other => warn!(
+            "Unexpected topic: {} with payload: {}",
+            other, publish.payload
+        ),
+    }
+}
+
 #[embassy_executor::task]
 pub(super) async fn mqtt_task(
     spawner: Spawner,
@@ -228,76 +302,6 @@ pub(super) async fn mqtt_task(
     /// it is useful for cases like this where I need to mutate a static.
     static WAKER: AtomicWaker = AtomicWaker::new();
 
-    /// A handler that takes MQTT publishes and sets the fan settings accordingly
-    async fn handle_publish<'f>(publish: &'f Publish<'f>) {
-        info!("Handling publish");
-        let sender = FAN_CONTROLLER.fan_states.0.sender();
-
-        // This part is not MQTT and application specific
-        match publish.topic_name {
-            "fancontroller/speed/percentage" => {
-                let payload = match core::str::from_utf8(publish.payload) {
-                    Ok(payload) => payload,
-                    Err(error) => {
-                        warn!("Expected percentage_command_topic payload (speed percentage) to be a valid UTF-8 string with a number");
-                        return;
-                    }
-                };
-
-                // And then to an integer...
-                let set_point = payload.parse::<u16>();
-                let set_point = match set_point {
-                    Ok(set_point) => set_point,
-                    Err(error) => {
-                        warn!(
-                            "Expected speed percentage to be a number string. Payload is: {}",
-                            payload
-                        );
-                        return;
-                    }
-                };
-
-                info!("SETTING FAN {}", set_point);
-                let Ok(setting) = fan::Setting::new(set_point) else {
-                    warn!(
-                        "Setting fan speed out of bounds. Not accepting new setting: {}",
-                        set_point
-                    );
-                    return;
-                };
-
-                sender.send(FanState {
-                    setting,
-                    // Set to on when there is a value set
-                    is_on: true,
-                });
-                // Home assistant and fan update will be done by receiver
-            }
-            topic::fan_controller::COMMAND => {
-                info!("Received fan set on command from homeassistant");
-                info!(
-                    "Payload: {:?}",
-                    core::str::from_utf8(publish.payload).unwrap()
-                );
-                let is_on = publish.payload == b"ON";
-                info!("TURNING FAN {}", if is_on { "ON" } else { "OFF" });
-
-                sender.send(FanState {
-                    setting: sender
-                        .try_get()
-                        .map(|state| state.setting)
-                        .unwrap_or(fan::Setting::ZERO),
-                    is_on,
-                });
-                // Home assistant and fan update will be done by receiver
-            }
-            other => warn!(
-                "Unexpected topic: {} with payload: {}",
-                other, publish.payload
-            ),
-        }
-    }
-
     static PING_RESPONSE: Signal<CriticalSectionRawMutex, PingResponse> = Signal::new();
     /// Callback handler for pings received when listening
     async fn handle_ping_response(ping_response: PingResponse) {
@@ -357,7 +361,8 @@ pub(super) async fn mqtt_task(
                         }
                     };
 
-                    handle_publish(&publish).await;
+                    let sender = FAN_CONTROLLER.fan_states.0.sender();
+                    handle_publish(&publish, sender).await;
                     info!("Handled publish");
                 }
                 SubscribeAcknowledgement::TYPE => {
