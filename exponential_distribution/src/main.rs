@@ -53,12 +53,12 @@ fn main() {
     for index in 0..result_counts.len() {
         let values = result_counts[index];
         let percentage = values as f64 / max as f64 * 100.0;
-        println!("{}: {:.2}", index, percentage);
+        println!("{index}: {percentage:.2}");
         sum += percentage;
         data[index] = (index as f64 + 1.0, percentage);
     }
 
-    println!("Sum: {:.2}", sum);
+    println!("Sum: {sum:.2}");
 
     let plot = Plot::new(data.into()).line_style(LineStyle::new().colour("red"));
 

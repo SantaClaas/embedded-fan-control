@@ -30,7 +30,7 @@ async fn main() -> serialport::Result<()> {
     let mut count = 0u64;
     let is_echo = false;
 
-    println!("\nListening on device {}", PORT_NAME);
+    println!("\nListening on device {PORT_NAME}");
     loop {
         let mut buffer = [0u8; 32];
         // We expect this length but this is a test, and it could not be guaranteed
@@ -58,9 +58,9 @@ async fn main() -> serialport::Result<()> {
             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
             // Echo
             let result = port.write(&buffer[..bytes_read]);
-            println!("Echoed message back {:?}", result);
+            println!("Echoed message back {result:?}");
             let result = port.flush();
-            println!("Flushed message back {:?}", result);
+            println!("Flushed message back {result:?}");
         }
         // let inverse: Vec<u8> = buffer.iter().map(|byte| byte.to_be()).collect::<Vec<u8>>();
         // println!("message {count} - inverse: {:?}", inverse);
