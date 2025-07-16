@@ -525,6 +525,31 @@ async fn update_homeassistant(
     }
 }
 
+async fn poll_sensors(fans: Fans) {
+    loop {
+        let mut fans = fans.lock().await;
+        let Some(fans) = fans.deref_mut() else {
+            error!("Fans were not set up. Cannot poll sensors");
+            return;
+        };
+
+        let temperature = match fans.get_temperature(fan::Fan::One).await {
+            Ok(temperature) => temperature,
+            Err(fan::Error::Timeout(TimeoutError)) => {
+                error!("Timeout getting temperature for fan 1");
+                return;
+            }
+            Err(fan::Error::Uart(error)) => {
+                error!("Uart error getting temperature for fan 1: {:?}", error);
+                return;
+            }
+        };
+
+        Timer::after_secs(10).await;
+        todo!("Send temperature to Home Assistant");
+    }
+}
+
 #[embassy_executor::task]
 pub(super) async fn mqtt(
     spawner: Spawner,
@@ -737,29 +762,7 @@ pub(super) async fn mqtt(
     let update_homeassistant = update_homeassistant(&OUTGOING, &mut receiver);
 
     // Future 6
-    async fn poll_sensors(fans: Fans) {
-        loop {
-            let mut fans = fans.lock().await;
-            let Some(fans) = fans.deref_mut() else {
-                error!("Fans were not set up. Cannot poll sensors");
-                return;
-            };
-
-            let temperature = match fans.get_temperature(fan::Fan::One).await {
-                Ok(temperature) => temperature,
-                Err(fan::Error::Timeout(TimeoutError)) => {
-                    error!("Timeout getting temperature for fan 1");
-                    return;
-                }
-                Err(fan::Error::Uart(error)) => {
-                    error!("Uart error getting temperature for fan 1: {:?}", error);
-                    return;
-                }
-            };
-
-            Timer::after_secs(10).await;
-        }
-    }
+    // let poll_sensors = poll_sensors(fans);
 
     //TODO cancel all tasks when client loses connection
     join5(
