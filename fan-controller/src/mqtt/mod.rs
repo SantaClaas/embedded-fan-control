@@ -12,6 +12,7 @@ use crate::mqtt::variable_byte_integer::DecodeError;
 pub(crate) mod client;
 pub(crate) mod packet;
 pub(crate) mod task;
+pub(crate) mod v2;
 pub(crate) mod variable_byte_integer;
 
 #[derive(Debug, Format, Clone)]

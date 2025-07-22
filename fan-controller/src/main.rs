@@ -65,6 +65,7 @@ use crate::mqtt::packet::{connect, publish, subscribe};
 use crate::mqtt::packet::{get_parts, FromPublish, FromSubscribeAcknowledgement};
 use crate::mqtt::task::send;
 use crate::mqtt::TryEncode;
+use crate::task::PublishOut;
 use ::mqtt::QualityOfService;
 
 mod async_callback;
@@ -514,6 +515,24 @@ async fn display_status(pin_21: PIN_21, pin_20: PIN_20) {
     }
 }
 
+struct Temporary;
+
+impl From<Publish<'_>> for Temporary {
+    fn from(publish: Publish<'_>) -> Self {
+        Temporary
+    }
+}
+
+impl PublishOut for Temporary {
+    fn topic(&self) -> &str {
+        "temporary"
+    }
+
+    fn payload(&self) -> &[u8] {
+        b"25.5"
+    }
+}
+
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
     let Peripherals {
@@ -557,9 +576,44 @@ async fn main(spawner: Spawner) {
     // Button input task waits for button presses and send according signals to the modbus task
     unwrap!(spawner.spawn(input(pin_18)));
     unwrap!(spawner.spawn(update_fans()));
+
+    #[embassy_executor::task]
+    async fn mqtt_task(
+        spawner: Spawner,
+        pwr_pin: PIN_23,
+        cs_pin: PIN_25,
+        pio: PIO0,
+        dma: DMA_CH0,
+        dio: impl PioPin,
+        clk: impl PioPin,
+        fans: &'static Fans,
+        fan_controller: &'static FanController,
+    ) {
+        let r#in = Channel::<CriticalSectionRawMutex, Temporary, 3>::new();
+
+        let sender_in = r#in.sender();
+        let receiver_in = r#in.receiver();
+
+        let out = Channel::<CriticalSectionRawMutex, Temporary, 3>::new();
+        let sender_out = out.sender();
+        let receiver_out = out.receiver();
+
+        crate::task::mqtt(
+            spawner,
+            pwr_pin,
+            cs_pin,
+            pio,
+            dma,
+            dio,
+            clk,
+            sender_in,
+            receiver_out,
+        )
+        .await;
+    };
     // The MQTT task waits for publishes from MQTT and sends them to the modbus task.
     // It also sends updates from the modbus task that happen through button inputs to MQTT
-    unwrap!(spawner.spawn(crate::task::mqtt(
+    unwrap!(spawner.spawn(mqtt_task(
         spawner,
         pin_23,
         pin_25,
@@ -568,7 +622,7 @@ async fn main(spawner: Spawner) {
         pin_24,
         pin_29,
         &FANS,
-        &FAN_CONTROLLER
+        &FAN_CONTROLLER,
     )));
     unwrap!(spawner.spawn(display_status(pin_21, pin_20)));
 }

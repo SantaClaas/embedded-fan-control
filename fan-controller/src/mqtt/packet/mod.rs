@@ -26,6 +26,7 @@ pub(crate) enum GetPartsError {
     InvalidRemainingLength(variable_byte_integer::DecodeError),
     MissingBytes(usize),
 }
+
 #[derive(Debug, Clone, Format)]
 pub(crate) enum ReadError {
     /// The packet type is not supported. This can happen if there is a packet received that is
@@ -142,9 +143,7 @@ pub(crate) trait FromPublish {
 
 /// Temporary just for testing. TODO remove
 impl FromPublish for () {
-    fn from_publish(publish: Publish) -> Self {
-        
-    }
+    fn from_publish(publish: Publish) -> Self {}
 }
 
 pub(crate) trait FromSubscribeAcknowledgement {

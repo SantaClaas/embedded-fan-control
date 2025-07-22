@@ -12,14 +12,14 @@ use crate::PingRequest;
 use crate::{configuration, fan, gain_control, FanState};
 use crate::{mqtt, FanController};
 use ::mqtt::QualityOfService;
-use core::future::poll_fn;
+use core::future::{poll_fn, Future};
 use core::num::NonZeroU16;
 use core::ops::DerefMut;
 use core::task::Poll;
 use cyw43::NetDriver;
 use defmt::{error, info, unwrap, warn};
 use embassy_executor::Spawner;
-use embassy_futures::join::{join, join5};
+use embassy_futures::join::{join, join4, join5};
 use embassy_net::dns::{DnsQueryType, DnsSocket};
 use embassy_net::tcp::{TcpReader, TcpSocket, TcpWriter};
 use embassy_net::{Config, IpEndpoint, Stack, StackResources};
@@ -27,7 +27,7 @@ use embassy_rp::clocks::RoscRng;
 use embassy_rp::peripherals::{DMA_CH0, PIN_23, PIN_25, PIO0};
 use embassy_rp::pio::PioPin;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
-use embassy_sync::channel::Channel;
+use embassy_sync::channel::{self, Channel};
 use embassy_sync::mutex::Mutex;
 use embassy_sync::signal::Signal;
 use embassy_sync::waitqueue::AtomicWaker;
@@ -177,31 +177,17 @@ enum ClientState {
     ConnectionLost,
 }
 
-struct Receiver {
-    buffer: [u8; 1024],
-}
-
-impl Receiver {
-    fn new() -> Self {
-        Receiver { buffer: [0; 1024] }
-    }
-
-    async fn handle_publish(&self, publish: &Publish<'_>) {
-        // Handle the publish message
-    }
-}
-
-async fn listen(
+async fn listen<Send: for<'a> From<Publish<'a>>, const SEND: usize>(
     reader: &mut TcpReader<'_>,
-    sender: &embassy_sync::watch::Sender<'_, CriticalSectionRawMutex, FanState, 3>,
+    sender: &channel::Sender<'_, CriticalSectionRawMutex, Send, SEND>,
     client_state: &Signal<CriticalSectionRawMutex, ClientState>,
     acknowledgements: &Mutex<CriticalSectionRawMutex, [bool; 2]>,
     ping_response_signal: &Signal<CriticalSectionRawMutex, PingResponse>,
-    receiver: &mut Receiver,
 ) {
+    let mut buffer = [0; 1024];
     loop {
         info!("Waiting for packet");
-        let result = reader.read(&mut receiver.buffer).await;
+        let result = reader.read(&mut buffer).await;
         let bytes_read = match result {
             // This indicates the TCP connection was closed. (See embassy-net documentation)
             Ok(0) => {
@@ -218,7 +204,7 @@ async fn listen(
 
         info!("Packet received");
 
-        let parts = match mqtt::packet::get_parts(&receiver.buffer[..bytes_read]) {
+        let parts = match mqtt::packet::get_parts(&buffer[..bytes_read]) {
             Ok(parts) => parts,
             Err(error) => {
                 warn!("Error reading MQTT packet: {:?}", error);
@@ -240,7 +226,7 @@ async fn listen(
                         }
                     };
 
-                receiver.handle_publish(&publish);
+                let value = Send::from(publish);
                 info!("Handled publish");
             }
             SubscribeAcknowledgement::TYPE => {
@@ -587,8 +573,82 @@ const SUBSCRIPTIONS: [Subscription; 2] = [
     },
 ];
 
-#[embassy_executor::task]
-pub(super) async fn mqtt(
+/// Trait must be implemented by types that represent messages that can be published to MQTT.
+pub(super) trait PublishOut {
+    fn topic(&self) -> &str;
+    fn payload(&self) -> &[u8];
+}
+
+/// Queen Client the fourth
+pub(super) struct Client<'tcp, 'sender, 'outgoing, Send, const SEND: usize>
+where
+    Send: for<'a> From<Publish<'a>>,
+{
+    // Future 1 arguments
+    reader: TcpReader<'tcp>,
+    sender: channel::Sender<'sender, CriticalSectionRawMutex, Send, SEND>,
+    client_state: Signal<CriticalSectionRawMutex, ClientState>,
+    acknowledgements: Mutex<CriticalSectionRawMutex, [bool; 2]>,
+    ping_response: Signal<CriticalSectionRawMutex, PingResponse>,
+
+    // Future 2 arguments
+    writer: Mutex<CriticalSectionRawMutex, TcpWriter<'tcp>>,
+    outgoing: Channel<CriticalSectionRawMutex, Message<'outgoing>, 8>,
+    last_packet: Signal<CriticalSectionRawMutex, Instant>,
+    // Future 3 arguments
+    waker: AtomicWaker,
+}
+
+impl<'tcp, 'sender, 'outgoing, Send, const SEND: usize> Client<'tcp, 'sender, 'outgoing, Send, SEND>
+where
+    Send: for<'a> From<Publish<'a>>,
+{
+    async fn run(&mut self) {
+        // Future 1
+        let listen = listen(
+            &mut self.reader,
+            &self.sender,
+            &self.client_state,
+            &self.acknowledgements,
+            &self.ping_response,
+        );
+
+        // Future 2
+        let talk = talk(&self.writer, &self.outgoing, &self.last_packet);
+
+        // Future 3
+        let set_up = join(
+            set_up_subscriptions(
+                non_zero_u16!(1),
+                &self.acknowledgements,
+                &self.outgoing,
+                &SUBSCRIPTIONS,
+                &self.waker,
+            ),
+            set_up_discovery(&self.outgoing),
+        );
+
+        // Future 4
+        let keep_alive = keep_alive(
+            &self.writer,
+            &self.last_packet,
+            &self.client_state,
+            &self.ping_response,
+        );
+
+        join4(listen, talk, set_up, keep_alive).await;
+    }
+}
+
+pub(super) async fn mqtt<
+    'tcp,
+    'sender,
+    'receiver,
+    Send: for<'a> From<Publish<'a>>,
+    const SEND: usize,
+    Receive: PublishOut,
+    const RECEIVE: usize,
+>(
     spawner: Spawner,
     pwr_pin: PIN_23,
     cs_pin: PIN_25,
@@ -596,9 +656,11 @@ pub(super) async fn mqtt(
     dma: DMA_CH0,
     dio: impl PioPin,
     clk: impl PioPin,
-    fans: &'static Fans,
-    fan_controller: &'static FanController,
-) -> () {
+    sender: channel::Sender<'sender, CriticalSectionRawMutex, Send, SEND>,
+    receiver: channel::Receiver<'receiver, CriticalSectionRawMutex, Receive, RECEIVE>,
+)
+// -> Client<'tcp, 'sender, 'receiver, Send, SEND, Receive, RECEIVE>
+{
     let (net_device, mut control) =
         gain_control(spawner, pwr_pin, cs_pin, pio, dma, dio, clk).await;
 
@@ -741,15 +803,12 @@ pub(super) async fn mqtt(
     let writer = Mutex::<CriticalSectionRawMutex, TcpWriter<'_>>::new(writer);
 
     // Future 1
-    let sender = fan_controller.fan_states.0.sender();
-    let mut receiver = Receiver::new();
     let listen = listen(
         &mut reader,
         &sender,
         &client_state,
         &acknowledgements,
         &ping_response,
-        &mut receiver,
     );
 
     // Future 2
@@ -770,26 +829,20 @@ pub(super) async fn mqtt(
     // Future 4
     let keep_alive = keep_alive(&writer, &last_packet, &client_state, &ping_response);
 
-    let Some(mut receiver) = fan_controller.fan_states.0.receiver() else {
-        error!("Fan states were not set up. Cannot receive fan state changes");
-        return;
-    };
-
     // Future 5 update homeassistant when change occurs
-    let update_homeassistant = update_homeassistant(&outgoing, &mut receiver);
+    // let update_homeassistant = update_homeassistant(&outgoing, &mut receiver);
 
     // Future 6
     // let poll_sensors = poll_sensors(fans);
 
     //TODO cancel all tasks when client loses connection
-    join5(
-        listen,
-        talk,
-        keep_alive,
+
+    join4(
+        listen, talk, keep_alive,
         set_up,
         // Join because there is only a join with max 5 arguments 😬
         // join(update_homeassistant(), poll_sensors(fans)),
-        update_homeassistant,
+        // update_homeassistant,
     )
     .await;
 }
