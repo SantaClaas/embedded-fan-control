@@ -22,6 +22,7 @@ use core::{
     task::Poll,
 };
 use defmt::{error, info, warn, Format};
+use embassy_futures::join::join;
 use embassy_net::tcp::{TcpReader, TcpSocket, TcpWriter};
 use embassy_sync::{
     blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel, mutex::Mutex, signal::Signal,
@@ -234,6 +235,16 @@ where
         Ok(client)
     }
 
+    async fn run(&mut self) {
+        // Future 1
+        let listen = self.listen();
+
+        // Future 2
+        // let talk = self.talk();
+
+        // join(listen, talk).await;
+    }
+
     async fn handle_ping_response(&self, ping_response: PingResponse) {
         info!("Received ping response");
         self.ping_response.signal(ping_response);
@@ -326,4 +337,6 @@ where
             }
         }
     }
+
+    async fn talk(&self) {}
 }
