@@ -24,7 +24,7 @@ use core::{
 use defmt::{error, info, warn, Format};
 use embassy_net::tcp::{TcpReader, TcpSocket, TcpWriter};
 use embassy_sync::{
-    blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex, signal::Signal,
+    blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel, mutex::Mutex, signal::Signal,
     waitqueue::AtomicWaker,
 };
 
@@ -139,15 +139,22 @@ impl Future for AcknowledgementFuture {
     }
 }
 
-pub(crate) struct Client<'socket> {
+pub(crate) struct Client<'socket, TSend>
+where
+    for<'a> TSend: From<Publish<'a>>,
+{
     reader: TcpReader<'socket>,
     writer: TcpWriter<'socket>,
     acknowledgements: Acknowledgements,
     ping_response: Signal<CriticalSectionRawMutex, PingResponse>,
+    channel: Channel<CriticalSectionRawMutex, TSend, 4>,
     state: Signal<CriticalSectionRawMutex, State>,
 }
 
-impl<'socket> Client<'socket> {
+impl<'socket, TSend> Client<'socket, TSend>
+where
+    for<'a> TSend: From<Publish<'a>>,
+{
     async fn send<'a, T>(&mut self, packet: T) -> Result<(), SendError<<T as TryEncode>::Error>>
     where
         T: TryEncode<Error: Debug + Format>,
@@ -177,6 +184,7 @@ impl<'socket> Client<'socket> {
             writer,
             acknowledgements: Acknowledgements::new(),
             ping_response: Signal::new(),
+            channel: Channel::new(),
             state: Signal::new(),
         };
 
@@ -265,16 +273,14 @@ impl<'socket> Client<'socket> {
             match parts.r#type {
                 Publish::TYPE => {
                     info!("Received publish");
-                    let publish = match Publish::try_decode(
-                        parts.flags,
-                        parts.variable_header_and_payload,
-                    ) {
-                        Ok(publish) => publish,
-                        Err(error) => {
-                            error!("Error reading publish: {:?}", error);
-                            continue;
-                        }
-                    };
+                    let publish =
+                        match Publish::try_decode(parts.flags, parts.variable_header_and_payload) {
+                            Ok(publish) => publish,
+                            Err(error) => {
+                                error!("Error reading publish: {:?}", error);
+                                continue;
+                            }
+                        };
 
                     defmt::todo!("Handle publish");
                     info!("Handled publish");

@@ -293,7 +293,7 @@ async fn mqtt_task_client(
     use crate::mqtt::client::Client as MqttClient;
 
     let (reader, writer) = socket.split();
-    if let Err(error) = MqttClient::connect(reader, writer).await {
+    if let Err(error) = MqttClient::<Temporary>::connect(reader, writer).await {
         info!(
             "Error connecting to Home Assistant MQTT broker: {:?}",
             error
