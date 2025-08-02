@@ -37,7 +37,7 @@ use {defmt_rtt as _, panic_probe as _};
 use self::mqtt::packet;
 use crate::mqtt::packet::ping_request::PingRequest;
 use crate::mqtt::packet::{connect, publish, subscribe};
-use crate::task::Publish;
+use crate::task::{MqttBrokerConfiguration, Publish};
 
 mod async_callback;
 mod configuration;
@@ -579,7 +579,7 @@ async fn main(spawner: Spawner) {
             clk,
             sender_in,
             receiver_out,
-            configuration::MQTT_BROKER_ADDRESS,
+            &configuration::MQTT_BROKER,
         )
         .await;
     };

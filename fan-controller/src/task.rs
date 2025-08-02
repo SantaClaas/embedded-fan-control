@@ -30,7 +30,7 @@ use embassy_sync::channel::{self, Channel};
 use embassy_sync::mutex::Mutex;
 use embassy_sync::signal::Signal;
 use embassy_sync::waitqueue::AtomicWaker;
-use embassy_time::{with_deadline, with_timeout, Instant, Timer};
+use embassy_time::{with_deadline, with_timeout, Duration, Instant, Timer};
 use rand::RngCore;
 use static_cell::StaticCell;
 
@@ -767,10 +767,26 @@ async fn resolve_mqtt_broker_address(
     }
 }
 
+/// Set in Homeassitant under Settings > People > Users Tab. Not to be confused with the People tab.
+/// The Users Tab might only be visible in advanced mode as administrator.
+/// A separate account is recommended for each device.
+pub(crate) struct MqttBrokerCredentials<'a> {
+    pub(crate) username: &'a str,
+    pub(crate) password: &'a [u8],
+}
+
+pub(super) struct MqttBrokerConfiguration<'a> {
+    pub(super) client_identifier: &'a str,
+    pub(super) address: &'a str,
+    pub(super) credentials: MqttBrokerCredentials<'a>,
+    pub(super) keep_alive_seconds: Duration,
+}
+
 pub(super) async fn mqtt_with_connect<
     'tcp,
     'sender,
     'receiver,
+    'configuration,
     Receive: for<'a> From<publish::Publish<'a>>,
     const RECEIVE: usize,
     Send: Publish,
@@ -785,7 +801,7 @@ pub(super) async fn mqtt_with_connect<
     clk: impl PioPin,
     sender: channel::Sender<'sender, CriticalSectionRawMutex, Receive, RECEIVE>,
     receiver: channel::Receiver<'receiver, CriticalSectionRawMutex, Send, SEND>,
-    mqtt_broker_address: &str,
+    mqtt_broker_configuration: &MqttBrokerConfiguration<'configuration>,
 )
 // -> Client<'tcp, 'sender, 'receiver, Send, SEND, Receive, RECEIVE>
 {
@@ -800,7 +816,7 @@ pub(super) async fn mqtt_with_connect<
 
     info!("Resolving MQTT broker IP address");
     // Get home assistant MQTT broker IP address
-    let address = resolve_mqtt_broker_address(stack, mqtt_broker_address).await;
+    let address = resolve_mqtt_broker_address(stack, mqtt_broker_configuration.address).await;
     info!("MQTT broker IP address resolved");
 
     info!("Connecting to MQTT broker through TCP");

@@ -1,3 +1,4 @@
+use crate::{task::MqttBrokerCredentials, MqttBrokerConfiguration};
 use embassy_net::IpAddress;
 use embassy_time::Duration;
 
@@ -39,15 +40,6 @@ pub(crate) const MQTT_BROKER_PORT: u16 = parse_u16(env!("FAN_CONTROL_MQTT_BROKER
 /// if it is set as it does not require DNS resolution.
 pub(crate) const MQTT_BROKER_IP_ADDRESS: Option<IpAddress> = None;
 
-//TODO make configurable
-/// Set in Homeassitant under Settings > People > Users Tab. Not to be confused with the People tab.
-/// The Users Tab might only be visible in advanced mode as administrator.
-/// A separate account is recommended for each device.
-pub(crate) struct MqttBrokerCredentials<'a> {
-    pub(crate) username: &'a str,
-    pub(crate) password: &'a [u8],
-}
-
 pub(crate) const MQTT_BROKER_CREDENTIALS: MqttBrokerCredentials = MqttBrokerCredentials {
     username: env!("FAN_CONTROL_MQTT_BROKER_USERNAME"),
     password: env!("FAN_CONTROL_MQTT_BROKER_PASSWORD").as_bytes(),
@@ -74,3 +66,10 @@ pub(crate) const MQTT_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// The timeout to wait for a response from the fans before cancelling waiting for a response.
 pub(crate) const FAN_TIMEOUT: Duration = Duration::from_secs(5);
+
+pub(crate) const MQTT_BROKER: MqttBrokerConfiguration<'_> = MqttBrokerConfiguration {
+    address: MQTT_BROKER_ADDRESS,
+    credentials: MQTT_BROKER_CREDENTIALS,
+    client_identifier: env!("CARGO_PKG_NAME"),
+    keep_alive_seconds: KEEP_ALIVE,
+};
