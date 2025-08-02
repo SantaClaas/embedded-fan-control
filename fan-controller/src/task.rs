@@ -286,15 +286,20 @@ enum PredefinedPublish {
     },
 }
 
-enum Message<'a> {
+enum Message<'a, T: Publish> {
     Subscribe(Subscribe<'a>),
-    Publish(publish::Publish<'a>),
+    Publish(T),
+    /// Publish messages used internally to manage the MQTT state
+    PublishInternal(publish::Publish<'a>),
+    #[deprecated(
+        note = "Migrate to MQTT not being aware of used messages. Use normal Publish with generic T"
+    )]
     PredefinedPublish(PredefinedPublish),
 }
 
-async fn talk(
+async fn talk<T: Publish>(
     writer: &Mutex<CriticalSectionRawMutex, TcpWriter<'_>>,
-    outgoing: &Channel<CriticalSectionRawMutex, Message<'_>, 8>,
+    outgoing: &Channel<CriticalSectionRawMutex, Message<'_, T>, 8>,
     last_packet: &Signal<CriticalSectionRawMutex, Instant>,
 ) {
     loop {
@@ -312,10 +317,20 @@ async fn talk(
             Message::Publish(publish) => {
                 info!(
                     "Sending publish {:?}",
-                    core::str::from_utf8(publish.payload).unwrap()
+                    core::str::from_utf8(publish.payload()).unwrap()
                 );
                 if let Err(error) = send(&mut *writer, publish).await {
                     error!("Error sending publish: {:?}", error);
+                    continue;
+                }
+            }
+            Message::PublishInternal(publish) => {
+                info!(
+                    "Sending internal publish {:?}",
+                    core::str::from_utf8(publish.payload).unwrap()
+                );
+                if let Err(error) = send(&mut *writer, publish).await {
+                    error!("Error sending internal publish: {:?}", error);
                     continue;
                 }
             }
@@ -393,10 +408,10 @@ async fn talk(
     }
 }
 
-async fn set_up_subscriptions(
+async fn set_up_subscriptions<T: Publish>(
     packet_identifier: NonZeroU16,
     acknowledgements: &Mutex<CriticalSectionRawMutex, [bool; 2]>,
-    outgoing: &Channel<CriticalSectionRawMutex, Message<'_>, 8>,
+    outgoing: &Channel<CriticalSectionRawMutex, Message<'_, T>, 8>,
     subscriptions: &'static [Subscription<'static>],
     waker: &AtomicWaker,
 ) {
@@ -413,14 +428,17 @@ async fn set_up_subscriptions(
     info!("Set up subscriptions complete")
 }
 
-async fn set_up_discovery(outgoing: &Channel<CriticalSectionRawMutex, Message<'_>, 8>) {
+async fn set_up_discovery<T: Publish>(
+    outgoing: &Channel<CriticalSectionRawMutex, Message<'_, T>, 8>,
+) {
     const DISCOVERY_PAYLOAD: &[u8] = env!("FAN_CONTROLLER_DISCOVERY_PAYLOAD").as_bytes();
-    const DISCOVERY_PUBLISH: Message = Message::Publish(publish::Publish {
+    //TODO make constant and refactor to allow people to dynamically subscribe
+    let discovery_publish = Message::PublishInternal(publish::Publish {
         topic_name: configuration::DISCOVERY_TOPIC,
         payload: DISCOVERY_PAYLOAD,
     });
 
-    outgoing.send(DISCOVERY_PUBLISH).await;
+    outgoing.send(discovery_publish).await;
     //TODO wait for packet acknowledgement
 }
 
@@ -484,8 +502,8 @@ async fn keep_alive(
     }
 }
 
-async fn update_homeassistant(
-    outgoing: &Channel<CriticalSectionRawMutex, Message<'_>, 8>,
+async fn update_homeassistant<T: Publish>(
+    outgoing: &Channel<CriticalSectionRawMutex, Message<'_, T>, 8>,
     receiver: &mut embassy_sync::watch::Receiver<'_, CriticalSectionRawMutex, FanState, 3>,
 ) {
     // let Some(mut receiver): Option<
@@ -581,34 +599,44 @@ pub(super) trait Publish {
 }
 
 /// Queen Client the fourth
-pub(super) struct Client<'tcp, 'sender, 'outgoing, Send, const SEND: usize>
-where
-    Send: for<'a> From<publish::Publish<'a>>,
+pub(super) struct Client<
+    'tcp,
+    'sender,
+    'outgoing,
+    Receive,
+    const RECEIVE: usize,
+    Send,
+    const SEND: usize,
+> where
+    Receive: for<'a> From<publish::Publish<'a>>,
+    Send: Publish,
 {
     // Future 1 arguments
     reader: TcpReader<'tcp>,
-    sender: channel::Sender<'sender, CriticalSectionRawMutex, Send, SEND>,
+    receiver: channel::Sender<'sender, CriticalSectionRawMutex, Receive, RECEIVE>,
     client_state: Signal<CriticalSectionRawMutex, ClientState>,
     acknowledgements: Mutex<CriticalSectionRawMutex, [bool; 2]>,
     ping_response: Signal<CriticalSectionRawMutex, PingResponse>,
 
     // Future 2 arguments
     writer: Mutex<CriticalSectionRawMutex, TcpWriter<'tcp>>,
-    outgoing: Channel<CriticalSectionRawMutex, Message<'outgoing>, 8>,
+    outgoing: Channel<CriticalSectionRawMutex, Message<'outgoing, Send>, 8>,
     last_packet: Signal<CriticalSectionRawMutex, Instant>,
     // Future 3 arguments
     waker: AtomicWaker,
 }
 
-impl<'tcp, 'sender, 'outgoing, Send, const SEND: usize> Client<'tcp, 'sender, 'outgoing, Send, SEND>
+impl<'tcp, 'sender, 'outgoing, Receive, const RECEIVE: usize, Send, const SEND: usize>
+    Client<'tcp, 'sender, 'outgoing, Receive, RECEIVE, Send, SEND>
 where
-    Send: for<'a> From<publish::Publish<'a>>,
+    Receive: for<'a> From<publish::Publish<'a>>,
+    Send: Publish,
 {
     async fn run(&mut self) {
         // Future 1
         let listen = listen(
             &mut self.reader,
-            &self.sender,
+            &self.receiver,
             &self.client_state,
             &self.acknowledgements,
             &self.ping_response,
@@ -645,10 +673,10 @@ pub(super) async fn mqtt<
     'tcp,
     'sender,
     'receiver,
-    Send: for<'a> From<publish::Publish<'a>>,
-    const SEND: usize,
-    Receive: Publish,
+    Receive: for<'a> From<publish::Publish<'a>>,
     const RECEIVE: usize,
+    Send: Publish,
+    const SEND: usize,
 >(
     spawner: Spawner,
     pwr_pin: PIN_23,
@@ -657,8 +685,8 @@ pub(super) async fn mqtt<
     dma: DMA_CH0,
     dio: impl PioPin,
     clk: impl PioPin,
-    sender: channel::Sender<'sender, CriticalSectionRawMutex, Send, SEND>,
-    receiver: channel::Receiver<'receiver, CriticalSectionRawMutex, Receive, RECEIVE>,
+    sender: channel::Sender<'sender, CriticalSectionRawMutex, Receive, RECEIVE>,
+    receiver: channel::Receiver<'receiver, CriticalSectionRawMutex, Send, SEND>,
 )
 // -> Client<'tcp, 'sender, 'receiver, Send, SEND, Receive, RECEIVE>
 {
@@ -794,7 +822,7 @@ pub(super) async fn mqtt<
 
     let client_state: Signal<CriticalSectionRawMutex, ClientState> = Signal::new();
 
-    let outgoing: Channel<CriticalSectionRawMutex, Message, 8> = Channel::new();
+    let outgoing: Channel<CriticalSectionRawMutex, Message<Send>, 8> = Channel::new();
     /// The instant when the last packet was sent to determine when the next keep alive has to be sent
     let last_packet: Signal<CriticalSectionRawMutex, Instant> = Signal::new();
 
