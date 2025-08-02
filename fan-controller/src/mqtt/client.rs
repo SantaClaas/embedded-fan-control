@@ -140,117 +140,20 @@ impl Future for AcknowledgementFuture {
     }
 }
 
-pub(crate) struct Client<'socket, TSend>
-where
-    for<'a> TSend: From<Publish<'a>>,
-{
+struct Listener<'socket> {
     reader: TcpReader<'socket>,
-    writer: TcpWriter<'socket>,
-    acknowledgements: Acknowledgements,
-    ping_response: Signal<CriticalSectionRawMutex, PingResponse>,
-    channel: Channel<CriticalSectionRawMutex, TSend, 4>,
-    state: Signal<CriticalSectionRawMutex, State>,
 }
 
-impl<'socket, TSend> Client<'socket, TSend>
-where
-    for<'a> TSend: From<Publish<'a>>,
-{
-    async fn send<'a, T>(&mut self, packet: T) -> Result<(), SendError<<T as TryEncode>::Error>>
-    where
-        T: TryEncode<Error: Debug + Format>,
+impl<'socket> Listener<'socket> {
+    async fn listen<TSend>(
+        &mut self,
+        state: &Signal<CriticalSectionRawMutex, State>,
+        acknowledgements: &Acknowledgements,
+        ping_response_signal: &Signal<CriticalSectionRawMutex, PingResponse>,
+        channel: &Channel<CriticalSectionRawMutex, TSend, 4>,
+    ) where
+        TSend: for<'a> From<Publish<'a>>,
     {
-        info!("Sending packet");
-        let mut offset = 0;
-        let mut send_buffer = [0; 1024];
-        packet
-            .try_encode(&mut send_buffer, &mut offset)
-            .map_err(SendError::Encode)?;
-
-        self.writer
-            .write(&send_buffer[..offset])
-            .await
-            .map_err(SendError::Write)?;
-
-        self.writer.flush().await.map_err(SendError::Flush)?;
-        Ok(())
-    }
-
-    pub(crate) async fn connect(
-        reader: TcpReader<'socket>,
-        writer: TcpWriter<'socket>,
-    ) -> Result<Self, ConnectError> {
-        let mut client = Self {
-            reader,
-            writer,
-            acknowledgements: Acknowledgements::new(),
-            ping_response: Signal::new(),
-            channel: Channel::new(),
-            state: Signal::new(),
-        };
-
-        // Send
-        let packet = Connect {
-            client_identifier: env!("CARGO_PKG_NAME"),
-            username: configuration::MQTT_BROKER_CREDENTIALS.username,
-            password: configuration::MQTT_BROKER_CREDENTIALS.password,
-            keep_alive_seconds: configuration::KEEP_ALIVE.as_secs() as u16,
-        };
-
-        client.send(packet).await.map_err(ConnectError::Send)?;
-
-        // Receive
-        // Wait for connect acknowledgement
-        // Discard all messages before the connect acknowledgement
-        // The server has to send a connect acknowledgement before sending any other packet
-        let mut receive_buffer = [0; 1024];
-        let bytes_read = client
-            .reader
-            .read(&mut receive_buffer)
-            .await
-            .map_err(ConnectError::Read)?;
-
-        let parts =
-            packet::get_parts(&receive_buffer[..bytes_read]).map_err(ConnectError::Parts)?;
-
-        if parts.r#type != ConnectAcknowledgement::TYPE {
-            warn!(
-                "Expected connect acknowledgement packet, got: {:?}",
-                parts.r#type
-            );
-            return Err(ConnectError::InvalidResponsePacketType(parts.r#type));
-        }
-
-        let acknowledgement =
-            ConnectAcknowledgement::try_decode(parts.flags, parts.variable_header_and_payload)
-                .map_err(ConnectError::DecodeAcknowledgement)?;
-
-        info!("Connect acknowledgement read");
-        if let ConnectReasonCode::ErrorCode(error_code) = acknowledgement.connect_reason_code {
-            warn!("Connect error: {:?}", error_code);
-            return Err(ConnectError::ErrorReasonCode(error_code));
-        }
-
-        info!("Connection complete");
-        Ok(client)
-    }
-
-    async fn run(&mut self) {
-        // Future 1
-        let listen = self.listen();
-
-        // Future 2
-        // let talk = self.talk();
-
-        // join(listen, talk).await;
-    }
-
-    async fn handle_ping_response(&self, ping_response: PingResponse) {
-        info!("Received ping response");
-        self.ping_response.signal(ping_response);
-    }
-
-    async fn listen(&mut self) {
         let mut buffer = [0; 1024];
         loop {
             info!("Waiting for packet");
@@ -259,7 +162,7 @@ where
                 // This indicates the TCP connection was closed. (See embassy-net documentation)
                 Ok(0) => {
                     warn!("MQTT broker closed connection");
-                    self.state.signal(State::ConnectionLost);
+                    state.signal(State::ConnectionLost);
                     return;
                 }
                 Ok(bytes_read) => bytes_read,
@@ -306,7 +209,7 @@ where
                             }
                         };
 
-                    self.acknowledgements
+                    acknowledgements
                         .handle_subscribe_acknowledgement(&subscribe_acknowledgement)
                         .await;
                 }
@@ -323,7 +226,7 @@ where
                         }
                     };
 
-                    self.handle_ping_response(ping_response).await;
+                    ping_response_signal.signal(ping_response);
                 }
                 Disconnect::TYPE => {
                     info!("Received disconnect");
@@ -336,6 +239,123 @@ where
                 other => info!("Unsupported packet type {}", other),
             }
         }
+    }
+}
+
+pub(crate) struct Client<'socket, TSend>
+where
+    for<'a> TSend: From<Publish<'a>>,
+{
+    listener: Listener<'socket>,
+    writer: TcpWriter<'socket>,
+    acknowledgements: Acknowledgements,
+    ping_response: Signal<CriticalSectionRawMutex, PingResponse>,
+    channel: Channel<CriticalSectionRawMutex, TSend, 4>,
+    state: Signal<CriticalSectionRawMutex, State>,
+}
+
+impl<'socket, TSend> Client<'socket, TSend>
+where
+    for<'a> TSend: From<Publish<'a>>,
+{
+    async fn send<'a, T>(&mut self, packet: T) -> Result<(), SendError<<T as TryEncode>::Error>>
+    where
+        T: TryEncode<Error: Debug + Format>,
+    {
+        info!("Sending packet");
+        let mut offset = 0;
+        let mut send_buffer = [0; 1024];
+        packet
+            .try_encode(&mut send_buffer, &mut offset)
+            .map_err(SendError::Encode)?;
+
+        self.writer
+            .write(&send_buffer[..offset])
+            .await
+            .map_err(SendError::Write)?;
+
+        self.writer.flush().await.map_err(SendError::Flush)?;
+        Ok(())
+    }
+
+    pub(crate) async fn connect(
+        reader: TcpReader<'socket>,
+        writer: TcpWriter<'socket>,
+    ) -> Result<Self, ConnectError> {
+        let mut client = Self {
+            listener: Listener { reader },
+            writer,
+            acknowledgements: Acknowledgements::new(),
+            ping_response: Signal::new(),
+            channel: Channel::new(),
+            state: Signal::new(),
+        };
+
+        // Send
+        let packet = Connect {
+            client_identifier: env!("CARGO_PKG_NAME"),
+            username: configuration::MQTT_BROKER_CREDENTIALS.username,
+            password: configuration::MQTT_BROKER_CREDENTIALS.password,
+            keep_alive_seconds: configuration::KEEP_ALIVE.as_secs() as u16,
+        };
+
+        client.send(packet).await.map_err(ConnectError::Send)?;
+
+        // Receive
+        // Wait for connect acknowledgement
+        // Discard all messages before the connect acknowledgement
+        // The server has to send a connect acknowledgement before sending any other packet
+        let mut receive_buffer = [0; 1024];
+        let bytes_read = client
+            .listener
+            .reader
+            .read(&mut receive_buffer)
+            .await
+            .map_err(ConnectError::Read)?;
+
+        let parts =
+            packet::get_parts(&receive_buffer[..bytes_read]).map_err(ConnectError::Parts)?;
+
+        if parts.r#type != ConnectAcknowledgement::TYPE {
+            warn!(
+                "Expected connect acknowledgement packet, got: {:?}",
+                parts.r#type
+            );
+            return Err(ConnectError::InvalidResponsePacketType(parts.r#type));
+        }
+
+        let acknowledgement =
+            ConnectAcknowledgement::try_decode(parts.flags, parts.variable_header_and_payload)
+                .map_err(ConnectError::DecodeAcknowledgement)?;
+
+        info!("Connect acknowledgement read");
+        if let ConnectReasonCode::ErrorCode(error_code) = acknowledgement.connect_reason_code {
+            warn!("Connect error: {:?}", error_code);
+            return Err(ConnectError::ErrorReasonCode(error_code));
+        }
+
+        info!("Connection complete");
+        Ok(client)
+    }
+
+    async fn run(mut self) {
+
+        // Future 1
+        // let listen = self.listener.listen(
+        //     &self.state,
+        //     &self.acknowledgements,
+        //     &self.ping_response,
+        //     &self.channel,
+        // );
+        // Future 2
+        // let talk = self.talk();
+
+        // join(listen, talk).await;
+    }
+
+    async fn handle_ping_response(&self, ping_response: PingResponse) {
+        info!("Received ping response");
+        self.ping_response.signal(ping_response);
     }
 
     async fn talk(&self) {}
