@@ -39,20 +39,69 @@ pub(super) enum ConnectErrorReasonCode {
 #[derive(Debug, Clone, Format)]
 pub struct UnknownConnectErrorReasonCode(u8);
 
-pub(crate) trait Encode {
-    fn encode(&self, buffer: &mut [u8], offset: &mut usize);
-}
-
 pub(crate) trait TryEncode {
     type Error;
     fn try_encode(&self, buffer: &mut [u8], offset: &mut usize) -> Result<(), Self::Error>;
 }
 
-impl<T: Encode> TryEncode for T {
-    type Error = Infallible;
+impl<T: crate::task::Publish> TryEncode for T {
+    type Error = publish::EncodeError;
 
     fn try_encode(&self, buffer: &mut [u8], offset: &mut usize) -> Result<(), Self::Error> {
-        self.encode(buffer, offset);
+        if buffer.is_empty() {
+            return Err(publish::EncodeError::EmptyBuffer);
+        }
+
+        // Fixed header
+        //TODO set flags
+        buffer[*offset] = Self::TYPE << 4;
+        *offset += 1;
+
+        let topic_name = self.topic();
+        // Remaining length
+        let topic_name_length = topic_name.len();
+        let variable_header_length = size_of::<u16>() + topic_name_length + size_of::<u8>();
+        let payload = self.payload();
+        let remaining_length = variable_header_length + payload.len();
+
+        let length_length = variable_byte_integer::encode(remaining_length, buffer, offset)
+            .map_err(publish::EncodeError::VariableByteIntegerError)?;
+
+        let required_length = size_of_val(&Self::TYPE) + length_length + remaining_length;
+
+        if required_length > buffer.len() - *offset {
+            return Err(publish::EncodeError::BufferTooSmall {
+                required: required_length,
+                available: buffer.len() - *offset,
+            });
+        }
+
+        // Variable header
+        // Topic name length
+        buffer[*offset] = (topic_name_length >> 8) as u8;
+        *offset += 1;
+        buffer[*offset] = topic_name_length as u8;
+        *offset += 1;
+        // Topic name
+        for byte in topic_name.as_bytes() {
+            buffer[*offset] = *byte;
+            *offset += 1;
+        }
+
+        // Property length
+        // No properties supported for now so set to 0
+        buffer[*offset] = 0;
+        *offset += 1;
+
+        // Payload
+        // No need to set length as it will be calculated
+        for byte in payload {
+            buffer[*offset] = *byte;
+            *offset += 1;
+        }
+
+        assert_eq!(required_length, buffer[..*offset].len());
+
         Ok(())
     }
 }
@@ -104,3 +153,5 @@ macro_rules! non_zero_u16 {
 }
 
 pub(crate) use non_zero_u16;
+
+use crate::mqtt::packet::publish;

@@ -20,7 +20,7 @@ pub(crate) enum SendError<T: Debug + Format> {
     Flush(tcp::Error),
 }
 
-pub(crate) async fn send<'a, T>(
+pub(crate) async fn send<T>(
     socket: &mut impl Write<Error = tcp::Error>,
     packet: T,
 ) -> Result<(), SendError<<T as TryEncode>::Error>>

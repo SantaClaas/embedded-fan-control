@@ -5,11 +5,11 @@ use crate::mqtt::packet::publish;
 use crate::mqtt::packet::subscribe::{Subscribe, Subscription};
 use crate::mqtt::packet::subscribe_acknowledgement::SubscribeAcknowledgement;
 use crate::mqtt::task::send;
+use crate::mqtt::{self, TryEncode};
 use crate::mqtt::{non_zero_u16, TryDecode};
 use crate::Fans;
 use crate::PingRequest;
 use crate::{configuration, fan, gain_control, FanState};
-use crate::mqtt;
 use ::mqtt::QualityOfService;
 use core::future::poll_fn;
 use core::num::NonZeroU16;
@@ -575,6 +575,7 @@ const SUBSCRIPTIONS: [Subscription; 2] = [
 
 /// Trait must be implemented by types that represent messages that can be published to MQTT.
 pub(super) trait Publish {
+    const TYPE: u8 = 3;
     fn topic(&self) -> &str;
     fn payload(&self) -> &[u8];
 }
