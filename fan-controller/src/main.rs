@@ -16,8 +16,7 @@ use embassy_net::{tcp, Config, IpEndpoint, Stack, StackResources};
 use embassy_rp::clocks::RoscRng;
 use embassy_rp::gpio::{Input, Level, Output, Pull};
 use embassy_rp::peripherals::{
-    DMA_CH0, PIN_18, PIN_20, PIN_21, PIN_23, PIN_25, PIN_4, PIO0,
-    UART0,
+    DMA_CH0, PIN_18, PIN_20, PIN_21, PIN_23, PIN_25, PIN_4, PIO0, UART0,
 };
 use embassy_rp::pio::{InterruptHandler as PioInterruptHandler, Pio, PioPin};
 use embassy_rp::uart::BufferedInterruptHandler;
@@ -570,7 +569,7 @@ async fn main(spawner: Spawner) {
         let sender_out = out.sender();
         let receiver_out = out.receiver();
 
-        crate::task::mqtt(
+        crate::task::mqtt_with_connect(
             spawner,
             pwr_pin,
             cs_pin,

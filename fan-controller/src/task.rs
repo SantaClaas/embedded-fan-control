@@ -15,7 +15,7 @@ use core::future::poll_fn;
 use core::num::NonZeroU16;
 use core::ops::DerefMut;
 use core::task::Poll;
-use cyw43::NetDriver;
+use cyw43::{Control, NetDriver};
 use defmt::{error, info, unwrap, warn};
 use embassy_executor::Spawner;
 use embassy_futures::join::{join, join4};
@@ -669,7 +669,69 @@ where
     }
 }
 
-pub(super) async fn mqtt<
+async fn set_up_network_stack(
+    spawner: Spawner,
+    pwr_pin: PIN_23,
+    cs_pin: PIN_25,
+    pio: PIO0,
+    dma: DMA_CH0,
+    dio: impl PioPin,
+    clk: impl PioPin,
+) -> &'static Stack<NetDriver<'static>> {
+    let (net_device, mut control) =
+        gain_control(spawner, pwr_pin, cs_pin, pio, dma, dio, clk).await;
+
+    static STACK: StaticCell<Stack<NetDriver<'static>>> = StaticCell::new();
+    static RESOURCES: StaticCell<StackResources<5>> = StaticCell::new();
+    let configuration = Config::dhcpv4(Default::default());
+    let mut random = RoscRng;
+    let seed = random.next_u64();
+    // Initialize network stack
+    let stack = &*STACK.init(Stack::new(
+        net_device,
+        configuration,
+        RESOURCES.init(StackResources::<5>::new()),
+        seed,
+    ));
+
+    unwrap!(spawner.spawn(network_task(stack)));
+    // Join Wi-Fi network
+    join_wifi_network(&mut control).await;
+
+    // Wait for DHCP
+    info!("Waiting for DHCP");
+    while !stack.is_config_up() {
+        Timer::after_millis(100).await;
+    }
+
+    info!("DHCP is up");
+
+    info!("Waiting for link up");
+    while !stack.is_link_up() {
+        Timer::after_millis(500).await;
+    }
+
+    info!("Link is up");
+
+    info!("Waiting for stack to be up");
+    stack.wait_config_up().await;
+    info!("Stack is up");
+
+    stack
+}
+
+async fn join_wifi_network(control: &mut Control<'_>) {
+    loop {
+        match control
+            .join_wpa2(configuration::WIFI_NETWORK, configuration::WIFI_PASSWORD)
+            .await
+        {
+            Ok(_) => break,
+            Err(error) => info!("Error joining Wi-Fi network with status: {}", error.status),
+        }
+    }
+}
+pub(super) async fn mqtt_with_connect<
     'tcp,
     'sender,
     'receiver,
@@ -690,53 +752,7 @@ pub(super) async fn mqtt<
 )
 // -> Client<'tcp, 'sender, 'receiver, Send, SEND, Receive, RECEIVE>
 {
-    let (net_device, mut control) =
-        gain_control(spawner, pwr_pin, cs_pin, pio, dma, dio, clk).await;
-
-    static STACK: StaticCell<Stack<NetDriver<'static>>> = StaticCell::new();
-    static RESOURCES: StaticCell<StackResources<5>> = StaticCell::new();
-    let configuration = Config::dhcpv4(Default::default());
-    let mut random = RoscRng;
-    let seed = random.next_u64();
-    // Initialize network stack
-    let stack = &*STACK.init(Stack::new(
-        net_device,
-        configuration,
-        RESOURCES.init(StackResources::<5>::new()),
-        seed,
-    ));
-
-    unwrap!(spawner.spawn(network_task(stack)));
-
-    // Join Wi-Fi network
-    loop {
-        match control
-            .join_wpa2(configuration::WIFI_NETWORK, configuration::WIFI_PASSWORD)
-            .await
-        {
-            Ok(_) => break,
-            Err(error) => info!("Error joining Wi-Fi network with status: {}", error.status),
-        }
-    }
-
-    // Wait for DHCP
-    info!("Waiting for DHCP");
-    while !stack.is_config_up() {
-        Timer::after_millis(100).await;
-    }
-
-    info!("DHCP is up");
-
-    info!("Waiting for link up");
-    while !stack.is_link_up() {
-        Timer::after_millis(500).await;
-    }
-
-    info!("Link is up");
-
-    info!("Waiting for stack to be up");
-    stack.wait_config_up().await;
-    info!("Stack is up");
+    let stack = set_up_network_stack(spawner, pwr_pin, cs_pin, pio, dma, dio, clk).await;
 
     // Now we can use it
     let mut receive_buffer = [0; 1024];
