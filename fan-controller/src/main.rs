@@ -604,6 +604,8 @@ mod tests {
     // The tests don't run on the embedded target, so we need to import the std crate
 
     extern crate std;
+    use crate::fan::{SetPointOutOfBoundsError, Setting};
+
     use super::*;
 
     /// These are important hardcoded values I want to make sure are not changed accidentally
