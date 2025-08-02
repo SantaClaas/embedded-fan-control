@@ -21,7 +21,7 @@ use embassy_executor::Spawner;
 use embassy_futures::join::{join, join4};
 use embassy_net::dns::{DnsQueryType, DnsSocket};
 use embassy_net::tcp::{TcpReader, TcpSocket, TcpWriter};
-use embassy_net::{Config, IpEndpoint, Stack, StackResources};
+use embassy_net::{Config, IpAddress, IpEndpoint, Stack, StackResources};
 use embassy_rp::clocks::RoscRng;
 use embassy_rp::peripherals::{DMA_CH0, PIN_23, PIN_25, PIO0};
 use embassy_rp::pio::PioPin;
@@ -731,6 +731,42 @@ async fn join_wifi_network(control: &mut Control<'_>) {
         }
     }
 }
+
+async fn resolve_mqtt_broker_address(
+    stack: &'static Stack<NetDriver<'static>>,
+    mqtt_broker_address: &str,
+) -> IpAddress {
+    let dns_client = DnsSocket::new(stack);
+
+    loop {
+        //TODO support IPv6
+        let result = dns_client.query(mqtt_broker_address, DnsQueryType::A).await;
+
+        let mut addresses = match result {
+            Ok(addresses) => addresses,
+            Err(error) => {
+                info!(
+                    "Error resolving MQTT broker IP address with {}: {:?}",
+                    mqtt_broker_address, error,
+                );
+                // Exponential backoff doesn't seem necessary here
+                // Maybe the current installation of Home Assistant is in the process of
+                // being set up and the entry is not yet available
+                Timer::after_secs(25).await;
+                continue;
+            }
+        };
+
+        if addresses.is_empty() {
+            info!("No addresses found for Home Assistant MQTT broker");
+            Timer::after_millis(500).await;
+            continue;
+        }
+
+        return addresses.swap_remove(0);
+    }
+}
+
 pub(super) async fn mqtt_with_connect<
     'tcp,
     'sender,
@@ -763,36 +799,7 @@ pub(super) async fn mqtt_with_connect<
 
     info!("Resolving MQTT broker IP address");
     // Get home assistant MQTT broker IP address
-    let address = loop {
-        //TODO support IPv6
-        let result = dns_client
-            .query(configuration::MQTT_BROKER_ADDRESS, DnsQueryType::A)
-            .await;
-
-        let mut addresses = match result {
-            Ok(addresses) => addresses,
-            Err(error) => {
-                info!(
-                    "Error resolving Home Assistant MQTT broker IP address with {}: {:?}",
-                    configuration::MQTT_BROKER_ADDRESS,
-                    error,
-                );
-                // Exponential backoff doesn't seem necessary here
-                // Maybe the current installation of Home Assistant is in the process of
-                // being set up and the entry is not yet available
-                Timer::after_secs(25).await;
-                continue;
-            }
-        };
-
-        if addresses.is_empty() {
-            info!("No addresses found for Home Assistant MQTT broker");
-            Timer::after_millis(500).await;
-            continue;
-        }
-
-        break addresses.swap_remove(0);
-    };
+    let address = resolve_mqtt_broker_address(stack, configuration::MQTT_BROKER_ADDRESS).await;
     info!("MQTT broker IP address resolved");
 
     info!("Connecting to MQTT broker through TCP");
