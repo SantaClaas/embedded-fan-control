@@ -1,9 +1,6 @@
 #![no_std]
 #![no_main]
-#![allow(unused)]
 
-use configuration::DISCOVERY_TOPIC;
-use core::convert::Infallible;
 use core::future::{poll_fn, Future};
 use core::num::NonZeroU16;
 use core::ops::{Deref, DerefMut, Div, Sub};
@@ -58,14 +55,13 @@ use crate::mqtt::packet::connect::Connect;
 use crate::mqtt::packet::connect_acknowledgement::ConnectReasonCode;
 use crate::mqtt::packet::ping_request::PingRequest;
 use crate::mqtt::packet::ping_response::PingResponse;
-use crate::mqtt::packet::publish::Publish;
 use crate::mqtt::packet::subscribe::{Subscribe, Subscription};
 use crate::mqtt::packet::subscribe_acknowledgement::SubscribeAcknowledgement;
 use crate::mqtt::packet::{connect, publish, subscribe};
 use crate::mqtt::packet::{get_parts, FromPublish, FromSubscribeAcknowledgement};
 use crate::mqtt::task::send;
 use crate::mqtt::TryEncode;
-use crate::task::PublishOut;
+use crate::task::Publish;
 use ::mqtt::QualityOfService;
 
 mod async_callback;
@@ -517,13 +513,13 @@ async fn display_status(pin_21: PIN_21, pin_20: PIN_20) {
 
 struct Temporary;
 
-impl From<Publish<'_>> for Temporary {
-    fn from(publish: Publish<'_>) -> Self {
+impl From<publish::Publish<'_>> for Temporary {
+    fn from(publish: publish::Publish<'_>) -> Self {
         Temporary
     }
 }
 
-impl PublishOut for Temporary {
+impl Publish for Temporary {
     fn topic(&self) -> &str {
         "temporary"
     }

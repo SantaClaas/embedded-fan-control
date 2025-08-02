@@ -1,10 +1,10 @@
 use crate::mqtt::packet::connect::Connect;
 use crate::mqtt::packet::disconnect::Disconnect;
 use crate::mqtt::packet::ping_response::PingResponse;
-use crate::mqtt::packet::publish::Publish;
+use crate::mqtt::packet::publish;
 use crate::mqtt::packet::subscribe::{Subscribe, Subscription};
 use crate::mqtt::packet::subscribe_acknowledgement::SubscribeAcknowledgement;
-use crate::mqtt::packet::{get_parts, ping_response};
+use crate::mqtt::packet::{self, get_parts, ping_response};
 use crate::mqtt::task::send;
 use crate::mqtt::{non_zero_u16, TryDecode};
 use crate::Fans;
@@ -92,7 +92,7 @@ async fn wait_for_acknowledgement(
 
 /// A handler that takes MQTT publishes and sets the fan settings accordingly
 async fn handle_publish<'f>(
-    publish: &'f Publish<'f>,
+    publish: &'f publish::Publish<'f>,
     sender: &embassy_sync::watch::Sender<'_, CriticalSectionRawMutex, FanState, 3>,
 ) {
     info!("Handling publish");
@@ -177,7 +177,7 @@ enum ClientState {
     ConnectionLost,
 }
 
-async fn listen<Send: for<'a> From<Publish<'a>>, const SEND: usize>(
+async fn listen<Send: for<'a> From<publish::Publish<'a>>, const SEND: usize>(
     reader: &mut TcpReader<'_>,
     sender: &channel::Sender<'_, CriticalSectionRawMutex, Send, SEND>,
     client_state: &Signal<CriticalSectionRawMutex, ClientState>,
@@ -215,16 +215,18 @@ async fn listen<Send: for<'a> From<Publish<'a>>, const SEND: usize>(
         info!("Handling packet");
 
         match parts.r#type {
-            Publish::TYPE => {
+            publish::Publish::TYPE => {
                 info!("Received publish");
-                let publish =
-                    match Publish::try_decode(parts.flags, parts.variable_header_and_payload) {
-                        Ok(publish) => publish,
-                        Err(error) => {
-                            error!("Error reading publish: {:?}", error);
-                            continue;
-                        }
-                    };
+                let publish = match publish::Publish::try_decode(
+                    parts.flags,
+                    parts.variable_header_and_payload,
+                ) {
+                    Ok(publish) => publish,
+                    Err(error) => {
+                        error!("Error reading publish: {:?}", error);
+                        continue;
+                    }
+                };
 
                 let value = Send::from(publish);
                 info!("Handled publish");
@@ -288,7 +290,7 @@ enum PredefinedPublish {
 
 enum Message<'a> {
     Subscribe(Subscribe<'a>),
-    Publish(Publish<'a>),
+    Publish(publish::Publish<'a>),
     PredefinedPublish(PredefinedPublish),
 }
 
@@ -331,7 +333,7 @@ async fn talk(
                         }
                     };
 
-                    let packet = Publish {
+                    let packet = publish::Publish {
                         topic_name: "fancontroller/speed/percentage_state",
                         payload: buffer.as_bytes(),
                     };
@@ -344,12 +346,12 @@ async fn talk(
                 PredefinedPublish::FanOnState { is_on } => {
                     //TODO update state
                     let packet = if is_on {
-                        Publish {
+                        publish::Publish {
                             topic_name: "fancontroller/on/state",
                             payload: b"ON",
                         }
                     } else {
-                        Publish {
+                        publish::Publish {
                             topic_name: "fancontroller/on/state",
                             payload: b"OFF",
                         }
@@ -373,7 +375,7 @@ async fn talk(
                             continue;
                         }
                     };
-                    let packet = Publish {
+                    let packet = publish::Publish {
                         topic_name: match fan {
                             fan::Fan::One => "fancontroller/sensor/fan-1/temperature",
                             fan::Fan::Two => "fancontroller/sensor/fan-2/temperature",
@@ -415,7 +417,7 @@ async fn set_up_subscriptions(
 
 async fn set_up_discovery(outgoing: &Channel<CriticalSectionRawMutex, Message<'_>, 8>) {
     const DISCOVERY_PAYLOAD: &[u8] = env!("FAN_CONTROLLER_DISCOVERY_PAYLOAD").as_bytes();
-    const DISCOVERY_PUBLISH: Message = Message::Publish(Publish {
+    const DISCOVERY_PUBLISH: Message = Message::Publish(publish::Publish {
         topic_name: configuration::DISCOVERY_TOPIC,
         payload: DISCOVERY_PAYLOAD,
     });
@@ -574,7 +576,7 @@ const SUBSCRIPTIONS: [Subscription; 2] = [
 ];
 
 /// Trait must be implemented by types that represent messages that can be published to MQTT.
-pub(super) trait PublishOut {
+pub(super) trait Publish {
     fn topic(&self) -> &str;
     fn payload(&self) -> &[u8];
 }
@@ -582,7 +584,7 @@ pub(super) trait PublishOut {
 /// Queen Client the fourth
 pub(super) struct Client<'tcp, 'sender, 'outgoing, Send, const SEND: usize>
 where
-    Send: for<'a> From<Publish<'a>>,
+    Send: for<'a> From<publish::Publish<'a>>,
 {
     // Future 1 arguments
     reader: TcpReader<'tcp>,
@@ -601,7 +603,7 @@ where
 
 impl<'tcp, 'sender, 'outgoing, Send, const SEND: usize> Client<'tcp, 'sender, 'outgoing, Send, SEND>
 where
-    Send: for<'a> From<Publish<'a>>,
+    Send: for<'a> From<publish::Publish<'a>>,
 {
     async fn run(&mut self) {
         // Future 1
@@ -644,9 +646,9 @@ pub(super) async fn mqtt<
     'tcp,
     'sender,
     'receiver,
-    Send: for<'a> From<Publish<'a>>,
+    Send: for<'a> From<publish::Publish<'a>>,
     const SEND: usize,
-    Receive: PublishOut,
+    Receive: Publish,
     const RECEIVE: usize,
 >(
     spawner: Spawner,
