@@ -1,6 +1,9 @@
+use core::num::TryFromIntError;
+
 use crate::mqtt::variable_byte_integer;
 use crate::mqtt::variable_byte_integer::VariableByteIntegerEncodeError;
 use crate::mqtt::TryEncode;
+use crate::MqttBrokerConfiguration;
 use defmt::Format;
 
 pub(crate) struct Connect<'a> {
@@ -212,6 +215,19 @@ impl TryEncode for Connect<'_> {
 
         assert_eq!(required_length, buffer[..*offset].len());
         Ok(())
+    }
+}
+
+impl<'a> TryFrom<&MqttBrokerConfiguration<'a>> for Connect<'a> {
+    type Error = TryFromIntError;
+
+    fn try_from(configuration: &MqttBrokerConfiguration<'a>) -> Result<Self, Self::Error> {
+        Ok(Self {
+            client_identifier: configuration.client_identifier,
+            username: configuration.credentials.username,
+            password: configuration.credentials.password,
+            keep_alive_seconds: configuration.keep_alive_seconds.as_secs().try_into()?,
+        })
     }
 }
 

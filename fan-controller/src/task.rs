@@ -832,12 +832,9 @@ pub(super) async fn mqtt_with_connect<
     info!("Connected to MQTT broker through TCP");
 
     use crate::mqtt::task;
-    let packet = Connect {
-        client_identifier: env!("CARGO_PKG_NAME"),
-        username: configuration::MQTT_BROKER_CREDENTIALS.username,
-        password: configuration::MQTT_BROKER_CREDENTIALS.password,
-        keep_alive_seconds: configuration::KEEP_ALIVE.as_secs() as u16,
-    };
+
+    //TODO error handling
+    let packet = defmt::unwrap!(Connect::try_from(mqtt_broker_configuration));
 
     info!("Establishing MQTT connection");
     if let Err(error) = task::connect(&mut socket, packet).await {
