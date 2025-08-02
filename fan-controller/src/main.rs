@@ -609,9 +609,9 @@ mod tests {
     /// These are important hardcoded values I want to make sure are not changed accidentally
     #[test]
     fn setting_does_not_exceed_max_set_point() {
-        assert_eq!(fan::MAX_SET_POINT, 64_000);
-        assert_eq!(Setting::new(64_000), Ok(Setting(64_000)));
-        assert_eq!(Setting::new(64_000 + 1), Err(SetPointOutOfBoundsError));
-        assert_eq!(Setting::new(u16::MAX), Err(SetPointOutOfBoundsError));
+        core::assert_eq!(fan::MAX_SET_POINT, 64_000);
+        core::assert_eq!(Setting::new(64_000), Ok(Setting(64_000)));
+        core::assert_eq!(Setting::new(64_000 + 1), Err(SetPointOutOfBoundsError));
+        core::assert_eq!(Setting::new(u16::MAX), Err(SetPointOutOfBoundsError));
     }
 }
