@@ -785,6 +785,7 @@ pub(super) async fn mqtt_with_connect<
     clk: impl PioPin,
     sender: channel::Sender<'sender, CriticalSectionRawMutex, Receive, RECEIVE>,
     receiver: channel::Receiver<'receiver, CriticalSectionRawMutex, Send, SEND>,
+    mqtt_broker_address: &str,
 )
 // -> Client<'tcp, 'sender, 'receiver, Send, SEND, Receive, RECEIVE>
 {
@@ -799,7 +800,7 @@ pub(super) async fn mqtt_with_connect<
 
     info!("Resolving MQTT broker IP address");
     // Get home assistant MQTT broker IP address
-    let address = resolve_mqtt_broker_address(stack, configuration::MQTT_BROKER_ADDRESS).await;
+    let address = resolve_mqtt_broker_address(stack, mqtt_broker_address).await;
     info!("MQTT broker IP address resolved");
 
     info!("Connecting to MQTT broker through TCP");

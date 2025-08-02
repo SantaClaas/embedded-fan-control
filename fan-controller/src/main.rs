@@ -579,6 +579,7 @@ async fn main(spawner: Spawner) {
             clk,
             sender_in,
             receiver_out,
+            configuration::MQTT_BROKER_ADDRESS,
         )
         .await;
     };
