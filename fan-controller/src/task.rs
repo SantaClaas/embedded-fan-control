@@ -5,7 +5,7 @@ use crate::mqtt::packet::publish;
 use crate::mqtt::packet::subscribe::{Subscribe, Subscription};
 use crate::mqtt::packet::subscribe_acknowledgement::SubscribeAcknowledgement;
 use crate::mqtt::task::send;
-use crate::mqtt::{self, TryEncode};
+use crate::mqtt::{self};
 use crate::mqtt::{non_zero_u16, TryDecode};
 use crate::Fans;
 use crate::PingRequest;
