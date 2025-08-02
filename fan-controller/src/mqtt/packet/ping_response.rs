@@ -1,4 +1,3 @@
-use core::convert::Infallible;
 
 use crate::mqtt::Decode;
 

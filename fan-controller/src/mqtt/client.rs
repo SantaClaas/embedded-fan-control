@@ -10,19 +10,17 @@ use crate::{
             publish::Publish,
             subscribe_acknowledgement::SubscribeAcknowledgement,
         },
-        task::{self, ConnectError, SendError},
+        task::{ConnectError, SendError},
         TryDecode, TryEncode,
     },
 };
 use core::{
-    cell::RefCell,
     fmt::Debug,
     future::{poll_fn, Future},
     num::NonZeroU16,
     task::Poll,
 };
 use defmt::{error, info, warn, Format};
-use embassy_futures::join::join;
 use embassy_net::tcp::{TcpReader, TcpSocket, TcpWriter};
 use embassy_sync::{
     blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel, mutex::Mutex, signal::Signal,
@@ -338,7 +336,7 @@ where
         Ok(client)
     }
 
-    async fn run(mut self) {
+    async fn run(self) {
 
         // Future 1
         // let listen = self.listener.listen(

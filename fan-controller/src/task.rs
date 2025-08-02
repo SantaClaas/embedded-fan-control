@@ -4,22 +4,21 @@ use crate::mqtt::packet::ping_response::PingResponse;
 use crate::mqtt::packet::publish;
 use crate::mqtt::packet::subscribe::{Subscribe, Subscription};
 use crate::mqtt::packet::subscribe_acknowledgement::SubscribeAcknowledgement;
-use crate::mqtt::packet::{self, get_parts, ping_response};
 use crate::mqtt::task::send;
 use crate::mqtt::{non_zero_u16, TryDecode};
 use crate::Fans;
 use crate::PingRequest;
 use crate::{configuration, fan, gain_control, FanState};
-use crate::{mqtt, FanController};
+use crate::mqtt;
 use ::mqtt::QualityOfService;
-use core::future::{poll_fn, Future};
+use core::future::poll_fn;
 use core::num::NonZeroU16;
 use core::ops::DerefMut;
 use core::task::Poll;
 use cyw43::NetDriver;
 use defmt::{error, info, unwrap, warn};
 use embassy_executor::Spawner;
-use embassy_futures::join::{join, join4, join5};
+use embassy_futures::join::{join, join4};
 use embassy_net::dns::{DnsQueryType, DnsSocket};
 use embassy_net::tcp::{TcpReader, TcpSocket, TcpWriter};
 use embassy_net::{Config, IpEndpoint, Stack, StackResources};
@@ -34,7 +33,6 @@ use embassy_sync::waitqueue::AtomicWaker;
 use embassy_time::{with_deadline, with_timeout, Instant, Timer};
 use rand::RngCore;
 use static_cell::StaticCell;
-use topic::fan_controller;
 
 #[embassy_executor::task]
 async fn network_task(stack: &'static Stack<NetDriver<'static>>) -> ! {
@@ -799,7 +797,7 @@ pub(super) async fn mqtt<
     /// The instant when the last packet was sent to determine when the next keep alive has to be sent
     let last_packet: Signal<CriticalSectionRawMutex, Instant> = Signal::new();
 
-    let (mut reader, mut writer) = socket.split();
+    let (mut reader, writer) = socket.split();
     // Using a mutex for the writer, so it can be shared between the task that sends messages (for
     // subscribing and publishing fan speed updates) and the task that sends the keep alive ping
     let writer = Mutex::<CriticalSectionRawMutex, TcpWriter<'_>>::new(writer);

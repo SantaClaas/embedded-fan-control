@@ -2,7 +2,7 @@ use super::packet::connect_acknowledgement;
 use crate::mqtt::packet::connect::{Connect, EncodeError};
 use crate::mqtt::packet::connect_acknowledgement::{ConnectAcknowledgement, ConnectReasonCode};
 use crate::mqtt::packet::GetPartsError;
-use crate::mqtt::{packet, ConnectErrorReasonCode, DecodeError};
+use crate::mqtt::{packet, ConnectErrorReasonCode};
 use crate::mqtt::{TryDecode, TryEncode};
 use core::fmt::Debug;
 use defmt::{info, warn, Format};

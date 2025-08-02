@@ -3,14 +3,13 @@
 
 use crate::modbus::ReadInputRegister;
 use crate::{configuration, modbus};
-use cortex_m::prelude::_embedded_hal_serial_Write;
 use defmt::{error, info, Format};
 use embassy_rp::dma::Channel;
 use embassy_rp::gpio::{Level, Output, Pin};
 use embassy_rp::interrupt::typelevel::Binding;
 use embassy_rp::uart::{
-    Async, BufferedInterruptHandler, BufferedUart, DataBits, InterruptHandler, Parity, RxPin,
-    StopBits, TxPin, Uart,
+    BufferedInterruptHandler, BufferedUart, DataBits, Parity, RxPin,
+    StopBits, TxPin,
 };
 use embassy_rp::{uart, Peripheral};
 use embassy_time::{block_for, with_timeout, Duration, TimeoutError, Timer};

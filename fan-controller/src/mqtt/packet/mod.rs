@@ -6,8 +6,7 @@ use crate::mqtt::packet::subscribe_acknowledgement::{
     SubscribeAcknowledgement, SubscribeAcknowledgementError,
 };
 use crate::mqtt::variable_byte_integer;
-use crate::mqtt::DecodeError;
-use defmt::{info, Format};
+use defmt::Format;
 
 use super::TryDecode;
 

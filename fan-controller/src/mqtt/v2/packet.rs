@@ -12,7 +12,7 @@ pub(crate) enum PacketError {
 }
 
 trait Packetter {
-    fn test() -> () {
+    fn test() {
         todo!()
     }
 }

@@ -4,10 +4,6 @@
 use core::convert::Infallible;
 
 use defmt::Format;
-use embedded_io_async::Write;
-
-use crate::mqtt::packet::connect::Connect;
-use crate::mqtt::variable_byte_integer::DecodeError;
 
 pub(crate) mod client;
 pub(crate) mod packet;
