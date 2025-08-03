@@ -8,22 +8,22 @@ use core::fmt::Debug;
 use defmt::{info, warn, Format};
 use embassy_net::tcp;
 use embassy_net::tcp::TcpSocket;
-use embedded_io_async::Write;
+use embedded_io_async::{ErrorType, Read, Write};
 
 ///! Tasks that need to be done to run MQTT
 ///! - Keep alive
 
 #[derive(Debug, Format)]
-pub(crate) enum SendError<T: Debug + Format> {
+pub(crate) enum SendError<T: Debug + Format, E> {
     Encode(T),
-    Write(tcp::Error),
-    Flush(tcp::Error),
+    Write(E),
+    Flush(E),
 }
 
-pub(crate) async fn send<T>(
-    socket: &mut impl Write<Error = tcp::Error>,
+pub(crate) async fn send<T, TWrite: Write<Error = TWriteError>, TWriteError>(
+    socket: &mut TWrite,
     packet: T,
-) -> Result<(), SendError<<T as TryEncode>::Error>>
+) -> Result<(), SendError<<T as TryEncode>::Error, TWriteError>>
 where
     T: TryEncode<Error: Debug + Format>,
 {
@@ -43,26 +43,33 @@ where
 }
 
 #[derive(Format)]
-pub(crate) enum ConnectError {
-    Send(SendError<EncodeError>),
-    Read(tcp::Error),
+pub(crate) enum ConnectError<TWriteError, TReadError> {
+    Send(SendError<EncodeError, TWriteError>),
+    Read(TReadError),
     Parts(GetPartsError),
     InvalidResponsePacketType(u8),
     DecodeAcknowledgement(connect_acknowledgement::DecodeError),
     ErrorReasonCode(ConnectErrorReasonCode),
 }
 
-pub(crate) async fn connect<'a, 'b>(
-    socket: &mut TcpSocket<'a>,
-    packet: Connect<'b>,
-) -> Result<(), ConnectError> {
-    send(socket, packet).await.map_err(ConnectError::Send)?;
+pub(crate) async fn connect<
+    'a,
+    TWrite: Write<Error = TWriteError>,
+    TWriteError: Debug + Format,
+    TRead: Read<Error = TReadError>,
+    TReadError,
+>(
+    writer: &mut TWrite,
+    reader: &mut TRead,
+    packet: Connect<'a>,
+) -> Result<(), ConnectError<TWriteError, TReadError>> {
+    send(writer, packet).await.map_err(ConnectError::Send)?;
 
     // Wait for connect acknowledgement
     // Discard all messages before the connect acknowledgement
     // The server has to send a connect acknowledgement before sending any other packet
     let mut receive_buffer = [0; 1024];
-    let bytes_read = socket
+    let bytes_read = reader
         .read(&mut receive_buffer)
         .await
         .map_err(ConnectError::Read)?;

@@ -15,7 +15,7 @@ use crate::{
     },
 };
 use core::{
-    fmt::Debug,
+    fmt::{self, Debug},
     future::{poll_fn, Future},
     num::NonZeroU16,
     task::Poll,
@@ -26,6 +26,7 @@ use embassy_sync::{
     blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel, mutex::Mutex, signal::Signal,
     waitqueue::AtomicWaker,
 };
+use embedded_io_async::{Read, Write};
 
 pub(crate) struct ClientBuilder<'socket> {
     socket: TcpSocket<'socket>,
@@ -138,11 +139,11 @@ impl Future for AcknowledgementFuture {
     }
 }
 
-struct Listener<'socket> {
-    reader: TcpReader<'socket>,
+struct Listener<R: Read<Error = E>, E> {
+    reader: R,
 }
 
-impl<'socket> Listener<'socket> {
+impl<R: Read<Error = E>, E: Format + Debug> Listener<R, E> {
     async fn listen<TSend>(
         &mut self,
         state: &Signal<CriticalSectionRawMutex, State>,
@@ -240,23 +241,36 @@ impl<'socket> Listener<'socket> {
     }
 }
 
-pub(crate) struct Client<'socket, TSend>
-where
+pub(crate) struct Client<
+    TSend,
+    TWrite: Write<Error = TWriteError>,
+    TWriteError: Debug,
+    TRead: Read<Error = TReadError>,
+    TReadError: Debug,
+> where
     for<'a> TSend: From<Publish<'a>>,
 {
-    listener: Listener<'socket>,
-    writer: TcpWriter<'socket>,
+    listener: Listener<TRead, TReadError>,
+    writer: TWrite,
     acknowledgements: Acknowledgements,
     ping_response: Signal<CriticalSectionRawMutex, PingResponse>,
     channel: Channel<CriticalSectionRawMutex, TSend, 4>,
     state: Signal<CriticalSectionRawMutex, State>,
 }
 
-impl<'socket, TSend> Client<'socket, TSend>
+impl<TSend, TWrite, TWriteError, TRead, TReadError>
+    Client<TSend, TWrite, TWriteError, TRead, TReadError>
 where
     for<'a> TSend: From<Publish<'a>>,
+    TWrite: Write<Error = TWriteError>,
+    TWriteError: Debug,
+    TRead: Read<Error = TReadError>,
+    TReadError: Debug,
 {
-    async fn send<'a, T>(&mut self, packet: T) -> Result<(), SendError<<T as TryEncode>::Error>>
+    async fn send<'a, T>(
+        &mut self,
+        packet: T,
+    ) -> Result<(), SendError<<T as TryEncode>::Error, TWriteError>>
     where
         T: TryEncode<Error: Debug + Format>,
     {
@@ -277,9 +291,9 @@ where
     }
 
     pub(crate) async fn connect(
-        reader: TcpReader<'socket>,
-        writer: TcpWriter<'socket>,
-    ) -> Result<Self, ConnectError> {
+        reader: TRead,
+        writer: TWrite,
+    ) -> Result<Self, ConnectError<TWriteError, TReadError>> {
         let mut client = Self {
             listener: Listener { reader },
             writer,

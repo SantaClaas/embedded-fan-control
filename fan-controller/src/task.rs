@@ -838,7 +838,9 @@ pub(super) async fn mqtt_with_connect<
     let packet = defmt::unwrap!(Connect::try_from(mqtt_broker_configuration));
 
     info!("Establishing MQTT connection");
-    if let Err(error) = task::connect(&mut socket, packet).await {
+    let (mut reader, mut writer) = socket.split();
+
+    if let Err(error) = task::connect(&mut writer, &mut reader, packet).await {
         warn!("Error connecting to MQTT broker: {:?}", error);
         return;
     };
@@ -864,7 +866,6 @@ pub(super) async fn mqtt_with_connect<
     /// The instant when the last packet was sent to determine when the next keep alive has to be sent
     let last_packet: Signal<CriticalSectionRawMutex, Instant> = Signal::new();
 
-    let (mut reader, writer) = socket.split();
     // Using a mutex for the writer, so it can be shared between the task that sends messages (for
     // subscribing and publishing fan speed updates) and the task that sends the keep alive ping
     let writer = Mutex::<CriticalSectionRawMutex, TcpWriter<'_>>::new(writer);

@@ -11,7 +11,7 @@ use defmt::*;
 use embassy_executor::Spawner;
 use embassy_futures::join::join;
 use embassy_net::dns::{DnsQueryType, DnsSocket};
-use embassy_net::tcp::TcpSocket;
+use embassy_net::tcp::{TcpReader, TcpSocket, TcpWriter};
 use embassy_net::{tcp, Config, IpEndpoint, Stack, StackResources};
 use embassy_rp::clocks::RoscRng;
 use embassy_rp::gpio::{Input, Level, Output, Pull};
@@ -264,7 +264,12 @@ async fn mqtt_task_client(
     use crate::mqtt::client::Client as MqttClient;
 
     let (reader, writer) = socket.split();
-    if let Err(error) = MqttClient::<Temporary>::connect(reader, writer).await {
+    if let Err(error) =
+        MqttClient::<Temporary, TcpWriter, tcp::Error, TcpReader, tcp::Error>::connect(
+            reader, writer,
+        )
+        .await
+    {
         info!(
             "Error connecting to Home Assistant MQTT broker: {:?}",
             error
