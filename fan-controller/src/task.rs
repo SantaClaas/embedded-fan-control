@@ -813,8 +813,6 @@ pub(super) async fn mqtt_with_connect<
     let mut send_buffer = [0; 1024];
     let mut socket = TcpSocket::new(stack, &mut receive_buffer, &mut send_buffer);
 
-    let dns_client = DnsSocket::new(stack);
-
     info!("Resolving MQTT broker IP address");
     // Get home assistant MQTT broker IP address
     let address = resolve_mqtt_broker_address(stack, mqtt_broker_configuration.address).await;
