@@ -16,7 +16,7 @@ use core::num::NonZeroU16;
 use core::ops::DerefMut;
 use core::task::Poll;
 use cyw43::{Control, NetDriver};
-use defmt::{error, info, unwrap, warn};
+use defmt::{error, info, unwrap, warn, Format};
 use embassy_executor::Spawner;
 use embassy_futures::join::{join, join4};
 use embassy_net::dns::{DnsQueryType, DnsSocket};
@@ -31,6 +31,7 @@ use embassy_sync::mutex::Mutex;
 use embassy_sync::signal::Signal;
 use embassy_sync::waitqueue::AtomicWaker;
 use embassy_time::{with_deadline, with_timeout, Duration, Instant, Timer};
+use embedded_io_async::Read;
 use rand::RngCore;
 use static_cell::StaticCell;
 
@@ -175,8 +176,8 @@ enum ClientState {
     ConnectionLost,
 }
 
-async fn listen<Send: for<'a> From<publish::Publish<'a>>, const SEND: usize>(
-    reader: &mut TcpReader<'_>,
+async fn listen<E: Format, Send: for<'a> From<publish::Publish<'a>>, const SEND: usize>(
+    reader: &mut impl Read<Error = E>,
     sender: &channel::Sender<'_, CriticalSectionRawMutex, Send, SEND>,
     client_state: &Signal<CriticalSectionRawMutex, ClientState>,
     acknowledgements: &Mutex<CriticalSectionRawMutex, [bool; 2]>,
