@@ -20,6 +20,7 @@ use defmt::{error, info, unwrap, warn, Format};
 use embassy_executor::Spawner;
 use embassy_futures::join::{join, join4};
 use embassy_net::dns::{DnsQueryType, DnsSocket};
+use embassy_net::driver::Driver;
 use embassy_net::tcp::{TcpReader, TcpSocket, TcpWriter};
 use embassy_net::{Config, IpAddress, IpEndpoint, Stack, StackResources};
 use embassy_rp::clocks::RoscRng;
@@ -670,7 +671,7 @@ where
     }
 }
 
-async fn set_up_network_stack(
+pub(super) async fn set_up_network_stack(
     spawner: Spawner,
     pwr_pin: PIN_23,
     cs_pin: PIN_25,
@@ -733,11 +734,14 @@ async fn join_wifi_network(control: &mut Control<'_>) {
     }
 }
 
-async fn resolve_mqtt_broker_address(
-    stack: &'static Stack<NetDriver<'static>>,
+async fn resolve_mqtt_broker_address<'a, D>(
+    driver: &'a Stack<D>,
     mqtt_broker_address: &str,
-) -> IpAddress {
-    let dns_client = DnsSocket::new(stack);
+) -> IpAddress
+where
+    D: Driver + 'static,
+{
+    let dns_client = DnsSocket::new(driver);
 
     loop {
         //TODO support IPv6
@@ -792,22 +796,15 @@ pub(super) async fn mqtt_with_connect<
     const RECEIVE: usize,
     Send: Publish,
     const SEND: usize,
+    D: Driver + 'static,
 >(
-    spawner: Spawner,
-    pwr_pin: PIN_23,
-    cs_pin: PIN_25,
-    pio: PIO0,
-    dma: DMA_CH0,
-    dio: impl PioPin,
-    clk: impl PioPin,
+    stack: &Stack<D>,
     sender: channel::Sender<'sender, CriticalSectionRawMutex, Receive, RECEIVE>,
     receiver: channel::Receiver<'receiver, CriticalSectionRawMutex, Send, SEND>,
     mqtt_broker_configuration: &MqttBrokerConfiguration<'configuration>,
 )
 // -> Client<'tcp, 'sender, 'receiver, Send, SEND, Receive, RECEIVE>
 {
-    let stack = set_up_network_stack(spawner, pwr_pin, cs_pin, pio, dma, dio, clk).await;
-
     // Now we can use it
     let mut receive_buffer = [0; 1024];
     let mut send_buffer = [0; 1024];

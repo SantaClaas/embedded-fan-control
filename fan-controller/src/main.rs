@@ -37,7 +37,7 @@ use {defmt_rtt as _, panic_probe as _};
 use self::mqtt::packet;
 use crate::mqtt::packet::ping_request::PingRequest;
 use crate::mqtt::packet::{connect, publish, subscribe};
-use crate::task::{MqttBrokerConfiguration, Publish};
+use crate::task::{set_up_network_stack, MqttBrokerConfiguration, Publish};
 
 mod async_callback;
 mod configuration;
@@ -574,19 +574,10 @@ async fn main(spawner: Spawner) {
         let sender_out = out.sender();
         let receiver_out = out.receiver();
 
-        crate::task::mqtt_with_connect(
-            spawner,
-            pwr_pin,
-            cs_pin,
-            pio,
-            dma,
-            dio,
-            clk,
-            sender_in,
-            receiver_out,
-            &configuration::MQTT_BROKER,
-        )
-        .await;
+        let stack = set_up_network_stack(spawner, pwr_pin, cs_pin, pio, dma, dio, clk).await;
+
+        crate::task::mqtt_with_connect(stack, sender_in, receiver_out, &configuration::MQTT_BROKER)
+            .await;
     };
     // The MQTT task waits for publishes from MQTT and sends them to the modbus task.
     // It also sends updates from the modbus task that happen through button inputs to MQTT
