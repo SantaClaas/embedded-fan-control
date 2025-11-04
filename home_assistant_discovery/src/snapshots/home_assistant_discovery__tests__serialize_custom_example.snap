@@ -17,16 +17,6 @@ expression: payload
     "url": "https://github.com/SantaClaas/embedded-fan-control"
   },
   "cmps": {
-    "fan-1": {
-      "p": "Fan",
-      "name": "Fan 1",
-      "uniq_id": "fancontroller/fan-1",
-      "stat_t": "fancontroller/fan-1/on/state",
-      "cmd_t": "fancontroller/fan-1/on/set",
-      "pct_stat_t": "fancontroller/fan-2/speed/percentage_state",
-      "pct_cmd_t": "fancontroller/fan-2/speed/percentage",
-      "spd_rng_max": 32000
-    },
     "fan-2": {
       "p": "Fan",
       "name": "Fan 2",
@@ -35,6 +25,16 @@ expression: payload
       "cmd_t": "fancontroller/fan-2/on/set",
       "pct_stat_t": "fancontroller/fan-2/speed/percentage_state",
       "pct_cmd_t": "fancontroller/fan-2/speed/percentage",
+      "spd_rng_max": 32000
+    },
+    "fan-1": {
+      "p": "Fan",
+      "name": "Fan 1",
+      "uniq_id": "fancontroller/fan-1",
+      "stat_t": "fancontroller/fan-1/on/state",
+      "cmd_t": "fancontroller/fan-1/on/set",
+      "pct_stat_t": "fancontroller/fan-1/speed/percentage_state",
+      "pct_cmd_t": "fancontroller/fan-1/speed/percentage",
       "spd_rng_max": 32000
     }
   },
