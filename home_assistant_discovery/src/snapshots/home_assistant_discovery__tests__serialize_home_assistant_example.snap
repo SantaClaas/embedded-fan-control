@@ -1,0 +1,38 @@
+---
+source: home_assistant_discovery/src/lib.rs
+expression: payload
+---
+{
+  "dev": {
+    "ids": "ea334450945afc",
+    "name": "Kitchen",
+    "mdl": "xya",
+    "mf": "Bla electronics",
+    "hw": "1.0rev2",
+    "sn": "ea334450945afc",
+    "sw": "1.0"
+  },
+  "o": {
+    "name": "bla2mqtt",
+    "sw": "2.1",
+    "url": "https://bla2mqtt.example.com/support"
+  },
+  "cmps": {
+    "some_unique_component_id1": {
+      "p": "Sensor",
+      "dev_cla": "Temperature",
+      "unit_of_meas": "°C",
+      "val_tpl": "{{ value_json.temperature}}",
+      "uniq_id": "temp01ae_t"
+    },
+    "some_unique_id2": {
+      "p": "Sensor",
+      "dev_cla": "Humidity",
+      "unit_of_meas": "%",
+      "val_tpl": "{{ value_json.humidity}}",
+      "uniq_id": "temp01ae_h"
+    }
+  },
+  "qos": "ExactlyOnceDelivery",
+  "stat_t": "sensorBedroom/state"
+}

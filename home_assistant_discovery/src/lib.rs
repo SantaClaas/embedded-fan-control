@@ -14,6 +14,18 @@ pub enum ListOrString {
     String(&'static str),
 }
 
+impl From<&'static str> for ListOrString {
+    fn from(value: &'static str) -> Self {
+        ListOrString::String(value)
+    }
+}
+
+impl From<Vec<String>> for ListOrString {
+    fn from(value: Vec<String>) -> Self {
+        ListOrString::List(value)
+    }
+}
+
 /// Information about the device this fan is a part of to tie it into the device registry. Only works when unique_id is set. At least one of identifiers or connections must be present to identify the device.
 #[derive(Serialize, Default)]
 pub struct Device {
@@ -36,6 +48,9 @@ pub struct Device {
     #[serde(rename = "hw")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hardware_version: Option<&'static str>,
+    #[serde(rename = "sn")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub serial_number: Option<&'static str>,
     /// The firmware version of the device.
     #[serde(rename = "sw")]
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -54,6 +69,13 @@ pub struct Origin {
     #[serde(rename = "url")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub support_url: Option<&'static str>,
+}
+
+/// Device classes added as needed based on https://www.home-assistant.io/integrations/sensor/#device-class
+#[derive(Serialize)]
+pub enum DeviceClass {
+    Temperature,
+    Humidity,
 }
 
 /// Internally tagged by the required `platform` (`p`) field
@@ -85,6 +107,16 @@ pub enum Component {
         /// Default: 100
         #[serde(rename = "spd_rng_max")]
         speed_range_max: Option<u16>,
+    },
+    Sensor {
+        #[serde(rename = "dev_cla")]
+        device_class: Option<DeviceClass>,
+        #[serde(rename = "unit_of_meas")]
+        unit_of_measurement: Option<&'static str>,
+        #[serde(rename = "val_tpl")]
+        value_template: Option<&'static str>,
+        #[serde(rename = "uniq_id")]
+        unique_id: Option<&'static str>,
     },
 }
 
@@ -122,7 +154,49 @@ mod tests {
     use super::*;
 
     #[test]
-    fn serialize_home_assistant_example() {}
+    fn serialize_home_assistant_example() {
+        let payload = DiscoveryPayload {
+            device: Device {
+                identifiers: ListOrString::String("ea334450945afc").into(),
+                name: Some("Kitchen"),
+                manufacturer: Some("Bla electronics"),
+                model: Some("xya"),
+                software_version: Some("1.0".into()),
+                serial_number: Some("ea334450945afc"),
+                hardware_version: Some("1.0rev2"),
+            },
+            origin: Origin {
+                name: "bla2mqtt",
+                software_version: Some("2.1".into()),
+                support_url: Some("https://bla2mqtt.example.com/support"),
+            },
+            components: HashMap::from([
+                (
+                    "some_unique_component_id1".to_string(),
+                    Component::Sensor {
+                        device_class: Some(DeviceClass::Temperature),
+                        unit_of_measurement: Some("°C"),
+                        value_template: Some("{{ value_json.temperature}}"),
+                        unique_id: Some("temp01ae_t"),
+                    },
+                ),
+                (
+                    "some_unique_id2".to_string(),
+                    Component::Sensor {
+                        device_class: Some(DeviceClass::Humidity),
+                        unit_of_measurement: Some("%"),
+                        value_template: Some("{{ value_json.humidity}}"),
+                        unique_id: Some("temp01ae_h"),
+                    },
+                ),
+            ]),
+            state_topic: Some("sensorBedroom/state"),
+            quality_of_service: Some(QualityOfService::ExactlyOnceDelivery),
+            ..Default::default()
+        };
+
+        insta::assert_json_snapshot!(payload);
+    }
 
     #[test]
     fn serialize_custom_example() {
@@ -135,6 +209,7 @@ mod tests {
                 manufacturer: Some("claas.dev"),
                 hardware_version: Some("1.0"),
                 software_version: version.clone(),
+                ..Default::default()
             },
             origin: Origin {
                 name: "fan-controller",
