@@ -1,0 +1,12 @@
+[package]
+name = "home_assistant_discovery"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+mqtt = { version = "0.1.0", path = "../mqtt", features = ["serde"] }
+serde = { version = "1.0.219", features = ["derive", "rc"] }
+
+[dev-dependencies]
+insta = { version = "1.43.2", features = ["json"] }
+topic = { version = "0.1.0", path = "../topic" }

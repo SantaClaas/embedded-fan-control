@@ -1,0 +1,43 @@
+---
+source: home_assistant_discovery/src/lib.rs
+expression: payload
+---
+{
+  "dev": {
+    "ids": "fancontroller-device",
+    "name": "Fan Controller",
+    "mdl": "Raspberry Pi Pico W 1",
+    "mf": "claas.dev",
+    "hw": "1.0",
+    "sw": "test-version"
+  },
+  "o": {
+    "name": "fan-controller",
+    "sw": "test-version",
+    "url": "https://github.com/SantaClaas/embedded-fan-control"
+  },
+  "cmps": {
+    "fan-1": {
+      "p": "Fan",
+      "name": "Fan 1",
+      "uniq_id": "fancontroller/fan-1",
+      "stat_t": "fancontroller/fan-1/on/state",
+      "cmd_t": "fancontroller/fan-1/on/set",
+      "pct_stat_t": "fancontroller/fan-2/speed/percentage_state",
+      "pct_cmd_t": "fancontroller/fan-2/speed/percentage",
+      "spd_rng_max": 32000
+    },
+    "fan-2": {
+      "p": "Fan",
+      "name": "Fan 2",
+      "uniq_id": "fancontroller/fan-2",
+      "stat_t": "fancontroller/fan-2/on/state",
+      "cmd_t": "fancontroller/fan-2/on/set",
+      "pct_stat_t": "fancontroller/fan-2/speed/percentage_state",
+      "pct_cmd_t": "fancontroller/fan-2/speed/percentage",
+      "spd_rng_max": 32000
+    }
+  },
+  "stat_t": "fancontroller/on/state",
+  "cmd_t": "fancontroller/on/set"
+}
