@@ -15,8 +15,8 @@ pub mod fan_controller {
         pub const COMMAND: &str = "fancontroller/fan-1/on/set";
 
         pub mod percentage {
-            pub const STATE: &str = "fancontroller/fan-2/speed/percentage_state";
-            pub const COMMAND: &str = "fancontroller/fan-2/speed/percentage";
+            pub const STATE: &str = "fancontroller/fan-1/speed/percentage_state";
+            pub const COMMAND: &str = "fancontroller/fan-1/speed/percentage";
         }
     }
 
