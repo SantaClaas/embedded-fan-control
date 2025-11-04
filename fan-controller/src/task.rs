@@ -436,7 +436,7 @@ async fn set_up_discovery<T: Publish>(
     const DISCOVERY_PAYLOAD: &[u8] = env!("FAN_CONTROLLER_DISCOVERY_PAYLOAD").as_bytes();
     //TODO make constant and refactor to allow people to dynamically subscribe
     let discovery_publish = Message::PublishInternal(publish::Publish {
-        topic_name: configuration::DISCOVERY_TOPIC,
+        topic_name: topic::fan_controller::DISCOVERY,
         payload: DISCOVERY_PAYLOAD,
     });
 

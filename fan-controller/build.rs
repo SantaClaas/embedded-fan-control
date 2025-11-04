@@ -250,7 +250,7 @@ fn set_discovery_payload(git_hash: &str) {
     println!("Setting version to {version:?}");
     let payload = DiscoveryPayload {
         device: Device {
-            identifiers: Some(ListOrString::String("fancontroller-device")),
+            identifiers: Some(ListOrString::String(topic::fan_controller::OBJECT_ID)),
             name: Some("Fan Controller"),
             model: Some("Raspberry Pi Pico W 1"),
             manufacturer: Some("claas.dev"),

@@ -18,19 +18,19 @@ expression: payload
     "url": "https://bla2mqtt.example.com/support"
   },
   "cmps": {
-    "some_unique_component_id1": {
-      "p": "Sensor",
-      "dev_cla": "Temperature",
-      "unit_of_meas": "°C",
-      "val_tpl": "{{ value_json.temperature}}",
-      "uniq_id": "temp01ae_t"
-    },
     "some_unique_id2": {
       "p": "Sensor",
       "dev_cla": "Humidity",
       "unit_of_meas": "%",
       "val_tpl": "{{ value_json.humidity}}",
       "uniq_id": "temp01ae_h"
+    },
+    "some_unique_component_id1": {
+      "p": "Sensor",
+      "dev_cla": "Temperature",
+      "unit_of_meas": "°C",
+      "val_tpl": "{{ value_json.temperature}}",
+      "uniq_id": "temp01ae_t"
     }
   },
   "qos": "ExactlyOnceDelivery",

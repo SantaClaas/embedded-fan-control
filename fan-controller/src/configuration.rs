@@ -45,10 +45,6 @@ pub(crate) const MQTT_BROKER_CREDENTIALS: MqttBrokerCredentials = MqttBrokerCred
     password: env!("FAN_CONTROL_MQTT_BROKER_PASSWORD").as_bytes(),
 };
 
-//TODO make configurable
-/// Prefix is "homeassistant", but it can be changed in home assistant configuration
-pub(crate) const DISCOVERY_TOPIC: &str = "homeassistant/fan/fancontroller/config";
-
 /// The keep alive interval defines the maximum time between messages sent to the broker.
 /// The broker will disconnect the client if no message is received within 1.5 times of the keep alive interval.
 pub(crate) const KEEP_ALIVE: Duration = Duration::from_secs(60);
