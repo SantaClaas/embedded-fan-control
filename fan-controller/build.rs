@@ -256,6 +256,7 @@ fn set_discovery_payload(git_hash: &str) {
             manufacturer: Some("claas.dev"),
             hardware_version: Some("1.0"),
             software_version: version.clone(),
+            ..Default::default()
         },
         origin: Origin {
             name: "fan-controller",
