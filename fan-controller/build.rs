@@ -11,10 +11,13 @@
 
 use std::collections::HashMap;
 use std::env::{self, VarError};
+use std::fmt::format;
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::PathBuf;
+use std::process::Command;
 use std::rc::Rc;
+use std::string::FromUtf8Error;
 
 use mqtt::QualityOfService;
 use ruff_python_ast::{DictItem, Expr, Stmt};
@@ -52,7 +55,7 @@ struct Device {
     /// The firmware version of the device.
     #[serde(rename = "sw")]
     #[serde(skip_serializing_if = "Option::is_none")]
-    software_version: Option<&'static str>,
+    software_version: Option<Rc<str>>,
 }
 
 #[derive(Serialize, Default)]
@@ -62,7 +65,7 @@ struct Origin {
     /// Software version of the application that supplies the discovered MQTT item.
     #[serde(rename = "sw")]
     #[serde(skip_serializing_if = "Option::is_none")]
-    software_version: Option<&'static str>,
+    software_version: Option<Rc<str>>,
     /// Support URL of the application that supplies the discovered MQTT item.
     #[serde(rename = "url")]
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -131,6 +134,14 @@ struct DiscoveryPayload {
 }
 
 #[derive(Debug, thiserror::Error)]
+enum GitHashError {
+    #[error("Failed to execute git command: {0}")]
+    CommandExecution(std::io::Error),
+    #[error("Failed to parse git hash command output: {0}")]
+    ParseHash(FromUtf8Error),
+}
+
+#[derive(Debug, thiserror::Error)]
 enum BuildError {
     #[error("Failed to write memory.x file: {0}")]
     WriteMemoryXFile(#[from] std::io::Error),
@@ -143,6 +154,9 @@ enum BuildError {
 
     #[error("Error with discovery payload")]
     DiscoveryPayloadError(#[from] DiscoveryPayloadError),
+
+    #[error("Failed to get git hash: {0}")]
+    GitHash(#[from] GitHashError),
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -323,15 +337,27 @@ fn setup_discovery_payload() -> Result<(), DiscoveryPayloadError> {
         result.push(character);
     }
 
-    println!(
-        "cargo:rustc-env=FAN_CONTROLLER_DISCOVERY_PAYLOAD={result}"
-    );
+    println!("cargo:rustc-env=FAN_CONTROLLER_DISCOVERY_PAYLOAD={result}");
 
     Ok(())
 }
 
-fn set_discovery_payload() {
-    // No way to const a HashMap
+fn get_git_hash() -> Result<String, GitHashError> {
+    let output = Command::new("git")
+        .args(["rev-parse", "--short", "HEAD"])
+        .output()
+        .map_err(GitHashError::CommandExecution)?;
+
+    let hash = String::from_utf8(output.stdout).map_err(GitHashError::ParseHash)?;
+
+    Ok(hash)
+}
+
+fn set_discovery_payload(git_hash: &str) {
+    let package_version = env!("CARGO_PKG_VERSION");
+    // Following semantic versioning build metadata
+    let version: Option<Rc<str>> = Option::from(Rc::from(format!("{package_version}+{git_hash}")));
+    println!("Setting version to {version:?}");
     let payload = DiscoveryPayload {
         device: Device {
             identifiers: Some(ListOrString::String("fancontroller-device")),
@@ -339,11 +365,11 @@ fn set_discovery_payload() {
             model: Some("Raspberry Pi Pico W 1"),
             manufacturer: Some("claas.dev"),
             hardware_version: Some("1.0"),
-            software_version: Some(env!("CARGO_PKG_VERSION")),
+            software_version: version.clone(),
         },
         origin: Origin {
             name: "fan-controller",
-            software_version: Some(env!("CARGO_PKG_VERSION")),
+            software_version: version,
             support_url: Some("https://github.com/SantaClaas/embedded-fan-control"),
         },
         components: HashMap::from([
@@ -393,6 +419,7 @@ fn main() -> Result<(), BuildError> {
     ensure_memory_x_file()?;
     setup_configuration()?;
     // setup_discovery_payload()?;
-    set_discovery_payload();
+    let git_hash = get_git_hash()?;
+    set_discovery_payload(&git_hash);
     Ok(())
 }
