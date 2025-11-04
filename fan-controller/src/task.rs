@@ -434,6 +434,10 @@ async fn set_up_discovery<T: Publish>(
     outgoing: &Channel<CriticalSectionRawMutex, Message<'_, T>, 8>,
 ) {
     const DISCOVERY_PAYLOAD: &[u8] = env!("FAN_CONTROLLER_DISCOVERY_PAYLOAD").as_bytes();
+    info!(
+        "Sending discovery payload to {}",
+        topic::fan_controller::DISCOVERY,
+    );
     //TODO make constant and refactor to allow people to dynamically subscribe
     let discovery_publish = Message::PublishInternal(publish::Publish {
         topic_name: topic::fan_controller::DISCOVERY,
