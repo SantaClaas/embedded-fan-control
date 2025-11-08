@@ -80,7 +80,7 @@ pub enum DeviceClass {
 
 /// Internally tagged by the required `platform` (`p`) field
 #[derive(Serialize)]
-#[serde(tag = "p")]
+#[serde(tag = "p", rename_all = "lowercase")]
 pub enum Component {
     Fan {
         /// The name of the fan. Can be set to null if only the device name is relevant.
