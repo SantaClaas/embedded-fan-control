@@ -269,7 +269,7 @@ fn set_discovery_payload(git_hash: &str) {
                 "fan-1".to_string(),
                 Component::Fan {
                     name: Some("Fan 1"),
-                    unique_id: Some("fancontroller/fan-1"),
+                    unique_id: Some(topic::fan_controller::fan_1::UNIQUE_ID),
                     state_topic: Some(topic::fan_controller::fan_1::STATE),
                     command_topic: topic::fan_controller::fan_1::COMMAND,
                     percentage_state_topic: Some(topic::fan_controller::fan_1::percentage::STATE),
@@ -284,7 +284,7 @@ fn set_discovery_payload(git_hash: &str) {
                 "fan-2".to_string(),
                 Component::Fan {
                     name: Some("Fan 2"),
-                    unique_id: Some("fancontroller/fan-2"),
+                    unique_id: Some(topic::fan_controller::fan_2::UNIQUE_ID),
                     state_topic: Some(topic::fan_controller::fan_2::STATE),
                     command_topic: topic::fan_controller::fan_2::COMMAND,
                     percentage_state_topic: Some(topic::fan_controller::fan_2::percentage::STATE),
