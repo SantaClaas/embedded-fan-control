@@ -17,6 +17,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::process::Command;
 use std::rc::Rc;
+use std::str::Utf8Error;
 use std::string::FromUtf8Error;
 
 use home_assistant_discovery::{Component, Device, DiscoveryPayload, ListOrString, Origin};
@@ -28,7 +29,7 @@ enum GitHashError {
     #[error("Failed to execute git command: {0}")]
     CommandExecution(std::io::Error),
     #[error("Failed to parse git hash command output: {0}")]
-    ParseHash(FromUtf8Error),
+    ParseHash(#[from] Utf8Error),
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -232,15 +233,13 @@ fn setup_discovery_payload() -> Result<(), DiscoveryPayloadError> {
     Ok(())
 }
 
-fn get_git_hash() -> Result<String, GitHashError> {
+fn get_git_hash() -> Result<Rc<str>, GitHashError> {
     let output = Command::new("git")
         .args(["rev-parse", "--short", "HEAD"])
         .output()
         .map_err(GitHashError::CommandExecution)?;
 
-    let hash = String::from_utf8(output.stdout).map_err(GitHashError::ParseHash)?;
-
-    Ok(hash)
+    Ok(Rc::from(str::from_utf8(&output.stdout)?.trim()))
 }
 
 fn set_discovery_payload(git_hash: &str) {
@@ -251,7 +250,7 @@ fn set_discovery_payload(git_hash: &str) {
     let payload = DiscoveryPayload {
         device: Device {
             identifiers: Some(ListOrString::String(topic::fan_controller::OBJECT_ID)),
-            name: Some("Fan Controller"),
+            name: Some("New Fan Controller"),
             model: Some("Raspberry Pi Pico W 1"),
             manufacturer: Some("claas.dev"),
             hardware_version: Some("1.0"),
