@@ -11,3 +11,6 @@ runner specified which is also required to run on a connected RP2040 pico.
 If probe-rs gives a warning that the probe firmware is too old use these links
 https://www.raspberrypi.com/documentation/microcontrollers/debug-probe.html#updating-the-firmware-on-the-debug-probe
 https://github.com/raspberrypi/debugprobe/releases/tag/debugprobe-v2.2.3
+
+# Debugging MQTT discovery payload in Home Assistant
+If the MQTT discovery payload contains invalid values, it will usually be logged at under [Settings > System Log](http://homeassistant:8123/config/logs)
