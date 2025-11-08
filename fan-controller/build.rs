@@ -265,7 +265,7 @@ fn set_discovery_payload(git_hash: &str) {
         components: HashMap::from([
             // Fan 1
             (
-                "fan-1".to_string(),
+                topic::fan_controller::fan_1::UNIQUE_ID.to_string(),
                 Component::Fan {
                     name: Some("Fan 1"),
                     unique_id: Some(topic::fan_controller::fan_1::UNIQUE_ID),
@@ -280,7 +280,7 @@ fn set_discovery_payload(git_hash: &str) {
             ),
             // Fan 2
             (
-                "fan-2".to_string(),
+                topic::fan_controller::fan_2::UNIQUE_ID.to_string(),
                 Component::Fan {
                     name: Some("Fan 2"),
                     unique_id: Some(topic::fan_controller::fan_2::UNIQUE_ID),
