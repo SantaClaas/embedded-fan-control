@@ -491,6 +491,7 @@ async fn display_status(pin_21: PIN_21, pin_20: PIN_20) {
     }
 }
 
+/// Just a temporary struct to pass type checks while refactoring
 struct Temporary;
 
 impl From<publish::Publish<'_>> for Temporary {
@@ -564,6 +565,7 @@ async fn main(spawner: Spawner) {
         clk: impl PioPin,
         fans: &'static Fans,
         fan_controller: &'static FanController,
+        // sender_in:
     ) {
         let r#in = Channel::<CriticalSectionRawMutex, Temporary, 3>::new();
 
