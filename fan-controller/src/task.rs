@@ -600,6 +600,7 @@ const SUBSCRIPTIONS: [Subscription; 2] = [
 /// Trait must be implemented by types that represent messages that can be published to MQTT.
 pub(super) trait Publish {
     const TYPE: u8 = 3;
+    /// Providing the topic string for the publish allows implementing types to be defined as enums and match internally to provide the appropriate string for the enum variant.
     fn topic(&self) -> &str;
     fn payload(&self) -> &[u8];
 }
