@@ -557,10 +557,14 @@ async fn main(spawner: Spawner) {
         DMA_CH2: dma_ch2,
         PIN_24: pin_24,
         PIN_29: pin_29,
+        // Driver enable/disable pin to switch between sending and receiving data on UART/Modbus
         PIN_4: pin_4,
         UART0: uart0,
+        // Transmitter pin UART + Modbus
         PIN_12: pin_12,
+        // Receiver pin UART + Modbus
         PIN_13: pin_13,
+        // Button pin
         PIN_18: pin_18,
         // Status LEDs
         PIN_20: pin_20,
