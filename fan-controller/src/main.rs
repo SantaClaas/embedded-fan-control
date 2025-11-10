@@ -433,7 +433,7 @@ static FAN_CONTROLLER: FanController = FanController::new();
 /// Off On -> Fan on medium setting
 /// On On -> Fan on high setting
 #[embassy_executor::task]
-async fn display_status(pin_21: PIN_21, pin_20: PIN_20) {
+async fn led_routine(pin_21: PIN_21, pin_20: PIN_20) {
     // Setup LEDs
     let mut led_1 = Output::new(pin_21, Level::Low);
     let mut led_2 = Output::new(pin_20, Level::Low);
@@ -510,6 +510,25 @@ impl Publish for Temporary {
     }
 }
 
+#[embassy_executor::task]
+async fn mqtt_routine(
+    spawner: Spawner,
+    pwr_pin: PIN_23,
+    cs_pin: PIN_25,
+    pio: PIO0,
+    dma: DMA_CH0,
+    dio: impl PioPin,
+    clk: impl PioPin,
+    sender_in: channel::Sender<'static, CriticalSectionRawMutex, Temporary, 3>,
+    receiver_out: channel::Receiver<'static, CriticalSectionRawMutex, Temporary, 3>,
+) {
+    // Setting up the network in the task to not block from controlling the device without server connection
+    let stack = set_up_network_stack(spawner, pwr_pin, cs_pin, pio, dma, dio, clk).await;
+
+    crate::task::mqtt_with_connect(stack, sender_in, receiver_out, &configuration::MQTT_BROKER)
+        .await;
+}
+
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
     let Peripherals {
@@ -554,27 +573,6 @@ async fn main(spawner: Spawner) {
     unwrap!(spawner.spawn(input(pin_18)));
     unwrap!(spawner.spawn(update_fans()));
 
-    #[embassy_executor::task]
-    async fn mqtt_task(
-        spawner: Spawner,
-        pwr_pin: PIN_23,
-        cs_pin: PIN_25,
-        pio: PIO0,
-        dma: DMA_CH0,
-        dio: impl PioPin,
-        clk: impl PioPin,
-        fans: &'static Fans,
-        fan_controller: &'static FanController,
-        sender_in: channel::Sender<'static, CriticalSectionRawMutex, Temporary, 3>,
-        receiver_out: channel::Receiver<'static, CriticalSectionRawMutex, Temporary, 3>,
-    ) {
-        // Setting up the network in the task to not block from controlling the device without server connection
-        let stack = set_up_network_stack(spawner, pwr_pin, cs_pin, pio, dma, dio, clk).await;
-
-        crate::task::mqtt_with_connect(stack, sender_in, receiver_out, &configuration::MQTT_BROKER)
-            .await;
-    };
-
     static IN: Channel<CriticalSectionRawMutex, Temporary, 3> = Channel::new();
     let sender_in = IN.sender();
 
@@ -583,7 +581,7 @@ async fn main(spawner: Spawner) {
 
     // The MQTT task waits for publishes from MQTT and sends them to the modbus task.
     // It also sends updates from the modbus task that happen through button inputs to MQTT
-    unwrap!(spawner.spawn(mqtt_task(
+    unwrap!(spawner.spawn(mqtt_routine(
         spawner,
         pin_23,
         pin_25,
@@ -591,12 +589,10 @@ async fn main(spawner: Spawner) {
         dma_ch0,
         pin_24,
         pin_29,
-        &FANS,
-        &FAN_CONTROLLER,
         sender_in,
         receiver_out
     )));
-    unwrap!(spawner.spawn(display_status(pin_21, pin_20)));
+    unwrap!(spawner.spawn(led_routine(pin_21, pin_20)));
 }
 
 #[cfg(test)]
