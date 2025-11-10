@@ -22,7 +22,7 @@ use embassy_rp::pio::{InterruptHandler as PioInterruptHandler, Pio, PioPin};
 use embassy_rp::uart::BufferedInterruptHandler;
 use embassy_rp::{bind_interrupts, Peripherals};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
-use embassy_sync::channel::Channel;
+use embassy_sync::channel::{self, Channel};
 use embassy_sync::mutex::Mutex;
 use embassy_sync::pubsub::PubSubChannel;
 use embassy_sync::watch::Watch;
@@ -565,22 +565,22 @@ async fn main(spawner: Spawner) {
         clk: impl PioPin,
         fans: &'static Fans,
         fan_controller: &'static FanController,
-        // sender_in:
+        sender_in: channel::Sender<'static, CriticalSectionRawMutex, Temporary, 3>,
+        receiver_out: channel::Receiver<'static, CriticalSectionRawMutex, Temporary, 3>,
     ) {
-        let r#in = Channel::<CriticalSectionRawMutex, Temporary, 3>::new();
-
-        let sender_in = r#in.sender();
-        let receiver_in = r#in.receiver();
-
-        let out = Channel::<CriticalSectionRawMutex, Temporary, 3>::new();
-        let sender_out = out.sender();
-        let receiver_out = out.receiver();
-
+        // Setting up the network in the task to not block from controlling the device without server connection
         let stack = set_up_network_stack(spawner, pwr_pin, cs_pin, pio, dma, dio, clk).await;
 
         crate::task::mqtt_with_connect(stack, sender_in, receiver_out, &configuration::MQTT_BROKER)
             .await;
     };
+
+    static IN: Channel<CriticalSectionRawMutex, Temporary, 3> = Channel::new();
+    let sender_in = IN.sender();
+
+    static OUT: Channel<CriticalSectionRawMutex, Temporary, 3> = Channel::new();
+    let receiver_out = OUT.receiver();
+
     // The MQTT task waits for publishes from MQTT and sends them to the modbus task.
     // It also sends updates from the modbus task that happen through button inputs to MQTT
     unwrap!(spawner.spawn(mqtt_task(
@@ -593,6 +593,8 @@ async fn main(spawner: Spawner) {
         pin_29,
         &FANS,
         &FAN_CONTROLLER,
+        sender_in,
+        receiver_out
     )));
     unwrap!(spawner.spawn(display_status(pin_21, pin_20)));
 }
