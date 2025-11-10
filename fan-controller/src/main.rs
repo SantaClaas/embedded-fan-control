@@ -510,6 +510,23 @@ impl Publish for Temporary {
     }
 }
 
+/// Handles all the incoming MQTT messages and decides what to do with them in the context of the fan controller
+#[embassy_executor::task]
+async fn mqtt_brain_routine(
+    receiver_in: channel::Receiver<'static, CriticalSectionRawMutex, Temporary, 3>,
+) {
+    loop {
+        let message = receiver_in.receive().await;
+        // This is where we handle the incoming message and notify the other components of this fan controller
+        match message {
+            Temporary => {
+                info!("Received temporary publish!")
+            }
+        }
+    }
+}
+
+/// Sets up and manages the MQTT connection like keeping it alive
 #[embassy_executor::task]
 async fn mqtt_routine(
     spawner: Spawner,
@@ -573,9 +590,12 @@ async fn main(spawner: Spawner) {
     unwrap!(spawner.spawn(input(pin_18)));
     unwrap!(spawner.spawn(update_fans()));
 
+    /// Channel for messages incoming from the MQTT broker to this fan controller
     static IN: Channel<CriticalSectionRawMutex, Temporary, 3> = Channel::new();
     let sender_in = IN.sender();
+    let receiver_in = IN.receiver();
 
+    /// Channel for messages outgoing from this fan controller to the MQTT broker
     static OUT: Channel<CriticalSectionRawMutex, Temporary, 3> = Channel::new();
     let receiver_out = OUT.receiver();
 
@@ -593,6 +613,7 @@ async fn main(spawner: Spawner) {
         receiver_out
     )));
     unwrap!(spawner.spawn(led_routine(pin_21, pin_20)));
+    unwrap!(spawner.spawn(mqtt_brain_routine(receiver_in)));
 }
 
 #[cfg(test)]
