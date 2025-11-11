@@ -492,15 +492,32 @@ async fn led_routine(pin_21: PIN_21, pin_20: PIN_20) {
     }
 }
 
+enum Fan {
+    One,
+    Two,
+}
+
+enum FanCommand {
+    SetSpeed { set_point: SetPoint },
+}
 enum FanControlPublish {
-    SetFanSpeed { set_point: SetPoint },
+    FanCommand {
+        /// The fan the publish is addressed to
+        target: Fan,
+        command: FanCommand,
+    },
 }
 
 impl From<publish::Publish<'_>> for FanControlPublish {
     fn from(publish: publish::Publish<'_>) -> Self {
-        FanControlPublish::SetFanSpeed {
-            set_point: SetPoint::new(12),
+        match publish.topic_name {
+            "" => {}
+            topic::fan_controller::fan_1::percentage::COMMAND => {
+                // let payload = core::str::
+            }
+            other => {}
         }
+        defmt::todo!()
     }
 }
 

@@ -1,6 +1,8 @@
 //! ebm-pabst [RadiCal centrifugal fans in scroll housings for residential ventilation](https://www.ebmpapst.com/us/en/campaigns/product-campaigns/centrifugal-fans/radical-with-scroll-housing.html)
 //! specific configuration and constants
 
+use core::str::FromStr;
+
 use crate::modbus::ReadInputRegister;
 use crate::{configuration, modbus};
 use defmt::{error, info, Format};
@@ -53,6 +55,20 @@ impl SetPoint {
 
     const fn get(&self) -> u16 {
         self.0
+    }
+}
+
+pub(crate) enum ParseSetPointError {
+    ParseInt(core::num::ParseIntError),
+    SettingOutOfBounds(SetPointOutOfBoundsError),
+}
+
+impl FromStr for SetPoint {
+    type Err = ParseSetPointError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let set_point = s.parse().map_err(ParseSetPointError::ParseInt)?;
+        Self::new(set_point).map_err(ParseSetPointError::SettingOutOfBounds)
     }
 }
 
