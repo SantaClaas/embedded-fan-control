@@ -122,7 +122,7 @@ async fn handle_publish<'f>(
             };
 
             info!("SETTING FAN {}", set_point);
-            let Ok(setting) = fan::Setting::new(set_point) else {
+            let Ok(setting) = fan::SetPoint::new(set_point) else {
                 warn!(
                     "Setting fan speed out of bounds. Not accepting new setting: {}",
                     set_point
@@ -150,7 +150,7 @@ async fn handle_publish<'f>(
                 setting: sender
                     .try_get()
                     .map(|state| state.setting)
-                    .unwrap_or(fan::Setting::ZERO),
+                    .unwrap_or(fan::SetPoint::ZERO),
                 is_on,
             });
             // Home assistant and fan update will be done by receiver
@@ -274,7 +274,7 @@ async fn listen<E: Format, Send: for<'a> From<publish::Publish<'a>>, const SEND:
 
 enum PredefinedPublish {
     FanPercentageState {
-        setting: fan::Setting,
+        setting: fan::SetPoint,
     },
     FanOnState {
         is_on: bool,
@@ -523,7 +523,7 @@ async fn update_homeassistant<T: Publish>(
     // which is good as we don't know the state on homeassistant
     let mut previous_state = receiver.try_get().unwrap_or(FanState {
         is_on: false,
-        setting: fan::Setting::ZERO,
+        setting: fan::SetPoint::ZERO,
     });
 
     loop {

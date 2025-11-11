@@ -30,16 +30,17 @@ const BLOCK_FOR: Duration = Duration::from_micros(5_000);
 
 pub(crate) const MAX_SET_POINT: u16 = 64_000;
 
+/// Describes the desired speed of the fan from 0 to [`MAX_SET_POINT`]
 #[derive(Debug, Format, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct Setting(pub(crate) u16);
+pub(crate) struct SetPoint(pub(crate) u16);
 
 #[derive(Debug, Format)]
 pub(crate) struct SetPointOutOfBoundsError;
 
-impl Setting {
+impl SetPoint {
     pub(crate) const ZERO: Self = match Self::new(0) {
         Ok(setting) => setting,
-        Err(error) => panic!("Invalid value"),
+        Err(error) => panic!("Invalid value. This should not be reachable."),
     };
 
     pub(crate) const fn new(set_point: u16) -> Result<Self, SetPointOutOfBoundsError> {
@@ -61,19 +62,19 @@ pub(crate) mod user_setting {
     use crate::fan;
 
     /// Max speed 64000 / 3.3
-    pub(crate) const LOW: fan::Setting = match fan::Setting::new(19_393) {
+    pub(crate) const LOW: fan::SetPoint = match fan::SetPoint::new(19_393) {
         Ok(setting) => setting,
         Err(error) => panic!("Invalid value"),
     };
     /// Max speed 64000 / 2.4
-    pub(crate) const MEDIUM: fan::Setting = match fan::Setting::new(26_666) {
+    pub(crate) const MEDIUM: fan::SetPoint = match fan::SetPoint::new(26_666) {
         Ok(setting) => setting,
         Err(error) => panic!("Invalid value"),
     };
 
     /// Max speed 50%
     /// Not set to full speed to not wear out the fans
-    pub(crate) const HIGH: fan::Setting = match fan::Setting::new(fan::MAX_SET_POINT / 2) {
+    pub(crate) const HIGH: fan::SetPoint = match fan::SetPoint::new(fan::MAX_SET_POINT / 2) {
         Ok(setting) => setting,
         Err(error) => panic!("Invalid value"),
     };
@@ -295,7 +296,7 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
     /// The mutable reference to self here is important as there can only be one writer to the (mod)bus at a time
     pub(crate) async fn set_set_point(
         &mut self,
-        Setting(set_point): &Setting,
+        SetPoint(set_point): &SetPoint,
     ) -> Result<(), Error> {
         // Send update through UART to MAX845 to modbus fans
         // Form message to fan 1

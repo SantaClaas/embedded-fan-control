@@ -35,6 +35,7 @@ use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
 
 use self::mqtt::packet;
+use crate::fan::SetPoint;
 use crate::mqtt::packet::ping_request::PingRequest;
 use crate::mqtt::packet::{connect, publish, subscribe};
 use crate::task::{set_up_network_stack, MqttBrokerConfiguration, Publish};
@@ -265,7 +266,7 @@ async fn mqtt_task_client(
 
     let (reader, writer) = socket.split();
     if let Err(error) =
-        MqttClient::<Temporary, TcpWriter, tcp::Error, TcpReader, tcp::Error>::connect(
+        MqttClient::<FanControlPublish, TcpWriter, tcp::Error, TcpReader, tcp::Error>::connect(
             reader, writer,
         )
         .await
@@ -310,7 +311,7 @@ async fn input(pin_18: PIN_18) {
                     .0
                     .try_get()
                     .map(|state| state.setting)
-                    .unwrap_or(fan::Setting::ZERO);
+                    .unwrap_or(fan::SetPoint::ZERO);
                 FanState {
                     setting,
                     is_on: false,
@@ -347,7 +348,7 @@ async fn update_fans() {
     // Only comparing on state causes button triggers to be ignored
     let mut previous = FAN_CONTROLLER.fan_states.0.try_get().unwrap_or(FanState {
         is_on: false,
-        setting: fan::Setting::ZERO,
+        setting: fan::SetPoint::ZERO,
     });
 
     loop {
@@ -369,7 +370,7 @@ async fn update_fans() {
             state.setting
         } else {
             // Turn off fans
-            fan::Setting::ZERO
+            fan::SetPoint::ZERO
         };
 
         match fans.set_set_point(&setting).await {
@@ -398,7 +399,7 @@ static FANS: Fans = Mutex::new(None);
 #[derive(PartialEq, Clone)]
 struct FanState {
     is_on: bool,
-    setting: fan::Setting,
+    setting: fan::SetPoint,
 }
 
 struct FanController {
@@ -455,7 +456,7 @@ async fn led_routine(pin_21: PIN_21, pin_20: PIN_20) {
     // Set initial state
     let mut current_state = FAN_CONTROLLER.fan_states.0.try_get().unwrap_or(FanState {
         is_on: false,
-        setting: fan::Setting::ZERO,
+        setting: fan::SetPoint::ZERO,
     });
 
     loop {
@@ -491,16 +492,19 @@ async fn led_routine(pin_21: PIN_21, pin_20: PIN_20) {
     }
 }
 
-/// Just a temporary struct to pass type checks while refactoring
-struct Temporary;
+enum FanControlPublish {
+    SetFanSpeed { set_point: SetPoint },
+}
 
-impl From<publish::Publish<'_>> for Temporary {
+impl From<publish::Publish<'_>> for FanControlPublish {
     fn from(publish: publish::Publish<'_>) -> Self {
-        Temporary
+        FanControlPublish::SetFanSpeed {
+            set_point: SetPoint::new(12),
+        }
     }
 }
 
-impl Publish for Temporary {
+impl Publish for FanControlPublish {
     fn topic(&self) -> &str {
         "temporary"
     }
@@ -513,13 +517,13 @@ impl Publish for Temporary {
 /// Handles all the incoming MQTT messages and decides what to do with them in the context of the fan controller
 #[embassy_executor::task]
 async fn mqtt_brain_routine(
-    receiver_in: channel::Receiver<'static, CriticalSectionRawMutex, Temporary, 3>,
+    receiver_in: channel::Receiver<'static, CriticalSectionRawMutex, FanControlPublish, 3>,
 ) {
     loop {
         let message = receiver_in.receive().await;
         // This is where we handle the incoming message and notify the other components of this fan controller
         match message {
-            Temporary => {
+            FanControlPublish => {
                 info!("Received temporary publish!")
             }
         }
@@ -536,8 +540,8 @@ async fn mqtt_routine(
     dma: DMA_CH0,
     dio: impl PioPin,
     clk: impl PioPin,
-    sender_in: channel::Sender<'static, CriticalSectionRawMutex, Temporary, 3>,
-    receiver_out: channel::Receiver<'static, CriticalSectionRawMutex, Temporary, 3>,
+    sender_in: channel::Sender<'static, CriticalSectionRawMutex, FanControlPublish, 3>,
+    receiver_out: channel::Receiver<'static, CriticalSectionRawMutex, FanControlPublish, 3>,
 ) {
     // Setting up the network in the task to not block from controlling the device without server connection
     let stack = set_up_network_stack(spawner, pwr_pin, cs_pin, pio, dma, dio, clk).await;
@@ -595,12 +599,12 @@ async fn main(spawner: Spawner) {
     unwrap!(spawner.spawn(update_fans()));
 
     /// Channel for messages incoming from the MQTT broker to this fan controller
-    static IN: Channel<CriticalSectionRawMutex, Temporary, 3> = Channel::new();
+    static IN: Channel<CriticalSectionRawMutex, FanControlPublish, 3> = Channel::new();
     let sender_in = IN.sender();
     let receiver_in = IN.receiver();
 
     /// Channel for messages outgoing from this fan controller to the MQTT broker
-    static OUT: Channel<CriticalSectionRawMutex, Temporary, 3> = Channel::new();
+    static OUT: Channel<CriticalSectionRawMutex, FanControlPublish, 3> = Channel::new();
     let receiver_out = OUT.receiver();
 
     // The MQTT task waits for publishes from MQTT and sends them to the modbus task.
@@ -625,7 +629,7 @@ mod tests {
     // The tests don't run on the embedded target, so we need to import the std crate
 
     extern crate std;
-    use crate::fan::{SetPointOutOfBoundsError, Setting};
+    use crate::fan::{SetPoint, SetPointOutOfBoundsError};
 
     use super::*;
 
@@ -633,8 +637,8 @@ mod tests {
     #[test]
     fn setting_does_not_exceed_max_set_point() {
         core::assert_eq!(fan::MAX_SET_POINT, 64_000);
-        core::assert_eq!(Setting::new(64_000), Ok(Setting(64_000)));
-        core::assert_eq!(Setting::new(64_000 + 1), Err(SetPointOutOfBoundsError));
-        core::assert_eq!(Setting::new(u16::MAX), Err(SetPointOutOfBoundsError));
+        core::assert_eq!(SetPoint::new(64_000), Ok(SetPoint(64_000)));
+        core::assert_eq!(SetPoint::new(64_000 + 1), Err(SetPointOutOfBoundsError));
+        core::assert_eq!(SetPoint::new(u16::MAX), Err(SetPointOutOfBoundsError));
     }
 }
