@@ -7,9 +7,9 @@ use crate::mqtt::packet::subscribe_acknowledgement::SubscribeAcknowledgement;
 use crate::mqtt::task::send;
 use crate::mqtt::{self};
 use crate::mqtt::{non_zero_u16, TryDecode};
-use crate::Fans;
 use crate::PingRequest;
 use crate::{configuration, fan, gain_control, FanState};
+use crate::{modbus, Fans};
 use ::mqtt::QualityOfService;
 use core::future::poll_fn;
 use core::num::NonZeroU16;
@@ -570,11 +570,11 @@ async fn poll_sensors(fans: Fans) {
 
         let temperature = match fans.get_temperature(fan::Fan::One).await {
             Ok(temperature) => temperature,
-            Err(fan::Error::Timeout(TimeoutError)) => {
+            Err(modbus::client::Error::Timeout(_)) => {
                 error!("Timeout getting temperature for fan 1");
                 return;
             }
-            Err(fan::Error::Uart(error)) => {
+            Err(modbus::client::Error::Uart(error)) => {
                 error!("Uart error getting temperature for fan 1: {:?}", error);
                 return;
             }

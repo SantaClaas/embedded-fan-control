@@ -36,7 +36,7 @@ use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
 
 use self::mqtt::packet;
-use crate::fan::{ParseSetPointError, SetPoint};
+use crate::fan::{Fan, ParseSetPointError, SetPoint};
 use crate::mqtt::packet::ping_request::PingRequest;
 use crate::mqtt::packet::{connect, publish, subscribe};
 use crate::task::{set_up_network_stack, MqttBrokerConfiguration, Publish};
@@ -235,11 +235,11 @@ async fn update_fans() {
 
         match fans.set_set_point(&setting).await {
             Ok(_) => {}
-            Err(fan::Error::Timeout(TimeoutError)) => {
+            Err(modbus::client::Error::Timeout(_)) => {
                 error!("Timeout setting fan speed");
                 continue;
             }
-            Err(fan::Error::Uart(error)) => {
+            Err(modbus::client::Error::Uart(error)) => {
                 error!("Uart error setting fan speed: {:?}", error);
                 continue;
             }
@@ -250,7 +250,7 @@ async fn update_fans() {
     }
 }
 
-type Fans = Mutex<CriticalSectionRawMutex, Option<fan::Client<'static, UART0, PIN_4>>>;
+type Fans = Mutex<CriticalSectionRawMutex, Option<modbus::client::Client<'static, UART0, PIN_4>>>;
 /// Use this to make calls to the fans through modbus
 static FANS: Fans = Mutex::new(None);
 
@@ -350,11 +350,6 @@ async fn led_routine(pin_21: PIN_21, pin_20: PIN_20) {
         // Wait for state update
         current_state = receiver.changed().await;
     }
-}
-
-enum Fan {
-    One,
-    Two,
 }
 
 enum FanCommand {
@@ -542,8 +537,17 @@ async fn main(spawner: Spawner) {
     static RX_BUFFER: StaticCell<[u8; 16]> = StaticCell::new();
     let rx_buffer = &mut RX_BUFFER.init([0; 16])[..];
 
-    let client = fan::Client::new(
-        uart0, pin_12, pin_13, Irqs, dma_ch1, dma_ch2, pin_4, tx_buffer, rx_buffer,
+    let client = modbus::client::Client::new(
+        uart0,
+        pin_12,
+        pin_13,
+        Irqs,
+        dma_ch1,
+        dma_ch2,
+        pin_4,
+        tx_buffer,
+        rx_buffer,
+        fan::get_configuration(),
     );
     //TODO load fan setting from fan
     // Inner scope to drop the guard after assigning

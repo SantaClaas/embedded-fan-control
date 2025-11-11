@@ -1,3 +1,5 @@
+pub(crate) mod client;
+
 use crc::{Crc, CRC_16_MODBUS};
 pub(super) mod function_code {
     pub const READ_HOLDING_REGISTER: u8 = 0x03;
