@@ -177,9 +177,14 @@ enum ClientState {
     ConnectionLost,
 }
 
-async fn listen<E: Format, Send: for<'a> TryFrom<publish::Publish<'a>>, const SEND: usize>(
-    reader: &mut impl Read<Error = E>,
-    sender: &channel::Sender<'_, CriticalSectionRawMutex, Send, SEND>,
+async fn listen<
+    ReadError: Format,
+    FromError,
+    Send: for<'a> TryFrom<publish::Publish<'a>, Error = FromError>,
+    const SEND: usize,
+>(
+    reader: &mut impl Read<Error = ReadError>,
+    sender: &channel::Sender<'_, CriticalSectionRawMutex, Result<Send, FromError>, SEND>,
     client_state: &Signal<CriticalSectionRawMutex, ClientState>,
     acknowledgements: &Mutex<CriticalSectionRawMutex, [bool; 2]>,
     ping_response_signal: &Signal<CriticalSectionRawMutex, PingResponse>,
@@ -228,21 +233,15 @@ async fn listen<E: Format, Send: for<'a> TryFrom<publish::Publish<'a>>, const SE
                     }
                 };
 
+                // MQTT does not concern itself with validity of the payload
+                // We allow for a TryFrom implementation anyways to reduce boilerplate for users
+                // because if we only allow a From implementation users would have to create their own result type
+                // that implements the From trait and stores the error to be passed on.
+                // If users still want to use a From implementation then they can still do this
+                // as any type that implements From, automatically implements TryFrom
                 let result = Send::try_from(publish);
-                match result {
-                    Ok(value) => {
-                        info!("Parsed valid publish");
-
-                        sender.send(value).await;
-                    }
-                    //TODO What should the MQTT client implementations behavior be when a users publish implementation fails parsing?
-                    // Should it stop and abort?
-                    // Should it bubble the error up to the user?
-                    // Should it send the error through the channel?
-                    Err(error) => {
-                        error!("Error parsing publish");
-                    }
-                }
+                sender.send(result).await;
+                info!("Handled publish")
             }
             SubscribeAcknowledgement::TYPE => {
                 let subscribe_acknowledgement =
@@ -740,14 +739,15 @@ pub(super) async fn mqtt_with_connect<
     'sender,
     'receiver,
     'configuration,
-    Receive: for<'a> TryFrom<publish::Publish<'a>>,
+    FromError,
+    Receive: for<'a> TryFrom<publish::Publish<'a>, Error = FromError>,
     const RECEIVE: usize,
     Send: Publish,
     const SEND: usize,
     D: Driver + 'static,
 >(
     stack: &Stack<D>,
-    sender: channel::Sender<'sender, CriticalSectionRawMutex, Receive, RECEIVE>,
+    sender: channel::Sender<'sender, CriticalSectionRawMutex, Result<Receive, FromError>, RECEIVE>,
     receiver: channel::Receiver<'receiver, CriticalSectionRawMutex, Send, SEND>,
     mqtt_broker_configuration: &MqttBrokerConfiguration<'configuration>,
 )

@@ -359,6 +359,7 @@ enum Fan {
 enum FanCommand {
     SetSpeed { set_point: SetPoint },
 }
+
 enum FanControlPublish {
     FanCommand {
         /// The fan the publish is addressed to
@@ -367,8 +368,13 @@ enum FanControlPublish {
     },
 }
 
-impl From<publish::Publish<'_>> for FanControlPublish {
-    fn from(publish: publish::Publish<'_>) -> Self {
+#[derive(Debug, defmt::Format)]
+enum FromPublishError {}
+
+impl TryFrom<publish::Publish<'_>> for FanControlPublish {
+    type Error = FromPublishError;
+
+    fn try_from(publish: publish::Publish<'_>) -> Result<Self, Self::Error> {
         match publish.topic_name {
             "" => {}
             topic::fan_controller::fan_1::percentage::COMMAND => {
@@ -393,16 +399,26 @@ impl Publish for FanControlPublish {
 /// Handles all the incoming MQTT messages and decides what to do with them in the context of the fan controller
 #[embassy_executor::task]
 async fn mqtt_brain_routine(
-    receiver_in: channel::Receiver<'static, CriticalSectionRawMutex, FanControlPublish, 3>,
+    receiver_in: channel::Receiver<
+        'static,
+        CriticalSectionRawMutex,
+        Result<FanControlPublish, FromPublishError>,
+        3,
+    >,
 ) {
     loop {
         let message = receiver_in.receive().await;
-        // This is where we handle the incoming message and notify the other components of this fan controller
-        match message {
-            FanControlPublish => {
-                info!("Received temporary publish!")
+
+        let payload = match message {
+            Err(error) => {
+                error!("Error parsing publish payload: {:?}", error);
+                continue;
             }
-        }
+            Ok(payload) => payload,
+        };
+
+        info!("Received valid payload!");
+        //TODO
     }
 }
 
@@ -416,7 +432,12 @@ async fn mqtt_routine(
     dma: DMA_CH0,
     dio: impl PioPin,
     clk: impl PioPin,
-    sender_in: channel::Sender<'static, CriticalSectionRawMutex, FanControlPublish, 3>,
+    sender_in: channel::Sender<
+        'static,
+        CriticalSectionRawMutex,
+        Result<FanControlPublish, FromPublishError>,
+        3,
+    >,
     receiver_out: channel::Receiver<'static, CriticalSectionRawMutex, FanControlPublish, 3>,
 ) {
     // Setting up the network in the task to not block from controlling the device without server connection
@@ -475,7 +496,8 @@ async fn main(spawner: Spawner) {
     unwrap!(spawner.spawn(update_fans()));
 
     /// Channel for messages incoming from the MQTT broker to this fan controller
-    static IN: Channel<CriticalSectionRawMutex, FanControlPublish, 3> = Channel::new();
+    static IN: Channel<CriticalSectionRawMutex, Result<FanControlPublish, FromPublishError>, 3> =
+        Channel::new();
     let sender_in = IN.sender();
     let receiver_in = IN.receiver();
 
