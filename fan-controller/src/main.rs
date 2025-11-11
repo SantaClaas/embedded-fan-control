@@ -25,6 +25,7 @@ use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::{self, Channel};
 use embassy_sync::mutex::Mutex;
 use embassy_sync::pubsub::PubSubChannel;
+use embassy_sync::signal::Signal;
 use embassy_sync::watch::Watch;
 use embassy_time::{Duration, Instant, TimeoutError, Timer};
 use embedded_nal_async::TcpConnect;
@@ -426,32 +427,6 @@ impl Publish for FanControlPublish {
     }
 }
 
-/// Handles all the incoming MQTT messages and decides what to do with them in the context of the fan controller
-#[embassy_executor::task]
-async fn mqtt_brain_routine(
-    receiver_in: channel::Receiver<
-        'static,
-        CriticalSectionRawMutex,
-        Result<FanControlPublish, FromPublishError>,
-        3,
-    >,
-) {
-    loop {
-        let message = receiver_in.receive().await;
-
-        let payload = match message {
-            Err(error) => {
-                error!("Error parsing publish payload");
-                continue;
-            }
-            Ok(payload) => payload,
-        };
-
-        info!("Received valid payload!");
-        //TODO
-    }
-}
-
 /// Sets up and manages the MQTT connection like keeping it alive
 #[embassy_executor::task]
 async fn mqtt_routine(
@@ -475,6 +450,61 @@ async fn mqtt_routine(
 
     crate::task::mqtt_with_connect(stack, sender_in, receiver_out, &configuration::MQTT_BROKER)
         .await;
+}
+
+/// Handles all the incoming MQTT messages and decides what to do with them in the context of the fan controller
+#[embassy_executor::task]
+async fn mqtt_brain_routine(
+    receiver_in: channel::Receiver<
+        'static,
+        CriticalSectionRawMutex,
+        Result<FanControlPublish, FromPublishError>,
+        3,
+    >,
+    fan_one_state: &'static Signal<CriticalSectionRawMutex, SetPoint>,
+    fan_two_state: &'static Signal<CriticalSectionRawMutex, SetPoint>,
+) {
+    loop {
+        info!("Waiting for new publish");
+        let message = receiver_in.receive().await;
+
+        let publish = match message {
+            Err(error) => {
+                match error {
+                    FromPublishError::InvalidStringPayload(utf8_error) => {
+                        error!("Invalid UTF-8 payload");
+                    }
+                    FromPublishError::ParseSetPoint(parse_set_point_error) => {
+                        error!("Invalid set point payload");
+                    }
+                    FromPublishError::UnknownTopic => error!("Unknown topic. Look for ealier logs"),
+                }
+                continue;
+            }
+            Ok(payload) => payload,
+        };
+
+        info!("Received valid payload!");
+
+        match publish {
+            FanControlPublish::FanCommand {
+                target,
+                command: FanCommand::SetSpeed { set_point },
+            } => match target {
+                Fan::One => fan_one_state.signal(set_point),
+                Fan::Two => fan_two_state.signal(set_point),
+            },
+        }
+    }
+}
+
+#[embassy_executor::task]
+async fn fan_control_routine(fan_state: &'static Signal<CriticalSectionRawMutex, SetPoint>) {
+    loop {
+        let state = fan_state.wait().await;
+        //TODO retry logic
+        info!("Received fan state")
+    }
 }
 
 #[embassy_executor::main]
@@ -529,7 +559,6 @@ async fn main(spawner: Spawner) {
     static IN: Channel<CriticalSectionRawMutex, Result<FanControlPublish, FromPublishError>, 3> =
         Channel::new();
     let sender_in = IN.sender();
-    let receiver_in = IN.receiver();
 
     /// Channel for messages outgoing from this fan controller to the MQTT broker
     static OUT: Channel<CriticalSectionRawMutex, FanControlPublish, 3> = Channel::new();
@@ -549,7 +578,19 @@ async fn main(spawner: Spawner) {
         receiver_out
     )));
     unwrap!(spawner.spawn(led_routine(pin_21, pin_20)));
-    unwrap!(spawner.spawn(mqtt_brain_routine(receiver_in)));
+
+    static FAN_ONE_STATE: Signal<CriticalSectionRawMutex, SetPoint> = Signal::new();
+    static FAN_TWO_STATE: Signal<CriticalSectionRawMutex, SetPoint> = Signal::new();
+
+    let receiver_in = IN.receiver();
+    unwrap!(spawner.spawn(mqtt_brain_routine(
+        receiver_in,
+        &FAN_ONE_STATE,
+        &FAN_TWO_STATE
+    )));
+
+    unwrap!(spawner.spawn(fan_control_routine(&FAN_ONE_STATE)));
+    unwrap!(spawner.spawn(fan_control_routine(&FAN_TWO_STATE)));
 }
 
 #[cfg(test)]
