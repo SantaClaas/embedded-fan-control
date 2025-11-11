@@ -35,7 +35,7 @@ use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
 
 use self::mqtt::packet;
-use crate::fan::SetPoint;
+use crate::fan::{ParseSetPointError, SetPoint};
 use crate::mqtt::packet::ping_request::PingRequest;
 use crate::mqtt::packet::{connect, publish, subscribe};
 use crate::task::{set_up_network_stack, MqttBrokerConfiguration, Publish};
@@ -368,21 +368,51 @@ enum FanControlPublish {
     },
 }
 
-#[derive(Debug, defmt::Format)]
-enum FromPublishError {}
+enum FromPublishError {
+    // Invalid fan command
+    InvalidStringPayload(core::str::Utf8Error),
+    ParseSetPoint(ParseSetPointError),
+
+    UnknownTopic,
+}
 
 impl TryFrom<publish::Publish<'_>> for FanControlPublish {
     type Error = FromPublishError;
 
     fn try_from(publish: publish::Publish<'_>) -> Result<Self, Self::Error> {
         match publish.topic_name {
-            "" => {}
             topic::fan_controller::fan_1::percentage::COMMAND => {
-                // let payload = core::str::
+                let payload = core::str::from_utf8(publish.payload)
+                    .map_err(FromPublishError::InvalidStringPayload)?;
+
+                let set_point: SetPoint =
+                    payload.parse().map_err(FromPublishError::ParseSetPoint)?;
+
+                Ok(FanControlPublish::FanCommand {
+                    target: Fan::One,
+                    command: FanCommand::SetSpeed { set_point },
+                })
             }
-            other => {}
+            topic::fan_controller::fan_2::percentage::COMMAND => {
+                let payload = core::str::from_utf8(publish.payload)
+                    .map_err(FromPublishError::InvalidStringPayload)?;
+
+                let set_point: SetPoint =
+                    payload.parse().map_err(FromPublishError::ParseSetPoint)?;
+
+                Ok(FanControlPublish::FanCommand {
+                    target: Fan::Two,
+                    command: FanCommand::SetSpeed { set_point },
+                })
+            }
+            other => {
+                warn!(
+                    "Unexpected topic: {} with payload: {}",
+                    other, publish.payload
+                );
+                Err(FromPublishError::UnknownTopic)
+            }
         }
-        defmt::todo!()
     }
 }
 
@@ -411,7 +441,7 @@ async fn mqtt_brain_routine(
 
         let payload = match message {
             Err(error) => {
-                error!("Error parsing publish payload: {:?}", error);
+                error!("Error parsing publish payload");
                 continue;
             }
             Ok(payload) => payload,
