@@ -177,7 +177,7 @@ enum ClientState {
     ConnectionLost,
 }
 
-async fn listen<E: Format, Send: for<'a> From<publish::Publish<'a>>, const SEND: usize>(
+async fn listen<E: Format, Send: for<'a> TryFrom<publish::Publish<'a>>, const SEND: usize>(
     reader: &mut impl Read<Error = E>,
     sender: &channel::Sender<'_, CriticalSectionRawMutex, Send, SEND>,
     client_state: &Signal<CriticalSectionRawMutex, ClientState>,
@@ -228,8 +228,21 @@ async fn listen<E: Format, Send: for<'a> From<publish::Publish<'a>>, const SEND:
                     }
                 };
 
-                let value = Send::from(publish);
-                info!("Handled publish");
+                let result = Send::try_from(publish);
+                match result {
+                    Ok(value) => {
+                        info!("Parsed valid publish");
+
+                        sender.send(value).await;
+                    }
+                    //TODO What should the MQTT client implementations behavior be when a users publish implementation fails parsing?
+                    // Should it stop and abort?
+                    // Should it bubble the error up to the user?
+                    // Should it send the error through the channel?
+                    Err(error) => {
+                        error!("Error parsing publish");
+                    }
+                }
             }
             SubscribeAcknowledgement::TYPE => {
                 let subscribe_acknowledgement =
@@ -798,7 +811,7 @@ pub(super) async fn mqtt_with_connect<
     'sender,
     'receiver,
     'configuration,
-    Receive: for<'a> From<publish::Publish<'a>>,
+    Receive: for<'a> TryFrom<publish::Publish<'a>>,
     const RECEIVE: usize,
     Send: Publish,
     const SEND: usize,
