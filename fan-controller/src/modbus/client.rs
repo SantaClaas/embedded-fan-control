@@ -11,7 +11,7 @@ use embedded_io_async::{Read, Write};
 
 use crate::{
     configuration,
-    fan::{self, address, holding_registers, Fan, FanResponse, SetPoint, BAUD_RATE},
+    fan::{self, address, holding_registers, set_point::SetPoint, Fan, FanResponse, BAUD_RATE},
     modbus::{self, ReadInputRegister},
 };
 

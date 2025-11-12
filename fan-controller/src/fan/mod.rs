@@ -1,6 +1,8 @@
 //! ebm-pabst [RadiCal centrifugal fans in scroll housings for residential ventilation](https://www.ebmpapst.com/us/en/campaigns/product-campaigns/centrifugal-fans/radical-with-scroll-housing.html)
 //! specific configuration and constants
 
+pub(crate) mod set_point;
+
 use core::str::FromStr;
 
 use crate::modbus::ReadInputRegister;
@@ -28,67 +30,28 @@ pub(crate) fn get_configuration() -> uart::Config {
     configuration
 }
 
-pub(crate) const MAX_SET_POINT: u16 = 64_000;
-
-/// Describes the desired speed of the fan from 0 to [`MAX_SET_POINT`]
-#[derive(Debug, Format, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct SetPoint(pub(crate) u16);
-
-#[derive(Debug, Format)]
-pub(crate) struct SetPointOutOfBoundsError;
-
-impl SetPoint {
-    pub(crate) const ZERO: Self = match Self::new(0) {
-        Ok(setting) => setting,
-        Err(error) => panic!("Invalid value. This should not be reachable."),
-    };
-
-    pub(crate) const fn new(set_point: u16) -> Result<Self, SetPointOutOfBoundsError> {
-        if set_point > MAX_SET_POINT {
-            return Err(SetPointOutOfBoundsError);
-        }
-
-        Ok(Self(set_point))
-    }
-
-    const fn get(&self) -> u16 {
-        self.0
-    }
-}
-
-pub(crate) enum ParseSetPointError {
-    ParseInt(core::num::ParseIntError),
-    SettingOutOfBounds(SetPointOutOfBoundsError),
-}
-
-impl FromStr for SetPoint {
-    type Err = ParseSetPointError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let set_point = s.parse().map_err(ParseSetPointError::ParseInt)?;
-        Self::new(set_point).map_err(ParseSetPointError::SettingOutOfBounds)
-    }
-}
-
 /// Settings specific to our use case for these fans. They are custom tuned to the house.
 /// For example, we don't run the fans at full speed to reduce wear on them
 pub(crate) mod user_setting {
-    use crate::fan;
+    use crate::fan::{
+        self,
+        set_point::{self, SetPoint},
+    };
 
     /// Max speed 64000 / 3.3
-    pub(crate) const LOW: fan::SetPoint = match fan::SetPoint::new(19_393) {
+    pub(crate) const LOW: SetPoint = match SetPoint::new(19_393) {
         Ok(setting) => setting,
         Err(error) => panic!("Invalid value"),
     };
     /// Max speed 64000 / 2.4
-    pub(crate) const MEDIUM: fan::SetPoint = match fan::SetPoint::new(26_666) {
+    pub(crate) const MEDIUM: SetPoint = match SetPoint::new(26_666) {
         Ok(setting) => setting,
         Err(error) => panic!("Invalid value"),
     };
 
     /// Max speed 50%
     /// Not set to full speed to not wear out the fans
-    pub(crate) const HIGH: fan::SetPoint = match fan::SetPoint::new(fan::MAX_SET_POINT / 2) {
+    pub(crate) const HIGH: SetPoint = match SetPoint::new(set_point::MAX / 2) {
         Ok(setting) => setting,
         Err(error) => panic!("Invalid value"),
     };

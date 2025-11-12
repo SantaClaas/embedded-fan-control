@@ -36,7 +36,8 @@ use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
 
 use self::mqtt::packet;
-use crate::fan::{Fan, ParseSetPointError, SetPoint};
+use crate::fan::set_point::{ParseSetPointError, SetPoint};
+use crate::fan::Fan;
 use crate::mqtt::packet::ping_request::PingRequest;
 use crate::mqtt::packet::{connect, publish, subscribe};
 use crate::task::{set_up_network_stack, MqttBrokerConfiguration, Publish};
@@ -171,7 +172,7 @@ async fn input(pin_18: PIN_18) {
                     .0
                     .try_get()
                     .map(|state| state.setting)
-                    .unwrap_or(fan::SetPoint::ZERO);
+                    .unwrap_or(SetPoint::ZERO);
                 FanState {
                     setting,
                     is_on: false,
@@ -208,7 +209,7 @@ async fn update_fans() {
     // Only comparing on state causes button triggers to be ignored
     let mut previous = FAN_CONTROLLER.fan_states.0.try_get().unwrap_or(FanState {
         is_on: false,
-        setting: fan::SetPoint::ZERO,
+        setting: SetPoint::ZERO,
     });
 
     loop {
@@ -230,7 +231,7 @@ async fn update_fans() {
             state.setting
         } else {
             // Turn off fans
-            fan::SetPoint::ZERO
+            SetPoint::ZERO
         };
 
         match fans.set_set_point(&setting).await {
@@ -259,7 +260,7 @@ static FANS: Fans = Mutex::new(None);
 #[derive(PartialEq, Clone)]
 struct FanState {
     is_on: bool,
-    setting: fan::SetPoint,
+    setting: SetPoint,
 }
 
 struct FanController {
@@ -316,7 +317,7 @@ async fn led_routine(pin_21: PIN_21, pin_20: PIN_20) {
     // Set initial state
     let mut current_state = FAN_CONTROLLER.fan_states.0.try_get().unwrap_or(FanState {
         is_on: false,
-        setting: fan::SetPoint::ZERO,
+        setting: SetPoint::ZERO,
     });
 
     loop {
