@@ -12,7 +12,7 @@ use embedded_io_async::{Read, Write};
 use crate::{
     configuration,
     fan::{self, address, holding_registers, set_point::SetPoint, Fan, FanResponse, BAUD_RATE},
-    modbus::{self, ReadInputRegister},
+    modbus::{self, function::read_input_register::ReadInputRegister},
 };
 
 pub(crate) enum Error {
@@ -189,7 +189,7 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
             // Device address fan 1
             address::FAN_1,
             // Modbus function code
-            modbus::function_code::WRITE_SINGLE_REGISTER,
+            modbus::function::code::WRITE_SINGLE_REGISTER,
             // Holding register address
             holding_registers::REFERENCE_SET_POINT[0],
             holding_registers::REFERENCE_SET_POINT[1],
@@ -249,7 +249,7 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
                 Fan::Two => address::FAN_2,
             },
             // Modbus function code
-            modbus::function_code::READ_INPUT_REGISTER,
+            modbus::function::code::READ_INPUT_REGISTER,
             // Input register address
             fan::input_registers::TEMPERATURE_SENSOR_1[0],
             fan::input_registers::TEMPERATURE_SENSOR_1[1],

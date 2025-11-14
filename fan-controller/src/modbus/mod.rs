@@ -1,11 +1,9 @@
 pub(crate) mod client;
+mod function;
 
 use crc::{Crc, CRC_16_MODBUS};
-pub(super) mod function_code {
-    pub const READ_HOLDING_REGISTER: u8 = 0x03;
-    pub const READ_INPUT_REGISTER: u8 = 0x04;
-    pub const WRITE_SINGLE_REGISTER: u8 = 0x06;
-}
+
+use crate::modbus::function::{read_input_register::ReadInputRegister, Function};
 
 /// Used to create CRC checksums when forming modbus messages
 pub(super) const CRC: Crc<u16> = Crc::<u16>::new(&CRC_16_MODBUS);
@@ -32,31 +30,9 @@ pub(super) const fn get_message_delay(baud_rate: u32) -> u64 {
     MICROSECONDS_FOR_BITS.div_ceil(baud_rate as u64)
 }
 
-pub(crate) trait Function {
-    const CODE: u8;
-}
-
-pub(crate) struct ReadInputRegister {
-    address: u16,
-    number_of_registers: u16,
-}
-
-impl ReadInputRegister {
-    pub(crate) fn new(address: u16, number_of_registers: u16) -> Self {
-        Self {
-            address,
-            number_of_registers,
-        }
-    }
-}
-
-impl Function for ReadInputRegister {
-    const CODE: u8 = function_code::READ_INPUT_REGISTER;
-}
-
 pub(crate) struct Message<F> {
-    address: u8,
-    function: F,
+    device_address: u8,
+    pub(crate) function: F,
 }
 
 pub(crate) trait ToBytes<const LENGTH: usize> {
@@ -69,7 +45,7 @@ impl ToBytes<8> for Message<ReadInputRegister> {
         let length_bytes = self.function.number_of_registers.to_be_bytes();
         let mut buffer = [
             // Device address
-            self.address,
+            self.device_address,
             // Modbus function code
             self.code(),
             // Starting address
@@ -93,7 +69,10 @@ impl ToBytes<8> for Message<ReadInputRegister> {
 
 impl<F: Function> Message<F> {
     pub(crate) fn new(address: u8, function: F) -> Self {
-        Self { address, function }
+        Self {
+            device_address: address,
+            function,
+        }
     }
 
     const fn code(&self) -> u8 {

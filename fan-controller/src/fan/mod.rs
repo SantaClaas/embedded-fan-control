@@ -5,7 +5,6 @@ pub(crate) mod set_point;
 
 use core::str::FromStr;
 
-use crate::modbus::ReadInputRegister;
 use crate::{configuration, modbus};
 use defmt::{error, info, Format};
 use embassy_rp::dma::Channel;
