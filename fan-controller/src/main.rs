@@ -502,6 +502,8 @@ async fn fan_control_routine(
         //TODO retry logic
         info!("Received fan state");
         // Instruct modbus to send update
+        //TODO restart waiting for lock when the fan state gets updated before the lock is released
+        let fans = fans.get().await.lock().await.deref_mut();
     }
 }
 
