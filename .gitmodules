@@ -1,3 +1,0 @@
-[submodule "fan-controller/home-assistant/core"]
-	path = fan-controller/home-assistant/core
-	url = https://github.com/home-assistant/core.git
