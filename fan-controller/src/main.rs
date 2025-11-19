@@ -199,7 +199,7 @@ async fn input(pin_18: PIN_18) {
 
 /// Update fans whenenver the fan setting or on state changes
 #[embassy_executor::task]
-async fn update_fans() {
+async fn update_fans(fans: FansMutex) {
     let Some(mut receiver) = FAN_CONTROLLER.fan_states.0.receiver() else {
         // Not using asserts because they are hard to debug on embedded where it crashed
         error!("No receiver for fan is on state. This should never happen.");
@@ -221,11 +221,8 @@ async fn update_fans() {
         previous = state.clone();
 
         info!("Updating fans");
-        let mut fans = FANS.lock().await;
-        let Some(fans) = fans.deref_mut() else {
-            warn!("No fan client found");
-            continue;
-        };
+        let mut fans = fans.lock().await;
+        let fans = fans.deref_mut();
 
         let setting = if state.is_on {
             state.setting
@@ -251,9 +248,7 @@ async fn update_fans() {
     }
 }
 
-type Fans = Mutex<CriticalSectionRawMutex, Option<modbus::client::Client<'static, UART0, PIN_4>>>;
-/// Use this to make calls to the fans through modbus
-static FANS: Fans = Mutex::new(None);
+type FansMutex = Mutex<CriticalSectionRawMutex, modbus::client::Client<'static, UART0, PIN_4>>;
 
 /// Fan state can have a setting while being off although and we emulate that behavior because
 /// fan devices actually don't have that behavior
@@ -499,7 +494,8 @@ async fn fan_control_routine(fan_state: &'static Signal<CriticalSectionRawMutex,
     loop {
         let state = fan_state.wait().await;
         //TODO retry logic
-        info!("Received fan state")
+        info!("Received fan state");
+        // Instruct modbus to send update
     }
 }
 
@@ -550,15 +546,19 @@ async fn main(spawner: Spawner) {
         rx_buffer,
         fan::get_configuration(),
     );
-    //TODO load fan setting from fan
-    // Inner scope to drop the guard after assigning
-    {
-        *(FANS.lock().await) = Some(client);
-    }
+
+    /// Use this to make calls to the fans through modbus
+    // static FANS: Fans = Mutex::new(None);
+    // //TODO load fan setting from fan
+    // // Inner scope to drop the guard after assigning
+    // {
+    //     *(FANS.lock().await) = Some(client);
+    // }
+    let fans = FansMutex::new(client);
 
     // Button input task waits for button presses and send according signals to the modbus task
     unwrap!(spawner.spawn(input(pin_18)));
-    unwrap!(spawner.spawn(update_fans()));
+    unwrap!(spawner.spawn(update_fans(fans)));
 
     /// Channel for messages incoming from the MQTT broker to this fan controller
     static IN: Channel<CriticalSectionRawMutex, Result<FanControlPublish, FromPublishError>, 3> =

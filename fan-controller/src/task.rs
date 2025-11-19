@@ -10,7 +10,7 @@ use crate::mqtt::{self};
 use crate::mqtt::{non_zero_u16, TryDecode};
 use crate::PingRequest;
 use crate::{configuration, fan, gain_control, FanState};
-use crate::{modbus, Fans};
+use crate::{modbus, FansMutex};
 use ::mqtt::QualityOfService;
 use core::future::poll_fn;
 use core::num::NonZeroU16;
@@ -561,13 +561,10 @@ async fn update_homeassistant<T: Publish>(
     }
 }
 
-async fn poll_sensors(fans: Fans) {
+async fn poll_sensors(fans: FansMutex) {
     loop {
         let mut fans = fans.lock().await;
-        let Some(fans) = fans.deref_mut() else {
-            error!("Fans were not set up. Cannot poll sensors");
-            return;
-        };
+        let fans = fans.deref_mut();
 
         let temperature = match fans.get_temperature(fan::Fan::One).await {
             Ok(temperature) => temperature,
