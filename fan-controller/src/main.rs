@@ -10,10 +10,7 @@ use debounce::Debouncer;
 use defmt::*;
 use embassy_executor::Spawner;
 use embassy_futures::join::join;
-use embassy_net::dns::{DnsQueryType, DnsSocket};
-use embassy_net::tcp::{TcpReader, TcpSocket, TcpWriter};
-use embassy_net::{tcp, Config, IpEndpoint, Stack, StackResources};
-use embassy_rp::clocks::RoscRng;
+use embassy_net::Stack;
 use embassy_rp::gpio::{Input, Level, Output, Pull};
 use embassy_rp::peripherals::{
     DMA_CH0, PIN_18, PIN_20, PIN_21, PIN_23, PIN_25, PIN_4, PIO0, UART0,
@@ -28,19 +25,16 @@ use embassy_sync::once_lock::OnceLock;
 use embassy_sync::pubsub::PubSubChannel;
 use embassy_sync::signal::Signal;
 use embassy_sync::watch::Watch;
-use embassy_time::{Duration, Instant, TimeoutError, Timer};
-use embedded_nal_async::TcpConnect;
+use embassy_time::{Duration, Instant, Timer};
 use mqtt::TryDecode;
-use rand::RngCore;
 use static_cell::StaticCell;
 
 use {defmt_rtt as _, panic_probe as _};
 
-use self::mqtt::packet;
 use crate::fan::set_point::{ParseSetPointError, SetPoint};
 use crate::fan::Fan;
 use crate::mqtt::packet::ping_request::PingRequest;
-use crate::mqtt::packet::{connect, publish, subscribe};
+use crate::mqtt::packet::publish;
 use crate::task::{set_up_network_stack, MqttBrokerConfiguration, Publish};
 
 mod async_callback;
@@ -494,6 +488,7 @@ async fn mqtt_brain_routine(
 
 #[embassy_executor::task]
 async fn fan_control_routine(
+    fan_address: modbus::device::Address,
     fan_state: &'static Signal<CriticalSectionRawMutex, SetPoint>,
     fans: &'static FansOnceLock,
 ) {
@@ -503,7 +498,14 @@ async fn fan_control_routine(
         info!("Received fan state");
         // Instruct modbus to send update
         //TODO restart waiting for lock when the fan state gets updated before the lock is released
-        let fans = fans.get().await.lock().await.deref_mut();
+        let fans = fans.get().await;
+        let mut fans = fans.lock().await;
+        let function = modbus::function::WriteHoldingRegister::new(
+            fan_address,
+            fan::holding_registers::REFERENCE_SET_POINT,
+            *state,
+        );
+        fans.send_3(function).await;
     }
 }
 
@@ -597,8 +599,16 @@ async fn main(spawner: Spawner) {
         &FAN_TWO_STATE
     )));
 
-    unwrap!(spawner.spawn(fan_control_routine(&FAN_ONE_STATE, &FANS)));
-    unwrap!(spawner.spawn(fan_control_routine(&FAN_TWO_STATE, &FANS)));
+    unwrap!(spawner.spawn(fan_control_routine(
+        fan::address::FAN_1,
+        &FAN_ONE_STATE,
+        &FANS
+    )));
+    unwrap!(spawner.spawn(fan_control_routine(
+        fan::address::FAN_2,
+        &FAN_TWO_STATE,
+        &FANS
+    )));
 }
 
 #[cfg(test)]

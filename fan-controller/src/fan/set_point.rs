@@ -1,4 +1,4 @@
-use core::str::FromStr;
+use core::{ops::Deref, str::FromStr};
 
 use defmt::Format;
 
@@ -27,6 +27,14 @@ impl SetPoint {
 
     const fn get(&self) -> u16 {
         self.0
+    }
+}
+
+impl Deref for SetPoint {
+    type Target = u16;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }
 

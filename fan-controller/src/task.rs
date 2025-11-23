@@ -22,7 +22,7 @@ use embassy_executor::Spawner;
 use embassy_futures::join::{join, join4};
 use embassy_net::dns::{DnsQueryType, DnsSocket};
 use embassy_net::driver::Driver;
-use embassy_net::tcp::{TcpReader, TcpSocket, TcpWriter};
+use embassy_net::tcp::{TcpSocket, TcpWriter};
 use embassy_net::{Config, IpAddress, IpEndpoint, Stack, StackResources};
 use embassy_rp::clocks::RoscRng;
 use embassy_rp::peripherals::{DMA_CH0, PIN_23, PIN_25, PIO0};
@@ -791,12 +791,12 @@ pub(super) async fn mqtt_with_connect<
 
     //TODO yes static "global" state is bad, but I am still learning how to use wakers and polling
     // with futures so this will be refactored when I made it work
-    /// Contains the status of the subscribe packets send out. The packet identifier represents the
-    /// index in the array
+    // Contains the status of the subscribe packets send out. The packet identifier represents the
+    // index in the array
     let acknowledgements: Mutex<CriticalSectionRawMutex, [bool; 2]> = Mutex::new([false, false]);
-    /// The waker needs to be woken to complete the subscribe acknowledgement future.
-    /// The embassy documentation does not explain when to use [`AtomicWaker`] but I am assuming
-    /// it is useful for cases like this where I need to mutate a static.
+    // The waker needs to be woken to complete the subscribe acknowledgement future.
+    // The embassy documentation does not explain when to use [`AtomicWaker`] but I am assuming
+    // it is useful for cases like this where I need to mutate a static.
     let waker: AtomicWaker = AtomicWaker::new();
 
     let ping_response: Signal<CriticalSectionRawMutex, PingResponse> = Signal::new();
@@ -804,7 +804,7 @@ pub(super) async fn mqtt_with_connect<
     let client_state: Signal<CriticalSectionRawMutex, ClientState> = Signal::new();
 
     let outgoing: Channel<CriticalSectionRawMutex, Message<Send>, 8> = Channel::new();
-    /// The instant when the last packet was sent to determine when the next keep alive has to be sent
+    // The instant when the last packet was sent to determine when the next keep alive has to be sent
     let last_packet: Signal<CriticalSectionRawMutex, Instant> = Signal::new();
 
     // Using a mutex for the writer, so it can be shared between the task that sends messages (for

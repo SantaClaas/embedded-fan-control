@@ -1,5 +1,7 @@
 pub(crate) mod client;
-mod function;
+pub(crate) mod device;
+pub(crate) mod function;
+pub(crate) mod register;
 
 use crc::{Crc, CRC_16_MODBUS};
 

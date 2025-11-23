@@ -12,7 +12,10 @@ use embedded_io_async::{Read, Write};
 use crate::{
     configuration,
     fan::{self, address, holding_registers, set_point::SetPoint, Fan, FanResponse, BAUD_RATE},
-    modbus::{self, function::read_input_register::ReadInputRegister},
+    modbus::{
+        self,
+        function::{read_input_register::ReadInputRegister, WriteHoldingRegister},
+    },
 };
 
 pub(crate) enum Error {
@@ -63,7 +66,7 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
         }
     }
 
-    async fn send_2<const REQUEST: usize, const RESPONSE: usize>(
+    pub(crate) async fn send_2<const REQUEST: usize, const RESPONSE: usize>(
         &mut self,
         message: impl modbus::ToBytes<REQUEST>,
     ) -> Result<FanResponse<RESPONSE>, Error> {
@@ -116,6 +119,57 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
         //TODO validate response from fan
         // Read the correct number of bytes
         Ok(response)
+    }
+
+    pub(crate) async fn send_3(&mut self, message: WriteHoldingRegister) -> Result<(), Error> {
+        // Write then read
+        // Set pin setting DE (driver enable) to on (high) on the MAX845 to send data
+        self.driver_enable.set_high();
+
+        let bytes = message.as_ref();
+        info!("Sending message to fan: {:?}", bytes);
+        // As ref because &[u8; 8] is not the same as &[u8]
+        let result = with_timeout(configuration::FAN_TIMEOUT, self.uart.write_all(&bytes)).await?;
+
+        info!("uart write result: {:?}", result);
+
+        // Before closing we need to flush the buffer to ensure that all data is written
+        // This requires blocking or we get a WouldBlock error. I don't understand why (TODO)
+        let result = self.uart.blocking_flush();
+        if let Err(error) = result {
+            error!("uart flush error");
+        }
+
+        // In addition to flushing we need to wait for some time before turning off data in on the
+        // MAX845 because we might be too fast and cut off the last byte or more. (This happened)
+        // I saw someone using 120 microseconds (https://youtu.be/i46jdhvRej4?t=886).
+        // This number is based on trial and error. Don't feel bad to change it if it doesn't work.
+        // Also timings in microseconds are not accurate.
+        // I assume this should be below the modbus message delay
+        // Timer::after(Duration::from_micros(1_000)).await;
+        // Using await timer breaks this too. Probably because it yields to the scheduler
+        block_for(BLOCK_FOR);
+
+        // Close sending data to enable receiving data
+        self.driver_enable.set_low();
+
+        // Read
+        // Read response from fan. The response can vary in length
+        let mut response_buffer: [u8; 8] = [0; 8];
+        info!("Waiting for response from fan");
+        let bytes_read = with_timeout(
+            configuration::FAN_TIMEOUT,
+            //TODO test this does not wait for bytes to fill the buffer
+            // leading to a timeout because the response is only 7 bytes but the buffer is 8 and it waits for the last byte to arrive
+            self.uart.read(&mut response_buffer),
+        )
+        .await??;
+
+        info!("response from fan: {:?} {:?}", bytes_read, response_buffer);
+
+        //TODO validate response from fan
+        // Read the correct number of bytes
+        Ok(())
     }
 
     async fn send<const N: usize>(
@@ -185,14 +239,15 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
     ) -> Result<(), Error> {
         // Send update through UART to MAX845 to modbus fans
         // Form message to fan 1
+        let register_address = (*holding_registers::REFERENCE_SET_POINT).to_be_bytes();
         let mut message: [u8; 8] = [
             // Device address fan 1
-            address::FAN_1,
+            *address::FAN_1,
             // Modbus function code
             modbus::function::code::WRITE_SINGLE_REGISTER,
             // Holding register address
-            holding_registers::REFERENCE_SET_POINT[0],
-            holding_registers::REFERENCE_SET_POINT[1],
+            register_address[0],
+            register_address[1],
             // Value to set
             (set_point >> 8) as u8,
             *set_point as u8,
@@ -219,7 +274,7 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
         // Form message to fan 2
         // Update the fan address and therefore the CRC
         // Keep speed as both fans should be running at the same speed
-        message[0] = address::FAN_2;
+        message[0] = *address::FAN_2;
         let checksum = modbus::CRC.checksum(&message[..6]).to_be_bytes();
         message[6] = checksum[1];
         message[7] = checksum[0];
@@ -234,25 +289,26 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
     pub(crate) async fn get_temperature(&mut self, fan: Fan) -> Result<u16, Error> {
         let message = modbus::Message::new(
             match fan {
-                Fan::One => address::FAN_1,
-                Fan::Two => address::FAN_2,
+                Fan::One => *address::FAN_1,
+                Fan::Two => *address::FAN_2,
             },
             ReadInputRegister::new(0xd02e, 1),
         );
 
         let test: FanResponse<7> = self.send_2(message).await?;
 
+        let register_address = (*fan::input_registers::TEMPERATURE_SENSOR_1).to_be_bytes();
         let mut message: [u8; 8] = [
             // Device address
             match fan {
-                Fan::One => address::FAN_1,
-                Fan::Two => address::FAN_2,
+                Fan::One => *address::FAN_1,
+                Fan::Two => *address::FAN_2,
             },
             // Modbus function code
             modbus::function::code::READ_INPUT_REGISTER,
             // Input register address
-            fan::input_registers::TEMPERATURE_SENSOR_1[0],
-            fan::input_registers::TEMPERATURE_SENSOR_1[1],
+            register_address[0],
+            register_address[1],
             // Number of registers to read
             0,
             1,

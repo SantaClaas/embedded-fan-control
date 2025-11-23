@@ -15,13 +15,13 @@ use crate::{
     },
 };
 use core::{
-    fmt::{self, Debug},
+    fmt::Debug,
     future::{poll_fn, Future},
     num::NonZeroU16,
     task::Poll,
 };
 use defmt::{error, info, warn, Format};
-use embassy_net::tcp::{TcpReader, TcpSocket, TcpWriter};
+use embassy_net::tcp::TcpSocket;
 use embassy_sync::{
     blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel, mutex::Mutex, signal::Signal,
     waitqueue::AtomicWaker,

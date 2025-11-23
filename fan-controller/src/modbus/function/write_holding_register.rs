@@ -4,10 +4,14 @@ use crate::modbus;
 pub(crate) struct WriteHoldingRegister([u8; 8]);
 
 impl WriteHoldingRegister {
-    pub(crate) fn new(device_address: u8, register_address: u16, value: u16) -> Self {
+    pub(crate) fn new(
+        device_address: modbus::device::Address,
+        register_address: modbus::register::Address,
+        value: u16,
+    ) -> Self {
         let register_address = register_address.to_be_bytes();
         let mut data = [
-            device_address,
+            *device_address,
             modbus::function::code::WRITE_SINGLE_REGISTER,
             register_address[0],
             register_address[1],
@@ -24,5 +28,11 @@ impl WriteHoldingRegister {
         data[6] = checksum[1];
         data[7] = checksum[0];
         Self(data)
+    }
+}
+
+impl AsRef<[u8]> for WriteHoldingRegister {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
     }
 }

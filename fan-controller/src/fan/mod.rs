@@ -3,19 +3,8 @@
 
 pub(crate) mod set_point;
 
-use core::str::FromStr;
-
-use crate::{configuration, modbus};
-use defmt::{error, info, Format};
-use embassy_rp::dma::Channel;
-use embassy_rp::gpio::{Level, Output, Pin};
-use embassy_rp::interrupt::typelevel::Binding;
-use embassy_rp::uart::{
-    BufferedInterruptHandler, BufferedUart, DataBits, Parity, RxPin, StopBits, TxPin,
-};
-use embassy_rp::{uart, Peripheral};
-use embassy_time::{block_for, with_timeout, Duration, TimeoutError, Timer};
-use embedded_io_async::{Read, Write};
+use defmt::Format;
+use embassy_rp::uart::{self, DataBits, Parity, StopBits};
 
 pub(crate) const BAUD_RATE: u32 = 19_200;
 pub(crate) fn get_configuration() -> uart::Config {
@@ -32,10 +21,7 @@ pub(crate) fn get_configuration() -> uart::Config {
 /// Settings specific to our use case for these fans. They are custom tuned to the house.
 /// For example, we don't run the fans at full speed to reduce wear on them
 pub(crate) mod user_setting {
-    use crate::fan::{
-        self,
-        set_point::{self, SetPoint},
-    };
+    use crate::fan::set_point::{self, SetPoint};
 
     /// Max speed 64000 / 3.3
     pub(crate) const LOW: SetPoint = match SetPoint::new(19_393) {
@@ -76,19 +62,31 @@ impl State {
 }
 
 pub(crate) mod address {
-    pub(crate) const FAN_1: u8 = 0x02;
-    pub(crate) const FAN_2: u8 = 0x03;
+    use crate::modbus;
+
+    /// Starting fan with address 0x02 as 0x01 might be occupied by as a default address
+    pub(crate) const FAN_1: modbus::device::Address = modbus::device::Address::new(0x02);
+    pub(crate) const FAN_2: modbus::device::Address = modbus::device::Address::new(0x03);
 }
 
 pub(super) mod holding_registers {
-    pub(crate) const REFERENCE_SET_POINT: [u8; 2] = 0xd001_u16.to_be_bytes();
+    use crate::modbus;
+
+    pub(crate) const REFERENCE_SET_POINT: modbus::register::Address =
+        modbus::register::Address::new(0xd001_u16);
 }
 
 pub(crate) mod input_registers {
-    pub(crate) const TEMPERATURE_SENSOR_1: [u8; 2] = 0xd02e_u16.to_be_bytes();
-    pub(crate) const HUMIDITY_SENSOR_1: [u8; 2] = 0xd02f_u16.to_be_bytes();
-    pub(crate) const TEMPERATURE_SENSOR_2: [u8; 2] = 0xd030_u16.to_be_bytes();
-    pub(crate) const HUMIDITY_SENSOR_2: [u8; 2] = 0xd031_u16.to_be_bytes();
+    use crate::modbus;
+
+    pub(crate) const TEMPERATURE_SENSOR_1: modbus::register::Address =
+        modbus::register::Address::new(0xd02e_u16);
+    pub(crate) const HUMIDITY_SENSOR_1: modbus::register::Address =
+        modbus::register::Address::new(0xd02f_u16);
+    pub(crate) const TEMPERATURE_SENSOR_2: modbus::register::Address =
+        modbus::register::Address::new(0xd030_u16);
+    pub(crate) const HUMIDITY_SENSOR_2: modbus::register::Address =
+        modbus::register::Address::new(0xd031_u16);
 }
 
 pub(crate) enum Fan {

@@ -6,9 +6,7 @@ use crate::mqtt::{packet, ConnectErrorReasonCode};
 use crate::mqtt::{TryDecode, TryEncode};
 use core::fmt::Debug;
 use defmt::{info, warn, Format};
-use embassy_net::tcp;
-use embassy_net::tcp::TcpSocket;
-use embedded_io_async::{ErrorType, Read, Write};
+use embedded_io_async::{Read, Write};
 
 ///! Tasks that need to be done to run MQTT
 ///! - Keep alive
