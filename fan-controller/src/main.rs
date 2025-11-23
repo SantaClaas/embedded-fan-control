@@ -40,6 +40,7 @@ use crate::task::{set_up_network_stack, MqttBrokerConfiguration, Publish};
 mod async_callback;
 mod configuration;
 mod debounce;
+mod event_bus;
 mod fan;
 mod modbus;
 mod mqtt;
@@ -486,6 +487,8 @@ async fn mqtt_brain_routine(
     }
 }
 
+/// Receives the fan state updates and sends them to modbus as modbus messages
+/// After a successful response, this sends an update to the fan display logic unit
 #[embassy_executor::task]
 async fn fan_control_routine(
     fan_address: modbus::device::Address,
