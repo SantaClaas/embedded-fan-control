@@ -540,7 +540,7 @@ async fn fan_control_routine(
 
         if attempt > MAX_ATTEMPTS {
             error!(
-                "Failed to send fan state update after {} retries",
+                "Failed to send fan state update after {} attempts",
                 MAX_ATTEMPTS
             );
 
