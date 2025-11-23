@@ -492,14 +492,15 @@ async fn mqtt_brain_routine(
 #[embassy_executor::task]
 async fn fan_control_routine(
     fan_address: modbus::device::Address,
-    fan_speed: &'static Signal<CriticalSectionRawMutex, SetPoint>,
+    current_fan_speed: &'static Signal<CriticalSectionRawMutex, SetPoint>,
+    other_fan_speed: &'static Signal<CriticalSectionRawMutex, SetPoint>,
     fans: &'static ModbusOnceLock,
 ) {
     let modbus_mutex = fans.get().await;
 
     let mut current_speed: Option<SetPoint> = None;
     loop {
-        let mut speed = fan_speed.wait().await;
+        let mut speed = current_fan_speed.wait().await;
         if current_speed.is_some_and(|speed| speed == speed) {
             //TODO consider to update fan display state nontheless
             info!("Fan state update received but has same state");
@@ -511,7 +512,7 @@ async fn fan_control_routine(
         // Instruct modbus to send update
         let mut modbus = modbus_mutex.lock().await;
         // Check we have the latest state in case it was updated while waiting for the lock
-        speed = fan_speed.try_take().unwrap_or(speed);
+        speed = current_fan_speed.try_take().unwrap_or(speed);
 
         let function = modbus::function::WriteHoldingRegister::new(
             fan_address,
@@ -524,7 +525,7 @@ async fn fan_control_routine(
         while let Err(error) = modbus.send_3(&function).await
             && attempt <= MAX_ATTEMPTS
         {
-            error!("Failed to send fan state update");
+            error!("Failed to send fan state update with attempt {}", attempt);
             attempt += 1;
 
             // Release lock so other tasks get a chance to access modbus for sending messages to devices
@@ -544,7 +545,10 @@ async fn fan_control_routine(
                 MAX_ATTEMPTS
             );
 
-            // TODO set other fan to current fan speed to avoid them getting out of sync and creating over or underpressure in the house
+            // Set other fan to current fan speed to avoid them getting out of sync and creating over or underpressure in the house
+            //TODO fix endless loop when both fan speed setting fails and they keep retrying. Could additionally provide a retry strategy to the signal that is set to once to avoid endless loop
+            // There is no Option::copied or Option::cloned for some reason in core
+            current_speed.inspect(|speed| other_fan_speed.signal(speed.clone()));
         }
 
         // TODO on success send update to fan display logic unit
@@ -645,11 +649,13 @@ async fn main(spawner: Spawner) {
     unwrap!(spawner.spawn(fan_control_routine(
         fan::address::FAN_1,
         &FAN_ONE_STATE,
+        &FAN_TWO_STATE,
         &FANS
     )));
     unwrap!(spawner.spawn(fan_control_routine(
         fan::address::FAN_2,
         &FAN_TWO_STATE,
+        &FAN_ONE_STATE,
         &FANS
     )));
 }
