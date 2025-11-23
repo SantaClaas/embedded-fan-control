@@ -3,9 +3,10 @@ pub(crate) mod device;
 pub(crate) mod function;
 pub(crate) mod register;
 
-use crc::{Crc, CRC_16_MODBUS};
+use crc::{CRC_16_MODBUS, Crc};
 
-use crate::modbus::function::{read_input_register::ReadInputRegister, Function};
+pub(crate) use client::Client;
+use function::{Function, read_input_register::ReadInputRegister};
 
 /// Used to create CRC checksums when forming modbus messages
 pub(super) const CRC: Crc<u16> = Crc::<u16>::new(&CRC_16_MODBUS);

@@ -1,20 +1,19 @@
 use defmt::{error, info};
 use embassy_rp::{
-    dma,
+    Peripheral, dma,
     gpio::{Level, Output, Pin},
     interrupt::typelevel::Binding,
     uart::{self, BufferedInterruptHandler, BufferedUart, RxPin, TxPin},
-    Peripheral,
 };
-use embassy_time::{block_for, with_timeout, Duration, TimeoutError, Timer};
+use embassy_time::{Duration, TimeoutError, Timer, block_for, with_timeout};
 use embedded_io_async::{Read, Write};
 
 use crate::{
     configuration,
-    fan::{self, address, holding_registers, set_point::SetPoint, Fan, FanResponse, BAUD_RATE},
+    fan::{self, BAUD_RATE, Fan, FanResponse, address, holding_registers, set_point::SetPoint},
     modbus::{
         self,
-        function::{read_input_register::ReadInputRegister, WriteHoldingRegister},
+        function::{WriteHoldingRegister, read_input_register::ReadInputRegister},
     },
 };
 
@@ -121,7 +120,7 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
         Ok(response)
     }
 
-    pub(crate) async fn send_3(&mut self, message: WriteHoldingRegister) -> Result<(), Error> {
+    pub(crate) async fn send_3(&mut self, message: &WriteHoldingRegister) -> Result<(), Error> {
         // Write then read
         // Set pin setting DE (driver enable) to on (high) on the MAX845 to send data
         self.driver_enable.set_high();

@@ -1,3 +1,4 @@
+use crate::PingRequest;
 use crate::fan::set_point::SetPoint;
 use crate::mqtt::packet::connect::Connect;
 use crate::mqtt::packet::disconnect::Disconnect;
@@ -7,17 +8,16 @@ use crate::mqtt::packet::subscribe::{Subscribe, Subscription};
 use crate::mqtt::packet::subscribe_acknowledgement::SubscribeAcknowledgement;
 use crate::mqtt::task::send;
 use crate::mqtt::{self};
-use crate::mqtt::{non_zero_u16, TryDecode};
-use crate::PingRequest;
-use crate::{configuration, fan, gain_control, FanState};
-use crate::{modbus, FansOnceLock};
+use crate::mqtt::{TryDecode, non_zero_u16};
+use crate::{FanState, configuration, fan, gain_control};
+use crate::{ModbusOnceLock, modbus};
 use ::mqtt::QualityOfService;
 use core::future::poll_fn;
 use core::num::NonZeroU16;
 use core::ops::DerefMut;
 use core::task::Poll;
 use cyw43::{Control, NetDriver};
-use defmt::{error, info, unwrap, warn, Format};
+use defmt::{Format, error, info, unwrap, warn};
 use embassy_executor::Spawner;
 use embassy_futures::join::{join, join4};
 use embassy_net::dns::{DnsQueryType, DnsSocket};
@@ -32,7 +32,7 @@ use embassy_sync::channel::{self, Channel};
 use embassy_sync::mutex::Mutex;
 use embassy_sync::signal::Signal;
 use embassy_sync::waitqueue::AtomicWaker;
-use embassy_time::{with_deadline, with_timeout, Duration, Instant, Timer};
+use embassy_time::{Duration, Instant, Timer, with_deadline, with_timeout};
 use embedded_io_async::Read;
 use rand::RngCore;
 use static_cell::StaticCell;
@@ -104,7 +104,9 @@ async fn handle_publish<'f>(
             let payload = match core::str::from_utf8(publish.payload) {
                 Ok(payload) => payload,
                 Err(error) => {
-                    warn!("Expected percentage_command_topic payload (speed percentage) to be a valid UTF-8 string with a number");
+                    warn!(
+                        "Expected percentage_command_topic payload (speed percentage) to be a valid UTF-8 string with a number"
+                    );
                     return;
                 }
             };
@@ -266,7 +268,9 @@ async fn listen<
                     Ok(response) => response,
                     // Matching to get compiler error if this changes
                     Err(_) => {
-                        defmt::unreachable!("Ping response is always empty so decode should always succeed if the protocol did not change")
+                        defmt::unreachable!(
+                            "Ping response is always empty so decode should always succeed if the protocol did not change"
+                        )
                     }
                 };
 
@@ -561,7 +565,7 @@ async fn update_homeassistant<T: Publish>(
     }
 }
 
-async fn poll_sensors(fans: FansOnceLock) {
+async fn poll_sensors(fans: ModbusOnceLock) {
     loop {
         let mut fans = fans.get().await.lock().await;
         let fans = fans.deref_mut();

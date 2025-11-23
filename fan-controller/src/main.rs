@@ -13,11 +13,11 @@ use embassy_futures::join::join;
 use embassy_net::Stack;
 use embassy_rp::gpio::{Input, Level, Output, Pull};
 use embassy_rp::peripherals::{
-    DMA_CH0, PIN_18, PIN_20, PIN_21, PIN_23, PIN_25, PIN_4, PIO0, UART0,
+    DMA_CH0, PIN_4, PIN_18, PIN_20, PIN_21, PIN_23, PIN_25, PIO0, UART0,
 };
 use embassy_rp::pio::{InterruptHandler as PioInterruptHandler, Pio, PioPin};
 use embassy_rp::uart::BufferedInterruptHandler;
-use embassy_rp::{bind_interrupts, Peripherals};
+use embassy_rp::{Peripherals, bind_interrupts};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::{self, Channel};
 use embassy_sync::mutex::Mutex;
@@ -31,11 +31,11 @@ use static_cell::StaticCell;
 
 use {defmt_rtt as _, panic_probe as _};
 
-use crate::fan::set_point::{ParseSetPointError, SetPoint};
 use crate::fan::Fan;
+use crate::fan::set_point::{ParseSetPointError, SetPoint};
 use crate::mqtt::packet::ping_request::PingRequest;
 use crate::mqtt::packet::publish;
-use crate::task::{set_up_network_stack, MqttBrokerConfiguration, Publish};
+use crate::task::{MqttBrokerConfiguration, Publish, set_up_network_stack};
 
 mod async_callback;
 mod configuration;
@@ -196,7 +196,7 @@ async fn input(pin_18: PIN_18) {
 #[deprecated(note = "There are now two separate tasks that update the fan independently")]
 /// Update fans whenenver the fan setting or on state changes
 #[embassy_executor::task]
-async fn update_fans(fans: &'static FansOnceLock) {
+async fn update_fans(fans: &'static ModbusOnceLock) {
     let Some(mut receiver) = FAN_CONTROLLER.fan_states.0.receiver() else {
         // Not using asserts because they are hard to debug on embedded where it crashed
         error!("No receiver for fan is on state. This should never happen.");
@@ -245,8 +245,8 @@ async fn update_fans(fans: &'static FansOnceLock) {
     }
 }
 
-type FansMutex = Mutex<CriticalSectionRawMutex, modbus::client::Client<'static, UART0, PIN_4>>;
-type FansOnceLock = OnceLock<FansMutex>;
+type ModbusMutex = Mutex<CriticalSectionRawMutex, modbus::Client<'static, UART0, PIN_4>>;
+type ModbusOnceLock = OnceLock<ModbusMutex>;
 
 /// Fan state can have a setting while being off although and we emulate that behavior because
 /// fan devices actually don't have that behavior
@@ -492,23 +492,63 @@ async fn mqtt_brain_routine(
 #[embassy_executor::task]
 async fn fan_control_routine(
     fan_address: modbus::device::Address,
-    fan_state: &'static Signal<CriticalSectionRawMutex, SetPoint>,
-    fans: &'static FansOnceLock,
+    fan_speed: &'static Signal<CriticalSectionRawMutex, SetPoint>,
+    fans: &'static ModbusOnceLock,
 ) {
+    let modbus_mutex = fans.get().await;
+
+    let mut current_speed: Option<SetPoint> = None;
     loop {
-        let state = fan_state.wait().await;
-        //TODO retry logic
+        let mut speed = fan_speed.wait().await;
+        if current_speed.is_some_and(|speed| speed == speed) {
+            //TODO consider to update fan display state nontheless
+            info!("Fan state update received but has same state");
+            continue;
+        }
+
         info!("Received fan state");
+
         // Instruct modbus to send update
-        //TODO restart waiting for lock when the fan state gets updated before the lock is released
-        let fans = fans.get().await;
-        let mut fans = fans.lock().await;
+        let mut modbus = modbus_mutex.lock().await;
+        // Check we have the latest state in case it was updated while waiting for the lock
+        speed = fan_speed.try_take().unwrap_or(speed);
+
         let function = modbus::function::WriteHoldingRegister::new(
             fan_address,
             fan::holding_registers::REFERENCE_SET_POINT,
-            *state,
+            *speed,
         );
-        fans.send_3(function).await;
+
+        const MAX_ATTEMPTS: u8 = 3;
+        let mut attempt = 1;
+        while let Err(error) = modbus.send_3(&function).await
+            && attempt <= MAX_ATTEMPTS
+        {
+            error!("Failed to send fan state update");
+            attempt += 1;
+
+            // Release lock so other tasks get a chance to access modbus for sending messages to devices
+            drop(modbus);
+
+            // Exponential backoff
+            // Safe power of 2 because maximum value is 3 (900ms max)
+            Timer::after_millis(u64::from(attempt).pow(2) * 100).await;
+            modbus = modbus_mutex.lock().await;
+        }
+
+        info!("Fan state updated after {} attempts", attempt);
+
+        if attempt > MAX_ATTEMPTS {
+            error!(
+                "Failed to send fan state update after {} retries",
+                MAX_ATTEMPTS
+            );
+
+            // TODO set other fan to current fan speed to avoid them getting out of sync and creating over or underpressure in the house
+        }
+
+        // TODO on success send update to fan display logic unit
+        current_speed = Some(speed);
     }
 }
 
@@ -560,7 +600,7 @@ async fn main(spawner: Spawner) {
         fan::get_configuration(),
     );
 
-    static FANS: FansOnceLock = FansOnceLock::new();
+    static FANS: ModbusOnceLock = ModbusOnceLock::new();
     // Just initialize it
     _ = FANS.get_or_init(|| client.into());
 
