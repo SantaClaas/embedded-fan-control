@@ -10,6 +10,7 @@ use debounce::Debouncer;
 use defmt::*;
 use embassy_executor::Spawner;
 use embassy_futures::join::join;
+use embassy_futures::select::{Either3, select3};
 use embassy_net::Stack;
 use embassy_rp::gpio::{Input, Level, Output, Pull};
 use embassy_rp::peripherals::{
@@ -280,6 +281,7 @@ impl FanController {
     }
 }
 
+#[deprecated(note = "Use the new system")]
 static FAN_CONTROLLER: FanController = FanController::new();
 
 /// Displays fan status with 2 LEDs:
@@ -288,7 +290,14 @@ static FAN_CONTROLLER: FanController = FanController::new();
 /// Off On -> Fan on medium setting
 /// On On -> Fan on high setting
 #[embassy_executor::task]
-async fn led_routine(pin_21: PIN_21, pin_20: PIN_20) {
+async fn led_routine(
+    pin_21: PIN_21,
+    pin_20: PIN_20,
+    display_state: (
+        &'static Signal<CriticalSectionRawMutex, SetPoint>,
+        &'static Signal<CriticalSectionRawMutex, SetPoint>,
+    ),
+) {
     // Setup LEDs
     let mut led_1 = Output::new(pin_21, Level::Low);
     let mut led_2 = Output::new(pin_20, Level::Low);
@@ -301,49 +310,107 @@ async fn led_routine(pin_21: PIN_21, pin_20: PIN_20) {
     led_1.set_low();
     led_2.set_low();
 
-    let Some(mut receiver) = FAN_CONTROLLER.fan_states.0.receiver() else {
-        // Not using asserts because they are hard to debug on embedded where it crashed
-        error!("No receiver for fan is on state. This should never happen.");
-        return;
-    };
-
-    // Set initial state
-    let mut current_state = FAN_CONTROLLER.fan_states.0.try_get().unwrap_or(FanState {
-        is_on: false,
-        setting: SetPoint::ZERO,
-    });
-
+    let mut current_fan_state: (Option<SetPoint>, Option<SetPoint>) = (None, None);
+    // Debounce can only activate after the first signal update otherwise we would always unnecessarily stop waiting even though there has been no debounce
+    let mut is_debounce_active = false;
     loop {
-        let led_state = match current_state {
-            FanState {
-                is_on: false,
-                setting: _,
-            } => (Level::Low, Level::Low),
-            FanState {
-                is_on: true,
-                setting,
-            } => {
-                if setting <= fan::user_setting::LOW {
-                    (Level::High, Level::Low)
-                } else if setting <= fan::user_setting::MEDIUM {
-                    (Level::Low, Level::High)
-                } else {
-                    (Level::High, Level::High)
+        // Debounce and take the latest signal of both.
+        // Basically wait until there is no futher update and then set the lights to the latest state
+        let either = select3(
+            // Hope these are cancellation safe
+            display_state.0.wait(),
+            display_state.1.wait(),
+            if is_debounce_active {
+                Timer::after_millis(250)
+            } else {
+                // If debounce is not active we want to wait until one of the states updates and not until the timer completes
+                //TODO make it more elegant by not awaiting a future that practically never resolves
+                Timer::after(Duration::MAX)
+            },
+        )
+        .await;
+
+        match either {
+            Either3::First(fan_1_state) => {
+                // Count "same state update" as "no update"
+                if current_fan_state
+                    .0
+                    .is_some_and(|state| state == fan_1_state)
+                {
+                    continue;
                 }
+
+                // Store latest state to be picked up after debounce is over
+                current_fan_state.0.replace(fan_1_state);
+                is_debounce_active = true;
+                continue;
             }
-        };
+            Either3::Second(fan_2_state) => {
+                // Count "same state update" as "no update"
+                if current_fan_state
+                    .1
+                    .is_some_and(|state| state == fan_2_state)
+                {
+                    continue;
+                }
 
-        info!(
-            "Setting status LEDs to {}, {}",
-            led_state.0 == Level::High,
-            led_state.1 == Level::High
-        );
-        led_1.set_level(led_state.0);
-        led_2.set_level(led_state.1);
+                current_fan_state.1.replace(fan_2_state);
+                is_debounce_active = true;
+                continue;
+            }
+            // If there was no update after 250ms, we assume all updates have been sent, turn off the debounce and continue with setting the displays
+            Either3::Third(()) => {
+                // After this loop iteration, we start waiting possibly for infinity again until a state change occurs
+                is_debounce_active = false;
+            }
+        }
 
-        // Wait for state update
-        current_state = receiver.changed().await;
+        //TODO update LEDs and MQTT
     }
+
+    // let Some(mut receiver) = FAN_CONTROLLER.fan_states.0.receiver() else {
+    //     // Not using asserts because they are hard to debug on embedded where it crashed
+    //     error!("No receiver for fan is on state. This should never happen.");
+    //     return;
+    // };
+
+    // // Set initial state
+    // let mut current_state = FAN_CONTROLLER.fan_states.0.try_get().unwrap_or(FanState {
+    //     is_on: false,
+    //     setting: SetPoint::ZERO,
+    // });
+
+    // loop {
+    //     let led_state = match current_state {
+    //         FanState {
+    //             is_on: false,
+    //             setting: _,
+    //         } => (Level::Low, Level::Low),
+    //         FanState {
+    //             is_on: true,
+    //             setting,
+    //         } => {
+    //             if setting <= fan::user_setting::LOW {
+    //                 (Level::High, Level::Low)
+    //             } else if setting <= fan::user_setting::MEDIUM {
+    //                 (Level::Low, Level::High)
+    //             } else {
+    //                 (Level::High, Level::High)
+    //             }
+    //         }
+    //     };
+
+    //     info!(
+    //         "Setting status LEDs to {}, {}",
+    //         led_state.0 == Level::High,
+    //         led_state.1 == Level::High
+    //     );
+    //     led_1.set_level(led_state.0);
+    //     led_2.set_level(led_state.1);
+
+    //     // Wait for state update
+    //     current_state = receiver.changed().await;
+    // }
 }
 
 enum FanCommand {
@@ -634,10 +701,20 @@ async fn main(spawner: Spawner) {
         sender_in,
         receiver_out
     )));
-    unwrap!(spawner.spawn(led_routine(pin_21, pin_20)));
 
     static FAN_ONE_STATE: Signal<CriticalSectionRawMutex, SetPoint> = Signal::new();
     static FAN_TWO_STATE: Signal<CriticalSectionRawMutex, SetPoint> = Signal::new();
+
+    // The display state is updated after the fan state has been successfully applied
+    // and is used to update any component that displays the fan state like the LEDs or Home Assistant through MQTT
+    static FAN_ONE_DISPLAY_STATE: Signal<CriticalSectionRawMutex, SetPoint> = Signal::new();
+    static FAN_TWO_DISPLAY_STATE: Signal<CriticalSectionRawMutex, SetPoint> = Signal::new();
+
+    unwrap!(spawner.spawn(led_routine(
+        pin_21,
+        pin_20,
+        (&FAN_ONE_DISPLAY_STATE, &FAN_TWO_DISPLAY_STATE)
+    )));
 
     let receiver_in = IN.receiver();
     unwrap!(spawner.spawn(mqtt_brain_routine(
