@@ -8,8 +8,11 @@ Create a fan controller that is reliable and low power to control the fans for o
 It has to be controllable manually through buttons or dials. Everything else like Homeassistant integration is optional. It is important that it works alone.
 
 ## Status LEDs
+When the device powers on or after a restart it flashes both lights for a second to help spot eventually broken LEDs.
+The status LEDs indicate the fans speed.
+### Static LEDs
+Both fans run at the same speed if the LEDs are not blinking.
 
-The status LEDs indicate the fan speed.
 | LED 1 | LED 2 | Status |
 |-------|-------|---------------------------|
 | Off | Off | Fan and/or controller off |
@@ -17,12 +20,23 @@ The status LEDs indicate the fan speed.
 | Off | On | Fan speed medium |
 | On | On | Fan speed max |
 
+### Blinking LEDs
+If both fans run at a different speed the LEDs blink indicating each fans status.
+
+LED 1 indicates fan 1 state.
+LED 2 indicates fan 2 state.
+
+If an LED is off, then the fan for that LED is off.
+If the LED blinks once and then takes a 5 second break the fan for that LED runs at low speed. Two blinks for medium speed and three blinks for fast speed.
+
+
+
 ## Homeassistant integration
 
 ### 1. Join WiFi
 
 The controller automatically joins the WiFi network that is configured.
-The network name and passowrd is currently configured through environment variables at compile time and gets flashed onto the device. Plan is to make it configurable through a web interface. But there is no guarantee this will work out.
+The network name and passowrd is currently configured through environment variables at build/compile time and gets flashed onto the device. Plan is to make it configurable through a web interface. But there is no guarantee this will work out.
 
 ### 2. Homeassistant discovery
 
