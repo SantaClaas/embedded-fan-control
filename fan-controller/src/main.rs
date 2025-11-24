@@ -617,8 +617,12 @@ async fn fan_control_routine(
                 MAX_ATTEMPTS
             );
 
+            //TODO don't try to update other fan speed if we have a setting to allow fans to run out of sync
             // Set other fan to current fan speed to avoid them getting out of sync and creating over or underpressure in the house
-            //TODO fix endless loop when both fan speed setting fails and they keep retrying. Could additionally provide a retry strategy to the signal that is set to once to avoid endless loop
+            //TODO fix endless loop when both fan speed setting fails and they keep retrying and sending each other instructions to set back to previous speed.
+            //TODO Could additionally provide a retry strategy to the signal that is set to once to avoid endless loop
+            //TODO or provide a counter to detect the endless loop
+
             // There is no Option::copied or Option::cloned for some reason in core
             current_speed.inspect(|speed| other_fan_speed.signal(speed.clone()));
         }
