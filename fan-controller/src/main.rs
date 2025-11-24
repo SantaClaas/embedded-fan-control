@@ -561,12 +561,13 @@ async fn fan_control_routine(
     fan_address: modbus::device::Address,
     current_fan_speed: &'static Signal<CriticalSectionRawMutex, SetPoint>,
     other_fan_speed: &'static Signal<CriticalSectionRawMutex, SetPoint>,
-    fans: &'static ModbusOnceLock,
+    modbus: &'static ModbusOnceLock,
 ) {
-    let modbus_mutex = fans.get().await;
+    let modbus_mutex = modbus.get().await;
 
+    //TODO load initial fan speed through modbus from fan and make current_speed non optional
     let mut current_speed: Option<SetPoint> = None;
-    loop {
+    'signal_loop: loop {
         let mut speed = current_fan_speed.wait().await;
         if current_speed.is_some_and(|speed| speed == speed) {
             //TODO consider to update fan display state nontheless
@@ -592,11 +593,15 @@ async fn fan_control_routine(
         while let Err(error) = modbus.send_3(&function).await
             && attempt <= MAX_ATTEMPTS
         {
+            // Release lock so other tasks get a chance to access modbus for sending messages to devices
+            drop(modbus);
+
             error!("Failed to send fan state update with attempt {}", attempt);
             attempt += 1;
 
-            // Release lock so other tasks get a chance to access modbus for sending messages to devices
-            drop(modbus);
+            if current_fan_speed.signaled() {
+                continue 'signal_loop;
+            }
 
             // Exponential backoff
             // Safe power of 2 because maximum value is 3 (900ms max)
