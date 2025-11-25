@@ -284,13 +284,15 @@ impl FanController {
 #[deprecated(note = "Use the new system")]
 static FAN_CONTROLLER: FanController = FanController::new();
 
+/// This routine takes the latest fan state updates and updates all parts of the device that display a state.
+/// This includes at the time of writing Home Assistant through MQTT and two status LEDs on the device.
 /// Displays fan status with 2 LEDs:
 /// Off Off -> Fans Off
 /// On Off -> Fan on low setting
 /// Off On -> Fan on medium setting
 /// On On -> Fan on high setting
 #[embassy_executor::task]
-async fn led_routine(
+async fn display_routine(
     pin_21: PIN_21,
     pin_20: PIN_20,
     display_state: (
@@ -311,6 +313,7 @@ async fn led_routine(
     led_2.set_low();
 
     let mut current_fan_state: (Option<SetPoint>, Option<SetPoint>) = (None, None);
+    // The debounce allows us to skip the loop iterations where we have received one signal update but not yet the other. We usually expect them to arrive shortly after each other.
     // Debounce can only activate after the first signal update otherwise we would always unnecessarily stop waiting even though there has been no debounce
     let mut is_debounce_active = false;
     loop {
@@ -719,7 +722,7 @@ async fn main(spawner: Spawner) {
     static FAN_ONE_DISPLAY_STATE: Signal<CriticalSectionRawMutex, SetPoint> = Signal::new();
     static FAN_TWO_DISPLAY_STATE: Signal<CriticalSectionRawMutex, SetPoint> = Signal::new();
 
-    unwrap!(spawner.spawn(led_routine(
+    unwrap!(spawner.spawn(display_routine(
         pin_21,
         pin_20,
         (&FAN_ONE_DISPLAY_STATE, &FAN_TWO_DISPLAY_STATE)
