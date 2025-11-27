@@ -368,7 +368,7 @@ async fn display_routine(
         }
 
         if let Some(update) = display_update_state.0 {
-            //TODO update LEDs and MQTT
+            //TODO update MQTT
 
             // Persist new state
             current_display_state.0.replace(update);
@@ -377,7 +377,7 @@ async fn display_routine(
         }
 
         if let Some(update) = display_update_state.1 {
-            //TODO update LEDs and MQTT
+            //TODO update MQTT
 
             // Persist new state
             current_display_state.1.replace(update);
@@ -600,14 +600,15 @@ async fn fan_control_routine(
     current_fan_speed: &'static Signal<CriticalSectionRawMutex, SetPoint>,
     other_fan_speed: &'static Signal<CriticalSectionRawMutex, SetPoint>,
     modbus: &'static ModbusOnceLock,
+    display_state: &'static Signal<CriticalSectionRawMutex, SetPoint>,
 ) {
     let modbus_mutex = modbus.get().await;
 
     //TODO load initial fan speed through modbus from fan and make current_speed non optional
-    let mut current_speed: Option<SetPoint> = None;
+    let mut current_set_point: Option<SetPoint> = None;
     'signal_loop: loop {
-        let mut speed = current_fan_speed.wait().await;
-        if current_speed.is_some_and(|speed| speed == speed) {
+        let mut set_point = current_fan_speed.wait().await;
+        if current_set_point.is_some_and(|speed| speed == speed) {
             //TODO consider to update fan display state nontheless
             info!("Fan state update received but has same state");
             continue;
@@ -618,12 +619,12 @@ async fn fan_control_routine(
         // Instruct modbus to send update
         let mut modbus = modbus_mutex.lock().await;
         // Check we have the latest state in case it was updated while waiting for the lock
-        speed = current_fan_speed.try_take().unwrap_or(speed);
+        set_point = current_fan_speed.try_take().unwrap_or(set_point);
 
         let function = modbus::function::WriteHoldingRegister::new(
             fan_address,
             fan::holding_registers::REFERENCE_SET_POINT,
-            *speed,
+            *set_point,
         );
 
         const MAX_ATTEMPTS: u8 = 3;
@@ -647,8 +648,6 @@ async fn fan_control_routine(
             modbus = modbus_mutex.lock().await;
         }
 
-        info!("Fan state updated after {} attempts", attempt);
-
         if attempt > MAX_ATTEMPTS {
             error!(
                 "Failed to send fan state update after {} attempts",
@@ -662,11 +661,15 @@ async fn fan_control_routine(
             //TODO or provide a counter to detect the endless loop
 
             // There is no Option::copied or Option::cloned for some reason in core
-            current_speed.inspect(|speed| other_fan_speed.signal(speed.clone()));
+            current_set_point.inspect(|speed| other_fan_speed.signal(speed.clone()));
+            continue;
         }
 
-        // TODO on success send update to fan display logic unit
-        current_speed = Some(speed);
+        info!("Fan state updated after {} attempts", attempt);
+
+        // On success send update to fan display logic unit
+        display_state.signal(set_point);
+        current_set_point = Some(set_point);
     }
 }
 
@@ -887,13 +890,15 @@ async fn main(spawner: Spawner) {
         fan::address::FAN_1,
         &FAN_ONE_STATE,
         &FAN_TWO_STATE,
-        &FANS
+        &FANS,
+        &FAN_ONE_DISPLAY_STATE,
     )));
     unwrap!(spawner.spawn(fan_control_routine(
         fan::address::FAN_2,
         &FAN_TWO_STATE,
         &FAN_ONE_STATE,
-        &FANS
+        &FANS,
+        &FAN_TWO_DISPLAY_STATE,
     )));
 }
 
