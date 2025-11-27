@@ -21,14 +21,18 @@ Both fans run at the same speed if the LEDs are not blinking.
 | On | On | Fan speed max |
 
 ### Blinking LEDs
-If both fans run at a different speed the LEDs blink indicating each fans status.
+
+Both LEDs blink switching in a 250ms rythm at the start of the controller while the initial fan speed data is getting read from the fan.
+Otherwise the LEDs only blink when they are running out of sync at different speeds.
 
 LED 1 indicates fan 1 state.
 LED 2 indicates fan 2 state.
 
 If an LED is off, then the fan for that LED is off.
-If the LED blinks once and then takes a 5 second break the fan for that LED runs at low speed. Two blinks for medium speed and three blinks for fast speed.
+If the LED blinks once and then takes a 5 second break the fan for that LED runs at low speed. Two blinks for medium speed and three blinks for high speed.
 
+> [!NOTE]
+> Both LEDs might blink the same number of times. This means they still run at different speeds but within the same range for low, medium or high.
 
 
 ## Homeassistant integration

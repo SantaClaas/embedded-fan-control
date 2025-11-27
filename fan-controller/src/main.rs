@@ -12,7 +12,7 @@ use embassy_executor::Spawner;
 use embassy_futures::join::join;
 use embassy_futures::select::{Either, Either3, select, select3};
 use embassy_net::Stack;
-use embassy_rp::gpio::{Input, Level, Output, Pull};
+use embassy_rp::gpio::{Input, Level, Output, Pin, Pull};
 use embassy_rp::peripherals::{
     DMA_CH0, PIN_4, PIN_18, PIN_20, PIN_21, PIN_23, PIN_25, PIO0, UART0,
 };
@@ -293,25 +293,12 @@ static FAN_CONTROLLER: FanController = FanController::new();
 /// On On -> Fan on high setting
 #[embassy_executor::task]
 async fn display_routine(
-    pin_21: PIN_21,
-    pin_20: PIN_20,
     display_state: (
         &'static Signal<CriticalSectionRawMutex, SetPoint>,
         &'static Signal<CriticalSectionRawMutex, SetPoint>,
     ),
+    led_state: &'static Signal<CriticalSectionRawMutex, LedState>,
 ) {
-    // Setup LEDs
-    let mut led_1 = Output::new(pin_21, Level::Low);
-    let mut led_2 = Output::new(pin_20, Level::Low);
-
-    // Flash LEDs for a second to check if they are working
-    // This needs to handle all LEDs so they flash at the same time. Because an Output can't be turned back into its pin to be passed around.
-    led_1.set_high();
-    led_2.set_high();
-    Timer::after_secs(1).await;
-    led_1.set_low();
-    led_2.set_low();
-
     // The current fan state that was last recorded
     let mut current_display_state: (Option<SetPoint>, Option<SetPoint>) = (None, None);
     // The incoming fan state update. Reset after every write to the displays. Can not use current fan state for this because that would lead to sending the same state twice.
@@ -683,6 +670,119 @@ async fn fan_control_routine(
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+enum Blink {
+    Off,
+    Once,
+    Twice,
+    Thrice,
+}
+
+enum LedState {
+    Synchronized { led_1: Level, led_2: Level },
+    Unsynchronized { led_1: Blink, led_2: Blink },
+}
+
+async fn blink<'d, T: Pin>(led: &mut Output<'d, T>, blink: Blink) {
+    let pause = || Timer::after_millis(500);
+    match blink {
+        Blink::Off => {
+            if led.is_set_high() {
+                led.set_low();
+            }
+        }
+        Blink::Once => {
+            led.set_high();
+            pause().await;
+            led.set_low();
+        }
+        Blink::Twice => {
+            led.set_high();
+            pause().await;
+            led.set_low();
+            pause().await;
+            led.set_high();
+            pause().await;
+            led.set_low();
+        }
+        Blink::Thrice => {
+            led.set_high();
+            pause().await;
+            led.set_low();
+            pause().await;
+            led.set_high();
+            pause().await;
+            led.set_low();
+            pause().await;
+            led.set_high();
+            pause().await;
+            led.set_low();
+        }
+    }
+}
+
+/// This task controls the LEDs based on the current state of the fan.
+#[embassy_executor::task]
+async fn led_routine(
+    pin_20: PIN_20,
+    pin_21: PIN_21,
+    led_state: &'static Signal<CriticalSectionRawMutex, LedState>,
+) {
+    // Setup LEDs
+    let mut led_1 = Output::new(pin_21, Level::Low);
+    let mut led_2 = Output::new(pin_20, Level::Low);
+
+    // Flash LEDs for a second to check if they are working
+    // This needs to handle all LEDs so they flash at the same time. Because an Output can't be turned back into its pin to be passed around.
+    led_1.set_high();
+    led_2.set_high();
+    Timer::after_secs(1).await;
+    led_1.set_low();
+    led_2.set_low();
+
+    let mut current_state = None;
+    loop {
+        if let Some(new_state) = led_state.try_take() {
+            current_state = Some(new_state);
+        }
+
+        match current_state {
+            // Using a quick switch between states as something moving faster gives the illusion of loading faster
+            None => {
+                const PAUSE_TIME: u64 = 250;
+                Timer::after_millis(PAUSE_TIME).await;
+                led_2.set_low();
+                led_1.set_high();
+                Timer::after_millis(PAUSE_TIME).await;
+                led_1.set_low();
+                led_2.set_high();
+                // Continue loop and repeat if state did not change
+            }
+            Some(LedState::Synchronized {
+                led_1: ref led_1_level,
+                led_2: ref led_2_level,
+            }) => {
+                led_1.set_level(*led_1_level);
+                led_2.set_level(*led_2_level);
+            }
+            Some(LedState::Unsynchronized {
+                led_1: ref led_1_state,
+                led_2: ref led_2_state,
+            }) => {
+                /*
+                 * Note: blink counts can be the same but that does not mean the fan state is the same.
+                 * The blink counts just represent if the fan is running within a certain range (low, medium, high).
+                 * Within these ranges, the fan state can be different.
+                 */
+                blink(&mut led_1, *led_1_state).await;
+                Timer::after_secs(5).await;
+                blink(&mut led_2, *led_2_state).await;
+                Timer::after_secs(5).await;
+            }
+        }
+    }
+}
+
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
     let Peripherals {
@@ -762,20 +862,20 @@ async fn main(spawner: Spawner) {
         receiver_out
     )));
 
-    static FAN_ONE_STATE: Signal<CriticalSectionRawMutex, SetPoint> = Signal::new();
-    static FAN_TWO_STATE: Signal<CriticalSectionRawMutex, SetPoint> = Signal::new();
+    static LED_STATE: Signal<CriticalSectionRawMutex, LedState> = Signal::new();
+    unwrap!(spawner.spawn(led_routine(pin_20, pin_21, &LED_STATE)));
 
     // The display state is updated after the fan state has been successfully applied
     // and is used to update any component that displays the fan state like the LEDs or Home Assistant through MQTT
     static FAN_ONE_DISPLAY_STATE: Signal<CriticalSectionRawMutex, SetPoint> = Signal::new();
     static FAN_TWO_DISPLAY_STATE: Signal<CriticalSectionRawMutex, SetPoint> = Signal::new();
-
     unwrap!(spawner.spawn(display_routine(
-        pin_21,
-        pin_20,
-        (&FAN_ONE_DISPLAY_STATE, &FAN_TWO_DISPLAY_STATE)
+        (&FAN_ONE_DISPLAY_STATE, &FAN_TWO_DISPLAY_STATE),
+        &LED_STATE
     )));
 
+    static FAN_ONE_STATE: Signal<CriticalSectionRawMutex, SetPoint> = Signal::new();
+    static FAN_TWO_STATE: Signal<CriticalSectionRawMutex, SetPoint> = Signal::new();
     let receiver_in = IN.receiver();
     unwrap!(spawner.spawn(mqtt_brain_routine(
         receiver_in,
