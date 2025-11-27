@@ -397,6 +397,26 @@ async fn display_routine(
             // Reset
             display_update_state.1 = None;
         }
+
+        // LEDs shows state of both fans so we need the current and not just the updated state
+        // TODO outsource LED control task as it needs to run continuously when LEDs are blinking. Then it acts the same as MQTT in a way
+        let led_state = match current_display_state {
+            (Some(state_1), Some(state_2)) if state_1 == state_2 => {
+                // Both states are the same so we can use one of them to compare
+                if state_1 <= fan::user_setting::LOW {
+                    (Level::High, Level::Low)
+                } else if state_1 <= fan::user_setting::MEDIUM {
+                    (Level::Low, Level::High)
+                } else {
+                    (Level::High, Level::High)
+                }
+            }
+            // Out of sync. Blink each LED individually to indicate their state.
+            (Some(state_1), Some(state_2)) /* if state_1 != state_2 */ => {
+                defmt::todo!()
+            }
+            _ => defmt::todo!(),
+        };
     }
 
     // let Some(mut receiver) = FAN_CONTROLLER.fan_states.0.receiver() else {
