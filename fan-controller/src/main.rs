@@ -10,7 +10,7 @@ use debounce::Debouncer;
 use defmt::*;
 use embassy_executor::Spawner;
 use embassy_futures::join::join;
-use embassy_futures::select::{Either3, select3};
+use embassy_futures::select::{Either, Either3, select, select3};
 use embassy_net::Stack;
 use embassy_rp::gpio::{Input, Level, Output, Pull};
 use embassy_rp::peripherals::{
@@ -312,31 +312,42 @@ async fn display_routine(
     led_1.set_low();
     led_2.set_low();
 
-    let mut current_fan_state: (Option<SetPoint>, Option<SetPoint>) = (None, None);
+    // The current fan state that was last recorded
+    let mut current_display_state: (Option<SetPoint>, Option<SetPoint>) = (None, None);
+    // The incoming fan state update. Reset after every write to the displays. Can not use current fan state for this because that would lead to sending the same state twice.
+    let mut display_update_state: (Option<SetPoint>, Option<SetPoint>) = (None, None);
     // The debounce allows us to skip the loop iterations where we have received one signal update but not yet the other. We usually expect them to arrive shortly after each other.
     // Debounce can only activate after the first signal update otherwise we would always unnecessarily stop waiting even though there has been no debounce
     let mut is_debounce_active = false;
     loop {
         // Debounce and take the latest signal of both.
         // Basically wait until there is no futher update and then set the lights to the latest state
-        let either = select3(
-            // Hope these are cancellation safe
-            display_state.0.wait(),
-            display_state.1.wait(),
-            if is_debounce_active {
-                Timer::after_millis(250)
-            } else {
-                // If debounce is not active we want to wait until one of the states updates and not until the timer completes
-                //TODO make it more elegant by not awaiting a future that practically never resolves
-                Timer::after(Duration::MAX)
-            },
-        )
-        .await;
+        enum Update {
+            WithDebounce(Either3<SetPoint, SetPoint, ()>),
+            WithoutDebounce(Either<SetPoint, SetPoint>),
+        }
 
-        match either {
-            Either3::First(fan_1_state) => {
+        let update = if is_debounce_active {
+            Update::WithDebounce(
+                select3(
+                    // Hope these are cancellation safe
+                    display_state.0.wait(),
+                    display_state.1.wait(),
+                    Timer::after_millis(250),
+                )
+                .await,
+            )
+        } else {
+            // If debounce is inactive we want to wait until one of the states updates and not until the timer completes
+            Update::WithoutDebounce(select(display_state.0.wait(), display_state.1.wait()).await)
+        };
+
+        match update {
+            // Pattern matching in Rust is awesome!
+            Update::WithDebounce(Either3::First(fan_1_state))
+            | Update::WithoutDebounce(Either::First(fan_1_state)) => {
                 // Count "same state update" as "no update"
-                if current_fan_state
+                if current_display_state
                     .0
                     .is_some_and(|state| state == fan_1_state)
                 {
@@ -344,31 +355,48 @@ async fn display_routine(
                 }
 
                 // Store latest state to be picked up after debounce is over
-                current_fan_state.0.replace(fan_1_state);
+                display_update_state.0.replace(fan_1_state);
                 is_debounce_active = true;
                 continue;
             }
-            Either3::Second(fan_2_state) => {
+            Update::WithDebounce(Either3::Second(fan_2_state))
+            | Update::WithoutDebounce(Either::Second(fan_2_state)) => {
                 // Count "same state update" as "no update"
-                if current_fan_state
+                if current_display_state
                     .1
                     .is_some_and(|state| state == fan_2_state)
                 {
                     continue;
                 }
 
-                current_fan_state.1.replace(fan_2_state);
+                display_update_state.1.replace(fan_2_state);
                 is_debounce_active = true;
                 continue;
             }
             // If there was no update after 250ms, we assume all updates have been sent, turn off the debounce and continue with setting the displays
-            Either3::Third(()) => {
+            Update::WithDebounce(Either3::Third(())) => {
                 // After this loop iteration, we start waiting possibly for infinity again until a state change occurs
                 is_debounce_active = false;
             }
         }
 
-        //TODO update LEDs and MQTT
+        if let Some(update) = display_update_state.0 {
+            //TODO update LEDs and MQTT
+
+            // Persist new state
+            current_display_state.0.replace(update);
+            // Reset
+            display_update_state.0 = None;
+        }
+
+        if let Some(update) = display_update_state.1 {
+            //TODO update LEDs and MQTT
+
+            // Persist new state
+            current_display_state.1.replace(update);
+            // Reset
+            display_update_state.1 = None;
+        }
     }
 
     // let Some(mut receiver) = FAN_CONTROLLER.fan_states.0.receiver() else {
