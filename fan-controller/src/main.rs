@@ -369,8 +369,13 @@ async fn display_routine(
         }
 
         if let Some(update) = display_update_state.0 {
-            //TODO update MQTT
-            // mqtt_out.send()
+            // Update MQTT
+            let publish = OutgoingPublish::UpdateState {
+                fan: Fan::One,
+                payload: update.into(),
+            };
+            mqtt_out.send(publish);
+
             // Persist new state
             current_display_state.0.replace(update);
             // Reset
@@ -378,7 +383,12 @@ async fn display_routine(
         }
 
         if let Some(update) = display_update_state.1 {
-            //TODO update MQTT
+            // Update MQTT
+            let publish = OutgoingPublish::UpdateState {
+                fan: Fan::Two,
+                payload: update.into(),
+            };
+            mqtt_out.send(publish);
 
             // Persist new state
             current_display_state.1.replace(update);
