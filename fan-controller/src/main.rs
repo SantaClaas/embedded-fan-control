@@ -415,7 +415,7 @@ async fn display_routine(
             (Some(state_1), Some(state_2)) /* if state_1 != state_2 */ => {
                 LedState::Unsynchronized { led_1: state_1.into(), led_2: state_2.into() }
             }
-            // This is technically incorrect as not having a state for the other fan does not mean it is off
+            // This is technically incorrect as not having a state for one of the fans does not mean it is off
             (Some(state_1), None) => LedState::Unsynchronized { led_1: state_1.into(), led_2: Blink::Off },
             (None, Some(state_2)) => LedState::Unsynchronized { led_1: Blink::Off, led_2: state_2.into() },
             // This could be made more elegant by making it check at compile time
