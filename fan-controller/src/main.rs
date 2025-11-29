@@ -397,69 +397,33 @@ async fn display_routine(
         }
 
         // LEDs shows state of both fans so we need the current and not just the updated state
-        // TODO outsource LED control task as it needs to run continuously when LEDs are blinking. Then it acts the same as MQTT in a way
-        let led_state = match current_display_state {
+        // Current display state needs to be updated before this
+        let new_led_state = match current_display_state {
             (Some(state_1), Some(state_2)) if state_1 == state_2 => {
                 // Both states are the same so we can use one of them to compare
-                if state_1 <= fan::user_setting::LOW {
-                    (Level::High, Level::Low)
+                if state_1 == SetPoint::ZERO {
+                    LedState::Synchronized { led_1: Level::Low, led_2: Level::Low }
+                } else if state_1 <= fan::user_setting::LOW {
+                    LedState::Synchronized { led_1: Level::High, led_2: Level::Low }
                 } else if state_1 <= fan::user_setting::MEDIUM {
-                    (Level::Low, Level::High)
+                    LedState::Synchronized { led_1: Level::Low, led_2: Level::High }
                 } else {
-                    (Level::High, Level::High)
+                    LedState::Synchronized { led_1: Level::High, led_2: Level::High }
                 }
             }
             // Out of sync. Blink each LED individually to indicate their state.
             (Some(state_1), Some(state_2)) /* if state_1 != state_2 */ => {
-                defmt::todo!()
+                LedState::Unsynchronized { led_1: state_1.into(), led_2: state_2.into() }
             }
-            _ => defmt::todo!(),
+            // This is technically incorrect as not having a state for the other fan does not mean it is off
+            (Some(state_1), None) => LedState::Unsynchronized { led_1: state_1.into(), led_2: Blink::Off },
+            (None, Some(state_2)) => LedState::Unsynchronized { led_1: Blink::Off, led_2: state_2.into() },
+            // This could be made more elegant by making it check at compile time
+            (None, None) => defmt::unreachable!("Reached invalid state of executing an LED display update when there is no current state or state update"),
         };
+
+        led_state.signal(new_led_state);
     }
-
-    // let Some(mut receiver) = FAN_CONTROLLER.fan_states.0.receiver() else {
-    //     // Not using asserts because they are hard to debug on embedded where it crashed
-    //     error!("No receiver for fan is on state. This should never happen.");
-    //     return;
-    // };
-
-    // // Set initial state
-    // let mut current_state = FAN_CONTROLLER.fan_states.0.try_get().unwrap_or(FanState {
-    //     is_on: false,
-    //     setting: SetPoint::ZERO,
-    // });
-
-    // loop {
-    //     let led_state = match current_state {
-    //         FanState {
-    //             is_on: false,
-    //             setting: _,
-    //         } => (Level::Low, Level::Low),
-    //         FanState {
-    //             is_on: true,
-    //             setting,
-    //         } => {
-    //             if setting <= fan::user_setting::LOW {
-    //                 (Level::High, Level::Low)
-    //             } else if setting <= fan::user_setting::MEDIUM {
-    //                 (Level::Low, Level::High)
-    //             } else {
-    //                 (Level::High, Level::High)
-    //             }
-    //         }
-    //     };
-
-    //     info!(
-    //         "Setting status LEDs to {}, {}",
-    //         led_state.0 == Level::High,
-    //         led_state.1 == Level::High
-    //     );
-    //     led_1.set_level(led_state.0);
-    //     led_2.set_level(led_state.1);
-
-    //     // Wait for state update
-    //     current_state = receiver.changed().await;
-    // }
 }
 
 enum FanCommand {
@@ -722,6 +686,20 @@ enum Blink {
     Thrice,
 }
 
+impl From<SetPoint> for Blink {
+    fn from(set_point: SetPoint) -> Self {
+        if set_point == SetPoint::ZERO {
+            Blink::Off
+        } else if set_point <= fan::user_setting::LOW {
+            Blink::Once
+        } else if set_point <= fan::user_setting::MEDIUM {
+            Blink::Twice
+        } else {
+            Blink::Thrice
+        }
+    }
+}
+
 enum LedState {
     Synchronized { led_1: Level, led_2: Level },
     Unsynchronized { led_1: Blink, led_2: Blink },
@@ -766,6 +744,7 @@ async fn blink<'d, T: Pin>(led: &mut Output<'d, T>, blink: Blink) {
 }
 
 /// This task controls the LEDs based on the current state of the fan.
+/// It acts a bit like the MQTT task that is used to display the state of the fans in Home Assistant.
 #[embassy_executor::task]
 async fn led_routine(
     pin_20: PIN_20,
