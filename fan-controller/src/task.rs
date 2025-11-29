@@ -357,7 +357,7 @@ async fn talk<T: Publish>(
                 PredefinedPublish::FanPercentageState { setting } => {
                     info!("Sending percentage state publish {}", setting);
                     // let buffer: StringBuffer<5> = setting.into();
-                    let buffer = match heapless::String::<5>::try_from(setting.0) {
+                    let buffer = match heapless::String::<5>::try_from(*setting) {
                         Ok(buffer) => buffer,
                         Err(error) => {
                             error!("Error converting setting to string: {:?}", error);

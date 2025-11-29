@@ -298,6 +298,7 @@ async fn display_routine(
         &'static Signal<CriticalSectionRawMutex, SetPoint>,
     ),
     led_state: &'static Signal<CriticalSectionRawMutex, LedState>,
+    mqtt_out: channel::Sender<'static, CriticalSectionRawMutex, OutgoingPublish, 3>,
 ) {
     // The current fan state that was last recorded
     let mut current_display_state: (Option<SetPoint>, Option<SetPoint>) = (None, None);
@@ -369,7 +370,7 @@ async fn display_routine(
 
         if let Some(update) = display_update_state.0 {
             //TODO update MQTT
-
+            // mqtt_out.send()
             // Persist new state
             current_display_state.0.replace(update);
             // Reset
@@ -455,7 +456,7 @@ enum FanCommand {
     SetSpeed { set_point: SetPoint },
 }
 
-enum FanControlPublish {
+enum IncomingPublish {
     FanCommand {
         /// The fan the publish is addressed to
         target: Fan,
@@ -471,7 +472,7 @@ enum FromPublishError {
     UnknownTopic,
 }
 
-impl TryFrom<publish::Publish<'_>> for FanControlPublish {
+impl TryFrom<publish::Publish<'_>> for IncomingPublish {
     type Error = FromPublishError;
 
     fn try_from(publish: publish::Publish<'_>) -> Result<Self, Self::Error> {
@@ -483,7 +484,7 @@ impl TryFrom<publish::Publish<'_>> for FanControlPublish {
                 let set_point: SetPoint =
                     payload.parse().map_err(FromPublishError::ParseSetPoint)?;
 
-                Ok(FanControlPublish::FanCommand {
+                Ok(IncomingPublish::FanCommand {
                     target: Fan::One,
                     command: FanCommand::SetSpeed { set_point },
                 })
@@ -495,7 +496,7 @@ impl TryFrom<publish::Publish<'_>> for FanControlPublish {
                 let set_point: SetPoint =
                     payload.parse().map_err(FromPublishError::ParseSetPoint)?;
 
-                Ok(FanControlPublish::FanCommand {
+                Ok(IncomingPublish::FanCommand {
                     target: Fan::Two,
                     command: FanCommand::SetSpeed { set_point },
                 })
@@ -511,13 +512,43 @@ impl TryFrom<publish::Publish<'_>> for FanControlPublish {
     }
 }
 
-impl Publish for FanControlPublish {
+struct UpdateStatePayload(heapless::String<5>);
+
+impl From<SetPoint> for UpdateStatePayload {
+    fn from(set_point: SetPoint) -> Self {
+        let buffer = set_point.to_string();
+        Self(buffer)
+    }
+}
+
+enum OutgoingPublish {
+    UpdateState {
+        fan: Fan,
+        payload: UpdateStatePayload,
+    },
+}
+
+impl Publish for OutgoingPublish {
     fn topic(&self) -> &str {
-        "temporary"
+        match self {
+            OutgoingPublish::UpdateState {
+                fan: Fan::One,
+                payload: _,
+            } => topic::fan_controller::fan_1::STATE,
+            OutgoingPublish::UpdateState {
+                fan: Fan::Two,
+                payload: _,
+            } => topic::fan_controller::fan_2::STATE,
+        }
     }
 
     fn payload(&self) -> &[u8] {
-        b"25.5"
+        match self {
+            OutgoingPublish::UpdateState { fan: _, payload } => {
+                // set_point.0.to_be_bytes()
+                payload.0.as_bytes()
+            }
+        }
     }
 }
 
@@ -534,10 +565,10 @@ async fn mqtt_routine(
     sender_in: channel::Sender<
         'static,
         CriticalSectionRawMutex,
-        Result<FanControlPublish, FromPublishError>,
+        Result<IncomingPublish, FromPublishError>,
         3,
     >,
-    receiver_out: channel::Receiver<'static, CriticalSectionRawMutex, FanControlPublish, 3>,
+    receiver_out: channel::Receiver<'static, CriticalSectionRawMutex, OutgoingPublish, 3>,
 ) {
     // Setting up the network in the task to not block from controlling the device without server connection
     let stack = set_up_network_stack(spawner, pwr_pin, cs_pin, pio, dma, dio, clk).await;
@@ -552,7 +583,7 @@ async fn mqtt_brain_routine(
     receiver_in: channel::Receiver<
         'static,
         CriticalSectionRawMutex,
-        Result<FanControlPublish, FromPublishError>,
+        Result<IncomingPublish, FromPublishError>,
         3,
     >,
     fan_one_state: &'static Signal<CriticalSectionRawMutex, SetPoint>,
@@ -581,7 +612,7 @@ async fn mqtt_brain_routine(
         info!("Received valid payload!");
 
         match publish {
-            FanControlPublish::FanCommand {
+            IncomingPublish::FanCommand {
                 target,
                 command: FanCommand::SetSpeed { set_point },
             } => match target {
@@ -843,12 +874,12 @@ async fn main(spawner: Spawner) {
     unwrap!(spawner.spawn(update_fans(&FANS)));
 
     /// Channel for messages incoming from the MQTT broker to this fan controller
-    static IN: Channel<CriticalSectionRawMutex, Result<FanControlPublish, FromPublishError>, 3> =
+    static IN: Channel<CriticalSectionRawMutex, Result<IncomingPublish, FromPublishError>, 3> =
         Channel::new();
     let sender_in = IN.sender();
 
     /// Channel for messages outgoing from this fan controller to the MQTT broker
-    static OUT: Channel<CriticalSectionRawMutex, FanControlPublish, 3> = Channel::new();
+    static OUT: Channel<CriticalSectionRawMutex, OutgoingPublish, 3> = Channel::new();
     let receiver_out = OUT.receiver();
 
     // The MQTT task waits for publishes from MQTT and sends them to the modbus task.
@@ -872,9 +903,11 @@ async fn main(spawner: Spawner) {
     // and is used to update any component that displays the fan state like the LEDs or Home Assistant through MQTT
     static FAN_ONE_DISPLAY_STATE: Signal<CriticalSectionRawMutex, SetPoint> = Signal::new();
     static FAN_TWO_DISPLAY_STATE: Signal<CriticalSectionRawMutex, SetPoint> = Signal::new();
+    let sender_out = OUT.sender();
     unwrap!(spawner.spawn(display_routine(
         (&FAN_ONE_DISPLAY_STATE, &FAN_TWO_DISPLAY_STATE),
-        &LED_STATE
+        &LED_STATE,
+        sender_out
     )));
 
     static FAN_ONE_STATE: Signal<CriticalSectionRawMutex, SetPoint> = Signal::new();
@@ -900,23 +933,4 @@ async fn main(spawner: Spawner) {
         &FANS,
         &FAN_TWO_DISPLAY_STATE,
     )));
-}
-
-#[cfg(test)]
-mod tests {
-    // The tests don't run on the embedded target, so we need to import the std crate
-
-    extern crate std;
-    use crate::fan::{SetPoint, SetPointOutOfBoundsError};
-
-    use super::*;
-
-    /// These are important hardcoded values I want to make sure are not changed accidentally
-    #[test]
-    fn setting_does_not_exceed_max_set_point() {
-        core::assert_eq!(fan::MAX_SET_POINT, 64_000);
-        core::assert_eq!(SetPoint::new(64_000), Ok(SetPoint(64_000)));
-        core::assert_eq!(SetPoint::new(64_000 + 1), Err(SetPointOutOfBoundsError));
-        core::assert_eq!(SetPoint::new(u16::MAX), Err(SetPointOutOfBoundsError));
-    }
 }

@@ -1,3 +1,5 @@
+use core::ops::Deref;
+
 use defmt::{error, info};
 use embassy_rp::{
     Peripheral, dma,
@@ -232,13 +234,11 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
     //TODO decouple
     /// The mutable reference to self here is important as there can only be one writer to the (mod)bus at a time
     #[deprecated(note = "Decoupled fan from modbus")]
-    pub(crate) async fn set_set_point(
-        &mut self,
-        SetPoint(set_point): &SetPoint,
-    ) -> Result<(), Error> {
+    pub(crate) async fn set_set_point(&mut self, set_point: &SetPoint) -> Result<(), Error> {
         // Send update through UART to MAX845 to modbus fans
         // Form message to fan 1
         let register_address = (*holding_registers::REFERENCE_SET_POINT).to_be_bytes();
+        let value: u16 = set_point.deref().clone();
         let mut message: [u8; 8] = [
             // Device address fan 1
             *address::FAN_1,
@@ -248,8 +248,8 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
             register_address[0],
             register_address[1],
             // Value to set
-            (set_point >> 8) as u8,
-            *set_point as u8,
+            (value >> 8) as u8,
+            value as u8,
             // CRC is set later
             0,
             0,
