@@ -797,6 +797,9 @@ async fn led_routine(
                  * The blink counts just represent if the fan is running within a certain range (low, medium, high).
                  * Within these ranges, the fan state can be different.
                  */
+
+                // Switching between blinking the state of one LED/fan and only then the other is intended
+                // to make it clearer that they don't run the same
                 blink(&mut led_1, *led_1_state).await;
                 Timer::after_secs(5).await;
                 blink(&mut led_2, *led_2_state).await;
