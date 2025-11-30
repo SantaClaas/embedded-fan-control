@@ -30,6 +30,7 @@ use embassy_rp::pio::PioPin;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::{self, Channel};
 use embassy_sync::mutex::Mutex;
+use embassy_sync::pubsub::subscriber::Sub;
 use embassy_sync::signal::Signal;
 use embassy_sync::waitqueue::AtomicWaker;
 use embassy_time::{Duration, Instant, Timer, with_deadline, with_timeout};
@@ -42,9 +43,9 @@ async fn network_task(stack: &'static Stack<NetDriver<'static>>) -> ! {
     stack.run().await
 }
 
-async fn handle_subscribe_acknowledgement<'f>(
+async fn handle_subscribe_acknowledgement<'f, const SUBSCRIPTIONS: usize>(
     acknowledgement: &'f SubscribeAcknowledgement<'f>,
-    acknowledgements: &Mutex<CriticalSectionRawMutex, [bool; 2]>,
+    acknowledgements: &Mutex<CriticalSectionRawMutex, [bool; SUBSCRIPTIONS]>,
 ) {
     info!("Received subscribe acknowledgement");
     let mut acknowledgements = acknowledgements.lock().await;
@@ -61,9 +62,9 @@ async fn handle_subscribe_acknowledgement<'f>(
     );
 }
 
-async fn wait_for_acknowledgement(
+async fn wait_for_acknowledgement<const SUBSCRIPTIONS: usize>(
     packet_identifier: NonZeroU16,
-    acknowledgements: &Mutex<CriticalSectionRawMutex, [bool; 2]>,
+    acknowledgements: &Mutex<CriticalSectionRawMutex, [bool; SUBSCRIPTIONS]>,
     waker: &AtomicWaker,
 ) {
     info!("Waiting for subscribe acknowledgements");
@@ -185,11 +186,12 @@ async fn listen<
     FromError,
     Send: for<'a> TryFrom<publish::Publish<'a>, Error = FromError>,
     const SEND: usize,
+    const SUBSCRIPTIONS: usize,
 >(
     reader: &mut impl Read<Error = ReadError>,
     sender: &channel::Sender<'_, CriticalSectionRawMutex, Result<Send, FromError>, SEND>,
     client_state: &Signal<CriticalSectionRawMutex, ClientState>,
-    acknowledgements: &Mutex<CriticalSectionRawMutex, [bool; 2]>,
+    acknowledgements: &Mutex<CriticalSectionRawMutex, [bool; SUBSCRIPTIONS]>,
     ping_response_signal: &Signal<CriticalSectionRawMutex, PingResponse>,
 ) {
     let mut buffer = [0; 1024];
@@ -427,11 +429,11 @@ async fn talk<T: Publish>(
     }
 }
 
-async fn set_up_subscriptions<T: Publish>(
+async fn set_up_subscriptions<T: Publish, const SUBSCRIPTIONS: usize>(
     packet_identifier: NonZeroU16,
-    acknowledgements: &Mutex<CriticalSectionRawMutex, [bool; 2]>,
+    acknowledgements: &Mutex<CriticalSectionRawMutex, [bool; SUBSCRIPTIONS]>,
     outgoing: &Channel<CriticalSectionRawMutex, Message<'_, T>, 8>,
-    subscriptions: &'static [Subscription<'static>],
+    subscriptions: &'static [Subscription<'static>; SUBSCRIPTIONS],
     waker: &AtomicWaker,
 ) {
     info!("Setting up subscriptions");
@@ -587,27 +589,28 @@ async fn poll_sensors(fans: ModbusOnceLock) {
     }
 }
 
+const SUBSCRIBE_OPTIONS: mqtt::packet::subscribe::Options = mqtt::packet::subscribe::Options::new(
+    QualityOfService::AtMostOnceDelivery,
+    false,
+    false,
+    // mqtt::packet::subscribe::RetainHandling::DoNotSend,
+    mqtt::packet::subscribe::RetainHandling::SendAtSubscribe,
+);
+
+const SUBSCRIPTIONS_LENGTH: usize = 3;
 // Subscribe to home assistant topics
-const SUBSCRIPTIONS: [Subscription; 2] = [
+const SUBSCRIPTIONS: [Subscription; SUBSCRIPTIONS_LENGTH] = [
     Subscription {
         topic_filter: topic::fan_controller::COMMAND,
-        options: mqtt::packet::subscribe::Options::new(
-            QualityOfService::AtMostOnceDelivery,
-            false,
-            false,
-            // mqtt::packet::subscribe::RetainHandling::DoNotSend,
-            mqtt::packet::subscribe::RetainHandling::SendAtSubscribe,
-        ),
+        options: SUBSCRIBE_OPTIONS,
     },
     Subscription {
-        topic_filter: "fancontroller/speed/percentage",
-        options: mqtt::packet::subscribe::Options::new(
-            QualityOfService::AtMostOnceDelivery,
-            false,
-            false,
-            // mqtt::packet::subscribe::RetainHandling::DoNotSend,
-            mqtt::packet::subscribe::RetainHandling::SendAtSubscribe,
-        ),
+        topic_filter: topic::fan_controller::fan_1::COMMAND,
+        options: SUBSCRIBE_OPTIONS,
+    },
+    Subscription {
+        topic_filter: topic::fan_controller::fan_2::COMMAND,
+        options: SUBSCRIBE_OPTIONS,
     },
 ];
 
@@ -797,7 +800,8 @@ pub(super) async fn mqtt_with_connect<
     // with futures so this will be refactored when I made it work
     // Contains the status of the subscribe packets send out. The packet identifier represents the
     // index in the array
-    let acknowledgements: Mutex<CriticalSectionRawMutex, [bool; 2]> = Mutex::new([false, false]);
+    let acknowledgements: Mutex<CriticalSectionRawMutex, [bool; SUBSCRIPTIONS_LENGTH]> =
+        Mutex::new([false; SUBSCRIPTIONS_LENGTH]);
     // The waker needs to be woken to complete the subscribe acknowledgement future.
     // The embassy documentation does not explain when to use [`AtomicWaker`] but I am assuming
     // it is useful for cases like this where I need to mutate a static.
