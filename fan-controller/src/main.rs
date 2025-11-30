@@ -847,7 +847,7 @@ async fn mqtt_task(
         // Don't need to set speed_range_min because it is 1 by default
 
         // Speed set to max 32000 which is 50% of what the fans can do but more is not needed. This way the fans last longer
-        const DISCOVERY_PAYLOAD: &[u8] = env!("FAN_CONTROLLER_DISCOVERY_PAYLOAD").as_bytes();
+        const DISCOVERY_PAYLOAD: &[u8] = include_bytes!("../discovery_payload.json");
 
         // "~": "fancontroller",
         //
