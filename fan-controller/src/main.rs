@@ -861,10 +861,6 @@ async fn main(spawner: Spawner) {
     // Just initialize it
     _ = FANS.get_or_init(|| client.into());
 
-    // Button input task waits for button presses and send according signals to the modbus task
-    unwrap!(spawner.spawn(input(pin_18)));
-    unwrap!(spawner.spawn(update_fans(&FANS)));
-
     /// Channel for messages incoming from the MQTT broker to this fan controller
     static IN: Channel<CriticalSectionRawMutex, Result<IncomingPublish, FromPublishError>, 3> =
         Channel::new();
