@@ -599,7 +599,7 @@ async fn mqtt_brain_routine(
 
 /// Receives the fan state updates and sends them to modbus as modbus messages
 /// After a successful response, this sends an update to the fan display logic unit
-#[embassy_executor::task]
+#[embassy_executor::task(pool_size = 2)]
 async fn fan_control_routine(
     fan_address: modbus::device::Address,
     current_fan_speed: &'static Signal<CriticalSectionRawMutex, SetPoint>,
