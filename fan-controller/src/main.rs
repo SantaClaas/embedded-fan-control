@@ -25,7 +25,7 @@ use embassy_sync::mutex::Mutex;
 use embassy_sync::once_lock::OnceLock;
 use embassy_sync::pubsub::PubSubChannel;
 use embassy_sync::signal::Signal;
-use embassy_sync::watch::Watch;
+use embassy_sync::watch::{self, Watch};
 use embassy_time::{Duration, Instant, Timer};
 use mqtt::TryDecode;
 use static_cell::StaticCell;
@@ -194,6 +194,51 @@ async fn input(pin_18: PIN_18) {
     }
 }
 
+#[embassy_executor::task]
+async fn input_routine(
+    pin: PIN_18,
+    mut display_state: (
+        watch::Receiver<'static, CriticalSectionRawMutex, SetPoint, 2>,
+        watch::Receiver<'static, CriticalSectionRawMutex, SetPoint, 2>,
+    ),
+    fan_state: (
+        &'static Signal<CriticalSectionRawMutex, SetPoint>,
+        &'static Signal<CriticalSectionRawMutex, SetPoint>,
+    ),
+) {
+    // The button just rotates through fan settings. This is because we currently only have one button
+    // Will probably use something more advanced in the future
+    let mut button = Debouncer::new(Input::new(pin, Pull::Up), Duration::from_millis(250));
+
+    loop {
+        // Falling edge for our button -> button down (pressing down
+        // Rising edge for our button -> button up (letting go after press)
+        // Act on press as there is delay between pressing and letting go and it feels snappier
+        button.debounce_falling_edge().await;
+        info!("Button pressed");
+
+        // As the button controls both fans it will force them to be synchronous
+        // Take the lowest of both fan states to decide the next advancement
+        let fan_1_state = display_state.0.try_get().unwrap_or(SetPoint::ZERO);
+        let fan_2_state = display_state.1.try_get().unwrap_or(SetPoint::ZERO);
+
+        let base_state = core::cmp::min(fan_1_state, fan_2_state);
+
+        let next_set_point = if base_state == SetPoint::ZERO {
+            fan::user_setting::LOW
+        } else if base_state <= fan::user_setting::LOW {
+            fan::user_setting::MEDIUM
+        } else if base_state <= fan::user_setting::MEDIUM {
+            fan::user_setting::HIGH
+        } else {
+            SetPoint::ZERO
+        };
+
+        fan_state.0.signal(next_set_point);
+        fan_state.1.signal(next_set_point);
+    }
+}
+
 #[deprecated(note = "There are now two separate tasks that update the fan independently")]
 /// Update fans whenenver the fan setting or on state changes
 #[embassy_executor::task]
@@ -293,9 +338,9 @@ static FAN_CONTROLLER: FanController = FanController::new();
 /// On On -> Fan on high setting
 #[embassy_executor::task]
 async fn display_routine(
-    display_state: (
-        &'static Signal<CriticalSectionRawMutex, SetPoint>,
-        &'static Signal<CriticalSectionRawMutex, SetPoint>,
+    mut display_state: (
+        watch::Receiver<'static, CriticalSectionRawMutex, SetPoint, 2>,
+        watch::Receiver<'static, CriticalSectionRawMutex, SetPoint, 2>,
     ),
     led_state: &'static Signal<CriticalSectionRawMutex, LedState>,
     mqtt_out: channel::Sender<'static, CriticalSectionRawMutex, OutgoingPublish, 3>,
@@ -319,15 +364,17 @@ async fn display_routine(
             Update::WithDebounce(
                 select3(
                     // Hope these are cancellation safe
-                    display_state.0.wait(),
-                    display_state.1.wait(),
+                    display_state.0.changed(),
+                    display_state.1.changed(),
                     Timer::after_millis(250),
                 )
                 .await,
             )
         } else {
             // If debounce is inactive we want to wait until one of the states updates and not until the timer completes
-            Update::WithoutDebounce(select(display_state.0.wait(), display_state.1.wait()).await)
+            Update::WithoutDebounce(
+                select(display_state.0.changed(), display_state.1.changed()).await,
+            )
         };
 
         match update {
@@ -605,7 +652,7 @@ async fn fan_control_routine(
     current_fan_speed: &'static Signal<CriticalSectionRawMutex, SetPoint>,
     other_fan_speed: &'static Signal<CriticalSectionRawMutex, SetPoint>,
     modbus: &'static ModbusOnceLock,
-    display_state: &'static Signal<CriticalSectionRawMutex, SetPoint>,
+    display_state: watch::Sender<'static, CriticalSectionRawMutex, SetPoint, 2>,
 ) {
     let modbus_mutex = modbus.get().await;
 
@@ -673,7 +720,14 @@ async fn fan_control_routine(
         info!("Fan state updated after {} attempts", attempt);
 
         // On success send update to fan display logic unit
-        display_state.signal(set_point);
+        display_state.send_if_modified(|current| {
+            if current.is_none_or(|current| current != set_point) {
+                current.replace(set_point);
+                return true;
+            }
+
+            false
+        });
         current_set_point = Some(set_point);
     }
 }
@@ -889,17 +943,37 @@ async fn main(spawner: Spawner) {
 
     // The display state is updated after the fan state has been successfully applied
     // and is used to update any component that displays the fan state like the LEDs or Home Assistant through MQTT
-    static FAN_ONE_DISPLAY_STATE: Signal<CriticalSectionRawMutex, SetPoint> = Signal::new();
-    static FAN_TWO_DISPLAY_STATE: Signal<CriticalSectionRawMutex, SetPoint> = Signal::new();
+    static FAN_ONE_DISPLAY_STATE: Watch<CriticalSectionRawMutex, SetPoint, 2> = Watch::new();
+    static FAN_TWO_DISPLAY_STATE: Watch<CriticalSectionRawMutex, SetPoint, 2> = Watch::new();
+
+    let display_receivers = (
+        FAN_ONE_DISPLAY_STATE
+            .receiver()
+            .expect("Expected receiver to be configured to allow 2 receivers"),
+        FAN_TWO_DISPLAY_STATE
+            .receiver()
+            .expect("Expected receiver to be configured to allow 2 receivers"),
+    );
     let sender_out = OUT.sender();
-    unwrap!(spawner.spawn(display_routine(
-        (&FAN_ONE_DISPLAY_STATE, &FAN_TWO_DISPLAY_STATE),
-        &LED_STATE,
-        sender_out
-    )));
+    unwrap!(spawner.spawn(display_routine(display_receivers, &LED_STATE, sender_out)));
 
     static FAN_ONE_STATE: Signal<CriticalSectionRawMutex, SetPoint> = Signal::new();
     static FAN_TWO_STATE: Signal<CriticalSectionRawMutex, SetPoint> = Signal::new();
+
+    let button_receivers = (
+        FAN_ONE_DISPLAY_STATE
+            .receiver()
+            .expect("Expected receiver to be configured to allow 2 receivers"),
+        FAN_TWO_DISPLAY_STATE
+            .receiver()
+            .expect("Expected receiver to be configured to allow 2 receivers"),
+    );
+    unwrap!(spawner.spawn(input_routine(
+        pin_18,
+        button_receivers,
+        (&FAN_ONE_STATE, &FAN_TWO_STATE)
+    )));
+
     let receiver_in = IN.receiver();
     unwrap!(spawner.spawn(mqtt_brain_routine(
         receiver_in,
@@ -907,18 +981,21 @@ async fn main(spawner: Spawner) {
         &FAN_TWO_STATE
     )));
 
+    let display_fan_one_sender = FAN_ONE_DISPLAY_STATE.sender();
+    let display_fan_two_sender = FAN_TWO_DISPLAY_STATE.sender();
+
     unwrap!(spawner.spawn(fan_control_routine(
         fan::address::FAN_1,
         &FAN_ONE_STATE,
         &FAN_TWO_STATE,
         &FANS,
-        &FAN_ONE_DISPLAY_STATE,
+        display_fan_one_sender,
     )));
     unwrap!(spawner.spawn(fan_control_routine(
         fan::address::FAN_2,
         &FAN_TWO_STATE,
         &FAN_ONE_STATE,
         &FANS,
-        &FAN_TWO_DISPLAY_STATE,
+        display_fan_two_sender,
     )));
 }

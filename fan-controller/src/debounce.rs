@@ -1,5 +1,5 @@
 use embassy_rp::gpio::{Input, Level, Pin};
-use embassy_time::{with_timeout, Duration, TimeoutError, Timer};
+use embassy_time::{Duration, TimeoutError, Timer, with_timeout};
 
 /// Debouncer based on [Embassy debounce example](https://github.com/embassy-rs/embassy/blob/8d8cd78f634b2f435e3a997f7f8f3ac0b8ca300c/examples/rp/src/bin/debounce.rs)
 /// (Licensed MIT/Apache-2.0)
