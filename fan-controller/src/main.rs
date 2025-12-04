@@ -555,11 +555,11 @@ impl Publish for OutgoingPublish {
             OutgoingPublish::UpdateState {
                 fan: Fan::One,
                 payload: _,
-            } => topic::fan_controller::fan_1::STATE,
+            } => topic::fan_controller::fan_1::percentage::STATE,
             OutgoingPublish::UpdateState {
                 fan: Fan::Two,
                 payload: _,
-            } => topic::fan_controller::fan_2::STATE,
+            } => topic::fan_controller::fan_2::percentage::STATE,
         }
     }
 

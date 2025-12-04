@@ -272,8 +272,8 @@ fn set_discovery_payload(git_hash: &str) {
                 Component::Fan {
                     name: Some("Fan 1"),
                     unique_id: Some(topic::fan_controller::fan_1::UNIQUE_ID),
-                    state_topic: Some(topic::fan_controller::fan_1::STATE),
-                    command_topic: topic::fan_controller::fan_1::COMMAND,
+                    state_topic: Some(topic::fan_controller::fan_1::on::STATE),
+                    command_topic: topic::fan_controller::fan_1::on::COMMAND,
                     percentage_state_topic: Some(topic::fan_controller::fan_1::percentage::STATE),
                     percentage_command_topic: Some(
                         topic::fan_controller::fan_1::percentage::COMMAND,
@@ -287,8 +287,8 @@ fn set_discovery_payload(git_hash: &str) {
                 Component::Fan {
                     name: Some("Fan 2"),
                     unique_id: Some(topic::fan_controller::fan_2::UNIQUE_ID),
-                    state_topic: Some(topic::fan_controller::fan_2::STATE),
-                    command_topic: topic::fan_controller::fan_2::COMMAND,
+                    state_topic: Some(topic::fan_controller::fan_2::on::STATE),
+                    command_topic: topic::fan_controller::fan_2::on::COMMAND,
                     percentage_state_topic: Some(topic::fan_controller::fan_2::percentage::STATE),
                     percentage_command_topic: Some(
                         topic::fan_controller::fan_2::percentage::COMMAND,

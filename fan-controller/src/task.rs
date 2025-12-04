@@ -631,19 +631,19 @@ const SUBSCRIPTIONS: [Subscription; SUBSCRIPTIONS_LENGTH] = [
         options: SUBSCRIBE_OPTIONS,
     },
     Subscription {
-        topic_filter: topic::fan_controller::fan_1::COMMAND,
+        topic_filter: topic::fan_controller::fan_1::on::COMMAND,
         options: SUBSCRIBE_OPTIONS,
     },
     Subscription {
-        topic_filter: topic::fan_controller::fan_1::STATE,
+        topic_filter: topic::fan_controller::fan_1::percentage::COMMAND,
         options: SUBSCRIBE_OPTIONS,
     },
     Subscription {
-        topic_filter: topic::fan_controller::fan_2::COMMAND,
+        topic_filter: topic::fan_controller::fan_2::on::COMMAND,
         options: SUBSCRIBE_OPTIONS,
     },
     Subscription {
-        topic_filter: topic::fan_controller::fan_2::STATE,
+        topic_filter: topic::fan_controller::fan_2::percentage::COMMAND,
         options: SUBSCRIBE_OPTIONS,
     },
 ];
