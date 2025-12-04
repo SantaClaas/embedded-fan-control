@@ -723,6 +723,9 @@ async fn mqtt_brain_routine(
 
         info!("Received valid payload!");
 
+        //TODO make this configurable through a switch
+        let is_synchronization_on = true;
+
         match publish {
             IncomingPublish::FanCommand {
                 target,
@@ -730,11 +733,17 @@ async fn mqtt_brain_routine(
             } => match target {
                 Fan::One => {
                     last_fan_state.0 = set_point;
-                    fan_one_state.signal(set_point)
+                    fan_one_state.signal(set_point);
+                    if is_synchronization_on {
+                        fan_two_state.signal(set_point);
+                    }
                 }
                 Fan::Two => {
                     last_fan_state.1 = set_point;
-                    fan_two_state.signal(set_point)
+                    fan_two_state.signal(set_point);
+                    if is_synchronization_on {
+                        fan_one_state.signal(set_point);
+                    }
                 }
             },
             IncomingPublish::FanCommand {
