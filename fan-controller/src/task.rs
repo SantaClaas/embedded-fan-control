@@ -623,7 +623,7 @@ const SUBSCRIBE_OPTIONS: mqtt::packet::subscribe::Options = mqtt::packet::subscr
     mqtt::packet::subscribe::RetainHandling::SendAtSubscribe,
 );
 
-const SUBSCRIPTIONS_LENGTH: usize = 3;
+const SUBSCRIPTIONS_LENGTH: usize = 5;
 // Subscribe to home assistant topics
 const SUBSCRIPTIONS: [Subscription; SUBSCRIPTIONS_LENGTH] = [
     Subscription {
@@ -635,7 +635,15 @@ const SUBSCRIPTIONS: [Subscription; SUBSCRIPTIONS_LENGTH] = [
         options: SUBSCRIBE_OPTIONS,
     },
     Subscription {
+        topic_filter: topic::fan_controller::fan_1::STATE,
+        options: SUBSCRIBE_OPTIONS,
+    },
+    Subscription {
         topic_filter: topic::fan_controller::fan_2::COMMAND,
+        options: SUBSCRIBE_OPTIONS,
+    },
+    Subscription {
+        topic_filter: topic::fan_controller::fan_2::STATE,
         options: SUBSCRIBE_OPTIONS,
     },
 ];

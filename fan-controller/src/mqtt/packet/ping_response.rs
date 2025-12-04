@@ -1,4 +1,3 @@
-
 use crate::mqtt::Decode;
 
 pub(crate) struct PingResponse;

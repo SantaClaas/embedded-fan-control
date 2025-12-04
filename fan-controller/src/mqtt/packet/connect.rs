@@ -1,9 +1,9 @@
 use core::num::TryFromIntError;
 
+use crate::MqttBrokerConfiguration;
+use crate::mqtt::TryEncode;
 use crate::mqtt::variable_byte_integer;
 use crate::mqtt::variable_byte_integer::VariableByteIntegerEncodeError;
-use crate::mqtt::TryEncode;
-use crate::MqttBrokerConfiguration;
 use defmt::Format;
 
 pub(crate) struct Connect<'a> {

@@ -1,4 +1,4 @@
-use crate::{task::MqttBrokerCredentials, MqttBrokerConfiguration};
+use crate::{MqttBrokerConfiguration, task::MqttBrokerCredentials};
 use embassy_net::IpAddress;
 use embassy_time::Duration;
 

@@ -1,6 +1,7 @@
 use crate::{
     configuration,
     mqtt::{
+        TryDecode, TryEncode,
         packet::{
             self,
             connect::Connect,
@@ -11,16 +12,15 @@ use crate::{
             subscribe_acknowledgement::SubscribeAcknowledgement,
         },
         task::{ConnectError, SendError},
-        TryDecode, TryEncode,
     },
 };
 use core::{
     fmt::Debug,
-    future::{poll_fn, Future},
+    future::{Future, poll_fn},
     num::NonZeroU16,
     task::Poll,
 };
-use defmt::{error, info, warn, Format};
+use defmt::{Format, error, info, warn};
 use embassy_net::tcp::TcpSocket;
 use embassy_sync::{
     blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel, mutex::Mutex, signal::Signal,
@@ -221,7 +221,9 @@ impl<R: Read<Error = E>, E: Format + Debug> Listener<R, E> {
                         Ok(response) => response,
                         // Matching to get compiler error if this changes
                         Err(Infallible) => {
-                            defmt::unreachable!("Ping response is always empty so decode should always succeed if the protocol did not change")
+                            defmt::unreachable!(
+                                "Ping response is always empty so decode should always succeed if the protocol did not change"
+                            )
                         }
                     };
 

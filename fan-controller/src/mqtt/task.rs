@@ -1,11 +1,11 @@
 use super::packet::connect_acknowledgement;
+use crate::mqtt::packet::GetPartsError;
 use crate::mqtt::packet::connect::{Connect, EncodeError};
 use crate::mqtt::packet::connect_acknowledgement::{ConnectAcknowledgement, ConnectReasonCode};
-use crate::mqtt::packet::GetPartsError;
-use crate::mqtt::{packet, ConnectErrorReasonCode};
+use crate::mqtt::{ConnectErrorReasonCode, packet};
 use crate::mqtt::{TryDecode, TryEncode};
 use core::fmt::Debug;
-use defmt::{info, warn, Format};
+use defmt::{Format, info, warn};
 use embedded_io_async::{Read, Write};
 
 ///! Tasks that need to be done to run MQTT

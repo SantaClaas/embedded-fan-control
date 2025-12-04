@@ -1,9 +1,9 @@
 use core::str::Utf8Error;
 
-use crate::mqtt::variable_byte_integer::VariableByteIntegerEncodeError;
 use crate::mqtt::TryEncode;
-use crate::mqtt::{variable_byte_integer, TryDecode};
-use defmt::{write, Debug2Format, Format, Formatter};
+use crate::mqtt::variable_byte_integer::VariableByteIntegerEncodeError;
+use crate::mqtt::{TryDecode, variable_byte_integer};
+use defmt::{Debug2Format, Format, Formatter, write};
 
 #[derive(Format, Clone)]
 pub(crate) struct Publish<'a> {

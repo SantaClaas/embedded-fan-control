@@ -1,5 +1,5 @@
-use crate::mqtt::variable_byte_integer;
 use crate::mqtt::TryEncode;
+use crate::mqtt::variable_byte_integer;
 use ::mqtt::QualityOfService;
 use core::num::NonZeroU16;
 use defmt::Format;
@@ -56,6 +56,7 @@ impl Options {
 
 #[derive(Debug)]
 pub(crate) struct Subscription<'a> {
+    /// Can be a topic string or with a wildcard in there. That is is why it is a filter and not a topic.
     pub(crate) topic_filter: &'a str,
     pub(crate) options: Options,
 }

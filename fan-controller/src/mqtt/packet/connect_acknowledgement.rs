@@ -1,6 +1,6 @@
-use crate::mqtt::{variable_byte_integer, ConnectErrorReasonCode, UnknownConnectErrorReasonCode};
 use crate::TryDecode;
-use defmt::{info, Format};
+use crate::mqtt::{ConnectErrorReasonCode, UnknownConnectErrorReasonCode, variable_byte_integer};
+use defmt::{Format, info};
 
 // pub(crate) struct Properties {
 //     /// The session expiry interval in seconds
@@ -114,11 +114,12 @@ impl TryDecode<'_> for ConnectAcknowledgement {
                     0x26 => {
                         info!("Skipping User Property");
                         // What is the length of a UTF-8 string pair?
-                        let length_1 = variable_byte_integer::decode(buffer, &mut offset)
-                            .map_err(|error| DecodeError::InvalidPropertyStringLength {
+                        let length_1 = variable_byte_integer::decode(buffer, &mut offset).map_err(
+                            |error| DecodeError::InvalidPropertyStringLength {
                                 property_identifier: 0x26,
                                 error,
-                            })?;
+                            },
+                        )?;
 
                         // This is a bit weird as this is the only match branch that advances the offset
                         offset += length_1;
