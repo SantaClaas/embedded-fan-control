@@ -45,19 +45,22 @@ async fn network_task(stack: &'static Stack<NetDriver<'static>>) -> ! {
 
 async fn handle_subscribe_acknowledgement<'f, const SUBSCRIPTIONS: usize>(
     acknowledgement: &'f SubscribeAcknowledgement<'f>,
+    //TODO rework this to be a channel that sends the packet identifier as acknowledgement
     acknowledgements: &Mutex<CriticalSectionRawMutex, [bool; SUBSCRIPTIONS]>,
 ) {
-    info!("Received subscribe acknowledgement");
+    info!("[Subscription] Received subscribe acknowledgement");
     let mut acknowledgements = acknowledgements.lock().await;
-    info!("Locked ACKNOWLEDGEMENTS");
+    info!("[Subscription] Locked ACKNOWLEDGEMENTS");
     // Validate server sends a valid packet identifier or we get bamboozled and panic
     let Some(value) = acknowledgements.get_mut(acknowledgement.packet_identifier as usize) else {
-        warn!("Received subscribe acknowledgement for out of bounds packet identifier");
+        warn!(
+            "[Subscription] Received subscribe acknowledgement for out of bounds packet identifier"
+        );
         return;
     };
 
     info!(
-        "Received acknowledgement {} Reason codes: {:#04x}",
+        "[Subscription] Received acknowledgement {} Reason codes: {:#04x}",
         acknowledgement.packet_identifier, acknowledgement.reason_codes
     );
 }
@@ -67,7 +70,7 @@ async fn wait_for_acknowledgement<const SUBSCRIPTIONS: usize>(
     acknowledgements: &Mutex<CriticalSectionRawMutex, [bool; SUBSCRIPTIONS]>,
     waker: &AtomicWaker,
 ) {
-    info!("Waiting for subscribe acknowledgements");
+    info!("[Subscription] Waiting for subscribe acknowledgements");
     //TODO if this function gets called multiple times it might never be woken up because there
     // is only one waker and the other call of this function will lock the mutex. To solve this
     // we could use structs from [embassy-sync::waitqueue] and/or a blocking mutex to remove the
@@ -89,7 +92,7 @@ async fn wait_for_acknowledgement<const SUBSCRIPTIONS: usize>(
     })
     .await;
 
-    info!("Subscribe acknowledgement received")
+    info!("[Subscription] Subscribe acknowledgement received")
 }
 
 /// A handler that takes MQTT publishes and sets the fan settings accordingly
@@ -253,7 +256,10 @@ async fn listen<
                     match SubscribeAcknowledgement::read(parts.variable_header_and_payload) {
                         Ok(acknowledgement) => acknowledgement,
                         Err(error) => {
-                            error!("Error reading subscribe acknowledgement: {:?}", error);
+                            error!(
+                                "[Subscription] Error reading subscribe acknowledgement: {:?}",
+                                error
+                            );
                             continue;
                         }
                     };
@@ -436,7 +442,14 @@ async fn set_up_subscriptions<T: Publish, const SUBSCRIPTIONS: usize>(
     subscriptions: &'static [Subscription<'static>; SUBSCRIPTIONS],
     waker: &AtomicWaker,
 ) {
-    info!("Setting up subscriptions");
+    info!("[Subscription] Setting up subscriptions");
+    for subscription in subscriptions {
+        info!(
+            "[Subscription] Subscribing to MQTT topic: {}",
+            subscription.topic_filter
+        );
+    }
+
     let message = Message::Subscribe(Subscribe {
         subscriptions,
         //TODO free identifier management
@@ -445,8 +458,21 @@ async fn set_up_subscriptions<T: Publish, const SUBSCRIPTIONS: usize>(
 
     outgoing.send(message).await;
 
-    wait_for_acknowledgement(packet_identifier, acknowledgements, waker).await;
-    info!("Set up subscriptions complete")
+    const TIMEOUT: Duration = Duration::from_secs(30);
+    let result = with_timeout(
+        TIMEOUT,
+        wait_for_acknowledgement(packet_identifier, acknowledgements, waker),
+    )
+    .await;
+
+    if let Err(error) = result {
+        error!(
+            "[Subscription] Timed out setting up subscriptions. Waiting for subscription acknowledgements timed out after {:?}: {:?}",
+            TIMEOUT, error
+        );
+        return;
+    }
+    info!("[Subscription] Set up subscriptions complete")
 }
 
 async fn set_up_discovery<T: Publish>(
@@ -793,8 +819,6 @@ pub(super) async fn mqtt_with_connect<
         return;
     };
     info!("MQTT connection established");
-
-    info!("Subscribing to MQTT topics");
 
     //TODO yes static "global" state is bad, but I am still learning how to use wakers and polling
     // with futures so this will be refactored when I made it work

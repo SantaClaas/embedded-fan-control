@@ -239,6 +239,9 @@ fn get_git_hash() -> Result<Rc<str>, GitHashError> {
         .output()
         .map_err(GitHashError::CommandExecution)?;
 
+    println!("cargo:rerun-if-changed=../.git/HEAD");
+    println!("cargo:rerun-if-changed=../.git/refs");
+
     Ok(Rc::from(str::from_utf8(&output.stdout)?.trim()))
 }
 
