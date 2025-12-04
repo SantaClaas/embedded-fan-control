@@ -23,7 +23,8 @@ pub mod fan_controller {
         use const_format::formatcp;
 
         pub const UNIQUE_ID: &str = formatcp!("{OBJECT_ID}/fan-1");
-        pub mod on {
+        /// The on and off state command and state topics for fan 1.
+        pub mod state {
             use super::UNIQUE_ID;
             use const_format::formatcp;
 
@@ -49,7 +50,8 @@ pub mod fan_controller {
 
         pub const UNIQUE_ID: &str = formatcp!("{OBJECT_ID}/fan-2");
 
-        pub mod on {
+        /// The on and off state command and state topics for fan 2.
+        pub mod state {
             use super::UNIQUE_ID;
             use const_format::formatcp;
 

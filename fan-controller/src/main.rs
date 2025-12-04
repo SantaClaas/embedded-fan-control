@@ -416,12 +416,25 @@ async fn display_routine(
         }
 
         if let Some(update) = display_update_state.0 {
+            // Turn on the fan on home assistant if it was off before
+            // We already checked above if the new state is not the same as the current state
+            if let Some(command) = current_display_state
+                .0
+                .and_then(|current| SetStateCommandValue::from_change(current, update))
+            {
+                let publish = OutgoingPublish::UpdateState {
+                    fan: Fan::One,
+                    payload: command,
+                };
+                mqtt_out.send(publish).await;
+            }
+
             // Update MQTT
-            let publish = OutgoingPublish::UpdateState {
+            let publish = OutgoingPublish::UpdateSpeed {
                 fan: Fan::One,
                 payload: update.into(),
             };
-            mqtt_out.send(publish);
+            mqtt_out.send(publish).await;
 
             // Persist new state
             current_display_state.0.replace(update);
@@ -430,12 +443,25 @@ async fn display_routine(
         }
 
         if let Some(update) = display_update_state.1 {
+            // Turn on the fan on home assistant if it was off before
+            // We already checked above if the new state is not the same as the current state
+            if let Some(command) = current_display_state
+                .1
+                .and_then(|current| SetStateCommandValue::from_change(current, update))
+            {
+                let publish = OutgoingPublish::UpdateState {
+                    fan: Fan::Two,
+                    payload: command,
+                };
+                mqtt_out.send(publish).await;
+            }
+
             // Update MQTT
-            let publish = OutgoingPublish::UpdateState {
+            let publish = OutgoingPublish::UpdateSpeed {
                 fan: Fan::Two,
                 payload: update.into(),
             };
-            mqtt_out.send(publish);
+            mqtt_out.send(publish).await;
 
             // Persist new state
             current_display_state.1.replace(update);
@@ -473,8 +499,28 @@ async fn display_routine(
     }
 }
 
+/// This is only a virtual off and on state for home assistant.
+/// The fans actually don't power off or on. We just set the speed to 0 when off or some other value when on.
+enum SetStateCommandValue {
+    On,
+    Off,
+}
+
+impl SetStateCommandValue {
+    fn from_change(old_speed: SetPoint, new_speed: SetPoint) -> Option<Self> {
+        if old_speed == SetPoint::ZERO && new_speed != SetPoint::ZERO {
+            Some(SetStateCommandValue::On)
+        } else if old_speed != SetPoint::ZERO && new_speed == SetPoint::ZERO {
+            Some(SetStateCommandValue::Off)
+        } else {
+            None
+        }
+    }
+}
+
 enum FanCommand {
     SetSpeed { set_point: SetPoint },
+    SetState(SetStateCommandValue),
 }
 
 enum IncomingPublish {
@@ -489,6 +535,7 @@ enum FromPublishError {
     // Invalid fan command
     InvalidStringPayload(core::str::Utf8Error),
     ParseSetPoint(ParseSetPointError),
+    InvalidSetStateCommandPayload,
 
     UnknownTopic,
 }
@@ -498,6 +545,17 @@ impl TryFrom<publish::Publish<'_>> for IncomingPublish {
 
     fn try_from(publish: publish::Publish<'_>) -> Result<Self, Self::Error> {
         match publish.topic_name {
+            topic::fan_controller::fan_1::state::COMMAND => match publish.payload {
+                b"ON" => Ok(Self::FanCommand {
+                    target: Fan::One,
+                    command: FanCommand::SetState(SetStateCommandValue::On),
+                }),
+                b"OFF" => Ok(Self::FanCommand {
+                    target: Fan::One,
+                    command: FanCommand::SetState(SetStateCommandValue::Off),
+                }),
+                other => Err(FromPublishError::InvalidSetStateCommandPayload),
+            },
             topic::fan_controller::fan_1::percentage::COMMAND => {
                 let payload = core::str::from_utf8(publish.payload)
                     .map_err(FromPublishError::InvalidStringPayload)?;
@@ -510,6 +568,17 @@ impl TryFrom<publish::Publish<'_>> for IncomingPublish {
                     command: FanCommand::SetSpeed { set_point },
                 })
             }
+            topic::fan_controller::fan_2::state::COMMAND => match publish.payload {
+                b"ON" => Ok(Self::FanCommand {
+                    target: Fan::Two,
+                    command: FanCommand::SetState(SetStateCommandValue::On),
+                }),
+                b"OFF" => Ok(Self::FanCommand {
+                    target: Fan::Two,
+                    command: FanCommand::SetState(SetStateCommandValue::Off),
+                }),
+                other => Err(FromPublishError::InvalidSetStateCommandPayload),
+            },
             topic::fan_controller::fan_2::percentage::COMMAND => {
                 let payload = core::str::from_utf8(publish.payload)
                     .map_err(FromPublishError::InvalidStringPayload)?;
@@ -533,9 +602,9 @@ impl TryFrom<publish::Publish<'_>> for IncomingPublish {
     }
 }
 
-struct UpdateStatePayload(heapless::String<5>);
+struct UpdateSpeedPayload(heapless::String<5>);
 
-impl From<SetPoint> for UpdateStatePayload {
+impl From<SetPoint> for UpdateSpeedPayload {
     fn from(set_point: SetPoint) -> Self {
         let buffer = set_point.to_string();
         Self(buffer)
@@ -543,32 +612,48 @@ impl From<SetPoint> for UpdateStatePayload {
 }
 
 enum OutgoingPublish {
+    UpdateSpeed {
+        fan: Fan,
+        payload: UpdateSpeedPayload,
+    },
     UpdateState {
         fan: Fan,
-        payload: UpdateStatePayload,
+        payload: SetStateCommandValue,
     },
 }
 
 impl Publish for OutgoingPublish {
     fn topic(&self) -> &str {
         match self {
-            OutgoingPublish::UpdateState {
+            OutgoingPublish::UpdateSpeed {
                 fan: Fan::One,
                 payload: _,
             } => topic::fan_controller::fan_1::percentage::STATE,
-            OutgoingPublish::UpdateState {
+            OutgoingPublish::UpdateSpeed {
                 fan: Fan::Two,
                 payload: _,
             } => topic::fan_controller::fan_2::percentage::STATE,
+            OutgoingPublish::UpdateState {
+                fan: Fan::One,
+                payload: _,
+            } => topic::fan_controller::fan_1::state::STATE,
+            OutgoingPublish::UpdateState {
+                fan: Fan::Two,
+                payload: _,
+            } => topic::fan_controller::fan_2::state::STATE,
         }
     }
 
     fn payload(&self) -> &[u8] {
         match self {
-            OutgoingPublish::UpdateState { fan: _, payload } => {
+            OutgoingPublish::UpdateSpeed { fan: _, payload } => {
                 // set_point.0.to_be_bytes()
                 payload.0.as_bytes()
             }
+            OutgoingPublish::UpdateState { fan: _, payload } => match payload {
+                SetStateCommandValue::On => b"ON",
+                SetStateCommandValue::Off => b"OFF",
+            },
         }
     }
 }
@@ -610,6 +695,9 @@ async fn mqtt_brain_routine(
     fan_one_state: &'static Signal<CriticalSectionRawMutex, SetPoint>,
     fan_two_state: &'static Signal<CriticalSectionRawMutex, SetPoint>,
 ) {
+    // Remembering the last fan state for when the home assistant turns the device off and then on again
+    //TODO use state loaded from fan
+    let mut last_fan_state = (SetPoint::ZERO, SetPoint::ZERO);
     loop {
         info!("Waiting for new publish");
         let message = receiver_in.receive().await;
@@ -624,6 +712,9 @@ async fn mqtt_brain_routine(
                         error!("Invalid set point payload");
                     }
                     FromPublishError::UnknownTopic => error!("Unknown topic. Look for ealier logs"),
+                    FromPublishError::InvalidSetStateCommandPayload => {
+                        error!("Invalid set state command payload")
+                    }
                 }
                 continue;
             }
@@ -637,8 +728,27 @@ async fn mqtt_brain_routine(
                 target,
                 command: FanCommand::SetSpeed { set_point },
             } => match target {
-                Fan::One => fan_one_state.signal(set_point),
-                Fan::Two => fan_two_state.signal(set_point),
+                Fan::One => {
+                    last_fan_state.0 = set_point;
+                    fan_one_state.signal(set_point)
+                }
+                Fan::Two => {
+                    last_fan_state.1 = set_point;
+                    fan_two_state.signal(set_point)
+                }
+            },
+            IncomingPublish::FanCommand {
+                target,
+                command: FanCommand::SetState(new_state),
+            } => match target {
+                Fan::One => match new_state {
+                    SetStateCommandValue::On => fan_one_state.signal(last_fan_state.0),
+                    SetStateCommandValue::Off => fan_one_state.signal(SetPoint::ZERO),
+                },
+                Fan::Two => match new_state {
+                    SetStateCommandValue::On => fan_two_state.signal(last_fan_state.1),
+                    SetStateCommandValue::Off => fan_two_state.signal(SetPoint::ZERO),
+                },
             },
         }
     }
