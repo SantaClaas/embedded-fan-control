@@ -29,6 +29,10 @@ impl WriteHoldingRegister {
         data[7] = checksum[0];
         Self(data)
     }
+
+    pub(crate) fn device_address(&self) -> modbus::device::Address {
+        self.0[0].into()
+    }
 }
 
 impl AsRef<[u8]> for WriteHoldingRegister {

@@ -123,22 +123,29 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
     }
 
     pub(crate) async fn send_3(&mut self, message: &WriteHoldingRegister) -> Result<(), Error> {
+        // For debugging
+        let fan_identifier = match *message.device_address() {
+            2 => "[Fan 1]",
+            3 => "[Fan 2]",
+            other => "Unknown (oops)",
+        };
+
         // Write then read
         // Set pin setting DE (driver enable) to on (high) on the MAX845 to send data
         self.driver_enable.set_high();
 
         let bytes = message.as_ref();
-        info!("Sending message to fan: {:?}", bytes);
+        info!("{} Sending message to fan: {:?}", fan_identifier, bytes);
         // As ref because &[u8; 8] is not the same as &[u8]
         let result = with_timeout(configuration::FAN_TIMEOUT, self.uart.write_all(&bytes)).await?;
 
-        info!("uart write result: {:?}", result);
+        info!("{} UART write result: {:?}", fan_identifier, result);
 
         // Before closing we need to flush the buffer to ensure that all data is written
         // This requires blocking or we get a WouldBlock error. I don't understand why (TODO)
         let result = self.uart.blocking_flush();
         if let Err(error) = result {
-            error!("uart flush error");
+            error!("{} UART flush error", fan_identifier);
         }
 
         // In addition to flushing we need to wait for some time before turning off data in on the
@@ -157,7 +164,7 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
         // Read
         // Read response from fan. The response can vary in length
         let mut response_buffer: [u8; 8] = [0; 8];
-        info!("Waiting for response from fan");
+        info!("{} Waiting for response from fan", fan_identifier);
         let bytes_read = with_timeout(
             configuration::FAN_TIMEOUT,
             //TODO test this does not wait for bytes to fill the buffer
@@ -166,7 +173,10 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
         )
         .await??;
 
-        info!("response from fan: {:?} {:?}", bytes_read, response_buffer);
+        info!(
+            "{} Response from fan: {:?} {:?}",
+            fan_identifier, bytes_read, response_buffer
+        );
 
         //TODO validate response from fan
         // Read the correct number of bytes

@@ -775,17 +775,26 @@ async fn fan_control_routine(
 ) {
     let modbus_mutex = modbus.get().await;
 
+    let fan_identifier = match *fan_address {
+        2 => "[Fan 1]",
+        3 => "[Fan 2]",
+        other => "Unknown (oops)",
+    };
+
     //TODO load initial fan speed through modbus from fan and make current_speed non optional
     let mut current_set_point: Option<SetPoint> = None;
     'signal_loop: loop {
         let mut set_point = current_fan_speed.wait().await;
         if current_set_point.is_some_and(|speed| speed == speed) {
             //TODO consider to update fan display state nontheless
-            info!("Fan state update received but has same state");
+            info!(
+                "{} Fan state update received but has same state",
+                fan_identifier
+            );
             continue;
         }
 
-        info!("Received fan state");
+        info!("{} Received fan state", fan_identifier);
 
         // Instruct modbus to send update
         let mut modbus = modbus_mutex.lock().await;
@@ -806,7 +815,10 @@ async fn fan_control_routine(
             // Release lock so other tasks get a chance to access modbus for sending messages to devices
             drop(modbus);
 
-            error!("Failed to send fan state update with attempt {}", attempt);
+            error!(
+                "{} Failed to send fan state update with attempt {}",
+                fan_identifier, attempt
+            );
             attempt += 1;
 
             if current_fan_speed.signaled() {
@@ -821,8 +833,8 @@ async fn fan_control_routine(
 
         if attempt > MAX_ATTEMPTS {
             error!(
-                "Failed to send fan state update after {} attempts",
-                MAX_ATTEMPTS
+                "{} Failed to send fan state update after {} attempts",
+                fan_identifier, MAX_ATTEMPTS
             );
 
             //TODO don't try to update other fan speed if we have a setting to allow fans to run out of sync
@@ -836,7 +848,10 @@ async fn fan_control_routine(
             continue;
         }
 
-        info!("Fan state updated after {} attempts", attempt);
+        info!(
+            "{} Fan state updated after {} attempts",
+            fan_identifier, attempt
+        );
 
         // On success send update to fan display logic unit
         display_state.send_if_modified(|current| {
