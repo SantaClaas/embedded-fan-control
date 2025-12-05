@@ -352,7 +352,12 @@ async fn display_routine(
     // The debounce allows us to skip the loop iterations where we have received one signal update but not yet the other. We usually expect them to arrive shortly after each other.
     // Debounce can only activate after the first signal update otherwise we would always unnecessarily stop waiting even though there has been no debounce
     let mut is_debounce_active = false;
+    const IDENTIFIER: &str = "[Display]";
     loop {
+        info!(
+            "{} Waiting for fan state update. Is debounce active: {}",
+            IDENTIFIER, is_debounce_active
+        );
         // Debounce and take the latest signal of both.
         // Basically wait until there is no futher update and then set the lights to the latest state
         enum Update {
@@ -784,6 +789,7 @@ async fn fan_control_routine(
     //TODO load initial fan speed through modbus from fan and make current_speed non optional
     let mut current_set_point: Option<SetPoint> = None;
     'signal_loop: loop {
+        info!("{} Waiting for fan state update", fan_identifier);
         let mut set_point = current_fan_speed.wait().await;
         if current_set_point.is_some_and(|speed| speed == speed) {
             //TODO consider to update fan display state nontheless
@@ -862,6 +868,8 @@ async fn fan_control_routine(
 
             false
         });
+
+        info!("{} Updated display state", fan_identifier);
         current_set_point = Some(set_point);
     }
 }
