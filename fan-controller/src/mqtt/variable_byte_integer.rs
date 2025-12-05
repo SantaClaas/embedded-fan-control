@@ -1,12 +1,13 @@
 use defmt::Format;
 
 #[derive(Debug, Format)]
-pub(super) enum VariableByteIntegerEncodeError {
+pub(crate) enum VariableByteIntegerEncodeError {
     /// The integer is larger than 268,435,455  ([VariableByteInteger::MAX]).
     TooLarge,
     /// The buffer is too small to write the integer
     EndOfBuffer,
 }
+
 const MAX: usize = 268_435_455;
 /// Returns bytes written on success
 pub(super) fn encode(
@@ -52,7 +53,7 @@ pub(super) fn encode(
 }
 
 #[derive(Debug, Format, Clone)]
-pub(super) enum DecodeError {
+pub(crate) enum DecodeError {
     MalformedVariableByteIntegerError,
     /// The buffer does not contain enough bytes to read the remaining length
     EndOfBuffer,

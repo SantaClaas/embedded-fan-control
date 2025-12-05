@@ -7,7 +7,6 @@ use defmt::Format;
 
 pub(crate) mod packet;
 pub(crate) mod task;
-pub(crate) mod v2;
 pub(crate) mod variable_byte_integer;
 
 #[derive(Debug, Format, Clone)]

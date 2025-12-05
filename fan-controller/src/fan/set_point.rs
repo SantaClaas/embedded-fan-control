@@ -14,17 +14,7 @@ pub(crate) struct SetPointOutOfBoundsError;
 impl SetPoint {
     pub(crate) const ZERO: Self = match Self::new(0) {
         Ok(setting) => setting,
-        Err(error) => panic!("Invalid value. This should not be reachable."),
-    };
-
-    pub(crate) const MAX: Self = match Self::new(MAX) {
-        Ok(setting) => setting,
-        Err(error) => panic!("Invalid value. This should not be reachable."),
-    };
-
-    pub(crate) const MIN: Self = match Self::new(0) {
-        Ok(setting) => setting,
-        Err(error) => panic!("Invalid value. This should not be reachable."),
+        Err(_error) => panic!("Invalid value. This should not be reachable."),
     };
 
     pub(crate) const fn new(set_point: u16) -> Result<Self, SetPointOutOfBoundsError> {
@@ -33,10 +23,6 @@ impl SetPoint {
         }
 
         Ok(Self(set_point))
-    }
-
-    const fn get(&self) -> u16 {
-        self.0
     }
 
     /// This should always succeed
@@ -55,15 +41,21 @@ impl Deref for SetPoint {
 }
 
 pub(crate) enum ParseSetPointError {
-    ParseInt(core::num::ParseIntError),
+    ParseInt,
     SettingOutOfBounds(SetPointOutOfBoundsError),
+}
+
+impl From<core::num::ParseIntError> for ParseSetPointError {
+    fn from(_error: core::num::ParseIntError) -> Self {
+        ParseSetPointError::ParseInt
+    }
 }
 
 impl FromStr for SetPoint {
     type Err = ParseSetPointError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let set_point = s.parse().map_err(ParseSetPointError::ParseInt)?;
+        let set_point = s.parse()?;
         Self::new(set_point).map_err(ParseSetPointError::SettingOutOfBounds)
     }
 }

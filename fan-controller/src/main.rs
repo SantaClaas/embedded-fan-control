@@ -1,6 +1,8 @@
 #![no_std]
 #![no_main]
 
+use core::str;
+
 use cyw43::{Control, NetDriver};
 use cyw43_pio::PioSpi;
 use debounce::Debouncer;
@@ -33,10 +35,8 @@ use crate::mqtt::packet::ping_request::PingRequest;
 use crate::mqtt::packet::publish;
 use crate::task::{MqttBrokerConfiguration, Publish, set_up_network_stack};
 
-mod async_callback;
 mod configuration;
 mod debounce;
-mod event_bus;
 mod fan;
 mod modbus;
 mod mqtt;
@@ -381,11 +381,17 @@ enum IncomingPublish {
 
 enum FromPublishError {
     // Invalid fan command
-    InvalidStringPayload(core::str::Utf8Error),
+    InvalidStringPayload,
     ParseSetPoint(ParseSetPointError),
     InvalidSetStateCommandPayload,
 
     UnknownTopic,
+}
+
+impl From<str::Utf8Error> for FromPublishError {
+    fn from(_: str::Utf8Error) -> Self {
+        FromPublishError::InvalidStringPayload
+    }
 }
 
 impl TryFrom<publish::Publish<'_>> for IncomingPublish {
@@ -402,11 +408,10 @@ impl TryFrom<publish::Publish<'_>> for IncomingPublish {
                     target: Fan::One,
                     command: FanCommand::SetState(SetStateCommandValue::Off),
                 }),
-                other => Err(FromPublishError::InvalidSetStateCommandPayload),
+                _other => Err(FromPublishError::InvalidSetStateCommandPayload),
             },
             topic::fan_controller::fan_1::percentage::COMMAND => {
-                let payload = core::str::from_utf8(publish.payload)
-                    .map_err(FromPublishError::InvalidStringPayload)?;
+                let payload = core::str::from_utf8(publish.payload)?;
 
                 let set_point: SetPoint =
                     payload.parse().map_err(FromPublishError::ParseSetPoint)?;
@@ -425,11 +430,10 @@ impl TryFrom<publish::Publish<'_>> for IncomingPublish {
                     target: Fan::Two,
                     command: FanCommand::SetState(SetStateCommandValue::Off),
                 }),
-                other => Err(FromPublishError::InvalidSetStateCommandPayload),
+                _other => Err(FromPublishError::InvalidSetStateCommandPayload),
             },
             topic::fan_controller::fan_2::percentage::COMMAND => {
-                let payload = core::str::from_utf8(publish.payload)
-                    .map_err(FromPublishError::InvalidStringPayload)?;
+                let payload = core::str::from_utf8(publish.payload)?;
 
                 let set_point: SetPoint =
                     payload.parse().map_err(FromPublishError::ParseSetPoint)?;
@@ -564,10 +568,10 @@ async fn mqtt_brain_routine(
         let publish = match message {
             Err(error) => {
                 match error {
-                    FromPublishError::InvalidStringPayload(utf8_error) => {
+                    FromPublishError::InvalidStringPayload => {
                         error!("Invalid UTF-8 payload");
                     }
-                    FromPublishError::ParseSetPoint(parse_set_point_error) => {
+                    FromPublishError::ParseSetPoint(_parse_set_point_error) => {
                         error!("Invalid set point payload");
                     }
                     FromPublishError::UnknownTopic => error!("Unknown topic. Look for ealier logs"),
@@ -635,7 +639,7 @@ async fn fan_control_routine(
     let fan_identifier = match *fan_address {
         2 => "[Fan 1]",
         3 => "[Fan 2]",
-        other => "Unknown (oops)",
+        _other => "Unknown (oops)",
     };
 
     info!("{} Waiting for MODBUS initialization", fan_identifier);
@@ -674,7 +678,7 @@ async fn fan_control_routine(
         info!("{} Sending fan state update through modbus", fan_identifier);
         const MAX_ATTEMPTS: u8 = 3;
         let mut attempt = 1;
-        while let Err(error) = modbus.send_3(&function).await
+        while let Err(_error) = modbus.send_3(&function).await
             && attempt <= MAX_ATTEMPTS
         {
             // Release lock so other tasks get a chance to access modbus for sending messages to devices
@@ -874,8 +878,6 @@ async fn main(spawner: Spawner) {
         PIN_25: pin_25,
         PIO0: pio0,
         DMA_CH0: dma_ch0,
-        DMA_CH1: dma_ch1,
-        DMA_CH2: dma_ch2,
         PIN_24: pin_24,
         PIN_29: pin_29,
         // Driver enable/disable pin to switch between sending and receiving data on UART/Modbus
@@ -907,8 +909,6 @@ async fn main(spawner: Spawner) {
         pin_12,
         pin_13,
         Irqs,
-        dma_ch1,
-        dma_ch2,
         pin_4,
         tx_buffer,
         rx_buffer,

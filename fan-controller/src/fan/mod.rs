@@ -3,7 +3,6 @@
 
 pub(crate) mod set_point;
 
-use defmt::Format;
 use embassy_rp::uart::{self, DataBits, Parity, StopBits};
 
 pub(crate) const BAUD_RATE: u32 = 19_200;
@@ -26,39 +25,20 @@ pub(crate) mod user_setting {
     /// Max speed 64000 / 3.3
     pub(crate) const LOW: SetPoint = match SetPoint::new(19_393) {
         Ok(setting) => setting,
-        Err(error) => panic!("Invalid value"),
+        Err(_error) => panic!("Invalid value"),
     };
     /// Max speed 64000 / 2.4
     pub(crate) const MEDIUM: SetPoint = match SetPoint::new(26_666) {
         Ok(setting) => setting,
-        Err(error) => panic!("Invalid value"),
+        Err(_error) => panic!("Invalid value"),
     };
 
     /// Max speed 50%
     /// Not set to full speed to not wear out the fans
     pub(crate) const HIGH: SetPoint = match SetPoint::new(set_point::MAX / 2) {
         Ok(setting) => setting,
-        Err(error) => panic!("Invalid value"),
+        Err(_error) => panic!("Invalid value"),
     };
-}
-
-#[derive(Default, Format, Debug)]
-pub(crate) enum State {
-    #[default]
-    Off,
-    Low,
-    Medium,
-    High,
-}
-impl State {
-    pub(crate) const fn next(&self) -> Self {
-        match self {
-            Self::Off => Self::Low,
-            Self::Low => Self::Medium,
-            Self::Medium => Self::High,
-            Self::High => Self::Off,
-        }
-    }
 }
 
 pub(crate) mod address {
@@ -76,35 +56,7 @@ pub(super) mod holding_registers {
         modbus::register::Address::new(0xd001_u16);
 }
 
-pub(crate) mod input_registers {
-    use crate::modbus;
-
-    pub(crate) const TEMPERATURE_SENSOR_1: modbus::register::Address =
-        modbus::register::Address::new(0xd02e_u16);
-    pub(crate) const HUMIDITY_SENSOR_1: modbus::register::Address =
-        modbus::register::Address::new(0xd02f_u16);
-    pub(crate) const TEMPERATURE_SENSOR_2: modbus::register::Address =
-        modbus::register::Address::new(0xd030_u16);
-    pub(crate) const HUMIDITY_SENSOR_2: modbus::register::Address =
-        modbus::register::Address::new(0xd031_u16);
-}
-
 pub(crate) enum Fan {
     One,
     Two,
-}
-
-pub(crate) struct FanResponse<const N: usize> {
-    data: [u8; N],
-    length: usize,
-}
-
-impl<const N: usize> FanResponse<N> {
-    pub(crate) fn new(data: [u8; N], length: usize) -> Self {
-        Self { data, length }
-    }
-
-    pub(crate) fn as_slice(&self) -> &[u8] {
-        &self.data[..self.length]
-    }
 }

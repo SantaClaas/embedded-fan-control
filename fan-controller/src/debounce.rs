@@ -1,5 +1,5 @@
-use embassy_rp::gpio::{Input, Level, Pin};
-use embassy_time::{Duration, TimeoutError, Timer, with_timeout};
+use embassy_rp::gpio::{Input, Pin};
+use embassy_time::{Duration, TimeoutError, with_timeout};
 
 /// Debouncer based on [Embassy debounce example](https://github.com/embassy-rs/embassy/blob/8d8cd78f634b2f435e3a997f7f8f3ac0b8ca300c/examples/rp/src/bin/debounce.rs)
 /// (Licensed MIT/Apache-2.0)
@@ -13,23 +13,6 @@ pub struct Debouncer<'a, T: Pin> {
 impl<'a, T: Pin> Debouncer<'a, T> {
     pub fn new(input: Input<'a, T>, debounce: Duration) -> Self {
         Self { input, debounce }
-    }
-
-    pub async fn debounce(&mut self) -> Level {
-        loop {
-            // Up
-            // 2nd round stil down
-            let l1 = self.input.get_level();
-
-            self.input.wait_for_any_edge().await;
-
-            Timer::after(self.debounce).await;
-
-            let l2 = self.input.get_level();
-            if l1 != l2 {
-                break l2;
-            }
-        }
     }
 
     pub async fn debounce_falling_edge(&mut self) {

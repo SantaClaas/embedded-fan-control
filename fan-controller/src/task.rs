@@ -1,5 +1,4 @@
 use crate::PingRequest;
-use crate::fan::set_point::SetPoint;
 use crate::mqtt::packet::connect::Connect;
 use crate::mqtt::packet::disconnect::Disconnect;
 use crate::mqtt::packet::ping_response::PingResponse;
@@ -9,7 +8,7 @@ use crate::mqtt::packet::subscribe_acknowledgement::SubscribeAcknowledgement;
 use crate::mqtt::task::send;
 use crate::mqtt::{self};
 use crate::mqtt::{TryDecode, non_zero_u16};
-use crate::{configuration, fan, gain_control};
+use crate::{configuration, gain_control};
 use ::mqtt::QualityOfService;
 use core::future::poll_fn;
 use core::num::NonZeroU16;
@@ -50,7 +49,7 @@ async fn handle_subscribe_acknowledgement<'f, const SUBSCRIPTIONS: usize>(
     let mut acknowledgements = acknowledgements.lock().await;
     info!("[Subscription] Locked ACKNOWLEDGEMENTS");
     // Validate server sends a valid packet identifier or we get bamboozled and panic
-    let Some(value) = acknowledgements.get_mut(acknowledgement.packet_identifier as usize) else {
+    let Some(_value) = acknowledgements.get_mut(acknowledgement.packet_identifier as usize) else {
         warn!(
             "[Subscription] Received subscribe acknowledgement for out of bounds packet identifier"
         );
@@ -103,8 +102,6 @@ async fn handle_ping_response(
 }
 
 enum ClientState {
-    Disconnected,
-    Connected,
     ConnectionLost,
 }
 
@@ -225,22 +222,6 @@ async fn listen<
             other => info!("Unsupported packet type {}", other),
         }
     }
-}
-
-enum PredefinedPublish {
-    FanPercentageState {
-        setting: SetPoint,
-    },
-    FanOnState {
-        is_on: bool,
-    },
-    SensorTemperature {
-        /// Celsius temperature as read from the sensor. This is the raw value. To get the actual temperature, divide by 10.
-        /// e.g. 234 means 23.4 degrees Celsius
-        temperature: u16,
-        /// The fan the sensor is on
-        fan: fan::Fan,
-    },
 }
 
 enum Message<'a, T: Publish> {

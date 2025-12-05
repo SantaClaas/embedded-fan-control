@@ -1,3 +1,1 @@
-pub const READ_HOLDING_REGISTER: u8 = 0x03;
-pub const READ_INPUT_REGISTER: u8 = 0x04;
 pub const WRITE_SINGLE_REGISTER: u8 = 0x06;

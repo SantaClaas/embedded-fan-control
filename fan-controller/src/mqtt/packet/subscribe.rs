@@ -14,18 +14,12 @@ pub(crate) struct Options(u8);
 pub(crate) enum RetainHandling {
     // Send retained messages at the time of subscribe (0)
     SendAtSubscribe,
-    // Send retained messages only if the subscription does not currently exist (1)
-    OnlyIfNotExists,
-    // Do not send retained messages (2)
-    DoNotSend,
 }
 
 impl RetainHandling {
     const fn to_byte(&self) -> u8 {
         match self {
             RetainHandling::SendAtSubscribe => 0,
-            RetainHandling::OnlyIfNotExists => 1,
-            RetainHandling::DoNotSend => 2,
         }
     }
 }

@@ -165,9 +165,3 @@ impl<'a> TryDecode<'a> for Publish<'a> {
         })
     }
 }
-
-mod v2 {
-    pub(crate) struct Publish {
-        buffer: [u8; 1024],
-    }
-}

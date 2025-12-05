@@ -1,5 +1,4 @@
 use crate::{MqttBrokerConfiguration, task::MqttBrokerCredentials};
-use embassy_net::IpAddress;
 use embassy_time::Duration;
 
 /// Thanks!
@@ -34,11 +33,6 @@ pub(crate) const MQTT_BROKER_ADDRESS: &str = env!("FAN_CONTROL_MQTT_BROKER_ADDRE
 
 //TODO make configurable
 pub(crate) const MQTT_BROKER_PORT: u16 = parse_u16(env!("FAN_CONTROL_MQTT_BROKER_PORT"));
-
-//TODO make configurable
-/// The broker IP address can be configured manually. It will be used instead of the [MQTT_BROKER_ADDRESS]
-/// if it is set as it does not require DNS resolution.
-pub(crate) const MQTT_BROKER_IP_ADDRESS: Option<IpAddress> = None;
 
 pub(crate) const MQTT_BROKER_CREDENTIALS: MqttBrokerCredentials = MqttBrokerCredentials {
     username: env!("FAN_CONTROL_MQTT_BROKER_USERNAME"),

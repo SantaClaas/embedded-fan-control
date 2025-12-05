@@ -14,6 +14,7 @@ install [probe.rs](https://probe.rs) `cargo run`
 - [ ] Read temperature sensors
 - [ ] Switch to only using refactored send for modbus
 - [ ] [Reboot](https://github.com/embassy-rs/embassy/blob/f8685560531fcecb2f4327a490ec4df4f2b190f6/examples/rp/src/bin/rtc.rs#L50) on error after retries or connection lost. Or try reconnect in background.
+- [ ] Try out bundling all channels in a sort of event bus like actor model
 
 ## Aspirational TODOs
 

@@ -1,29 +1,9 @@
 use crate::mqtt::variable_byte_integer;
-use ::mqtt::QualityOfService;
 use defmt::Format;
 
 #[derive(Debug, Clone, Format)]
 pub(crate) enum SubscribeAcknowledgementError {
     InvalidPropertiesLength(variable_byte_integer::DecodeError),
-}
-
-#[derive(Format)]
-pub(crate) enum SubscribeErrorReasonCode {
-    UnspecifiedError = 0x80,
-    ImplementationSpecificError = 0x83,
-    NotAuthorized = 0x87,
-    TopicFilterInvalid = 0x8F,
-    PacketIdentifierInUse = 0x91,
-    QuotaExceeded = 0x97,
-    SharedSubscriptionsNotSupported = 0x9E,
-    SubscriptionIdentifiersNotSupported = 0xA1,
-    WildcardSubscriptionsNotSupported = 0xA2,
-}
-
-#[derive(Format)]
-pub(crate) enum SubscribeReasonCode {
-    GrantedQualityOfService(QualityOfService),
-    ErrorCode(SubscribeErrorReasonCode),
 }
 
 #[derive(Format)]
