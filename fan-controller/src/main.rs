@@ -343,7 +343,7 @@ async fn display_routine(
         watch::Receiver<'static, CriticalSectionRawMutex, SetPoint, 2>,
     ),
     led_state: &'static Signal<CriticalSectionRawMutex, LedState>,
-    mqtt_out: channel::Sender<'static, CriticalSectionRawMutex, OutgoingPublish, 3>,
+    mqtt_out: channel::Sender<'static, CriticalSectionRawMutex, OutgoingPublish, CHANNEL_SIZE>,
 ) {
     // The current fan state that was last recorded
     let mut current_display_state: (Option<SetPoint>, Option<SetPoint>) = (None, None);
@@ -684,9 +684,14 @@ async fn mqtt_routine(
         'static,
         CriticalSectionRawMutex,
         Result<IncomingPublish, FromPublishError>,
-        3,
+        CHANNEL_SIZE,
     >,
-    receiver_out: channel::Receiver<'static, CriticalSectionRawMutex, OutgoingPublish, 3>,
+    receiver_out: channel::Receiver<
+        'static,
+        CriticalSectionRawMutex,
+        OutgoingPublish,
+        CHANNEL_SIZE,
+    >,
 ) {
     // Setting up the network in the task to not block from controlling the device without server connection
     let stack = set_up_network_stack(spawner, pwr_pin, cs_pin, pio, dma, dio, clk).await;
@@ -702,7 +707,7 @@ async fn mqtt_brain_routine(
         'static,
         CriticalSectionRawMutex,
         Result<IncomingPublish, FromPublishError>,
-        3,
+        CHANNEL_SIZE,
     >,
     fan_one_state: &'static Signal<CriticalSectionRawMutex, SetPoint>,
     fan_two_state: &'static Signal<CriticalSectionRawMutex, SetPoint>,
@@ -1011,6 +1016,7 @@ async fn led_routine(
         }
     }
 }
+const CHANNEL_SIZE: usize = 8;
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
@@ -1065,12 +1071,15 @@ async fn main(spawner: Spawner) {
     _ = FANS.get_or_init(|| client.into());
 
     /// Channel for messages incoming from the MQTT broker to this fan controller
-    static IN: Channel<CriticalSectionRawMutex, Result<IncomingPublish, FromPublishError>, 3> =
-        Channel::new();
+    static IN: Channel<
+        CriticalSectionRawMutex,
+        Result<IncomingPublish, FromPublishError>,
+        CHANNEL_SIZE,
+    > = Channel::new();
     let sender_in = IN.sender();
 
     /// Channel for messages outgoing from this fan controller to the MQTT broker
-    static OUT: Channel<CriticalSectionRawMutex, OutgoingPublish, 3> = Channel::new();
+    static OUT: Channel<CriticalSectionRawMutex, OutgoingPublish, CHANNEL_SIZE> = Channel::new();
     let receiver_out = OUT.receiver();
 
     // The MQTT task waits for publishes from MQTT and sends them to the modbus task.
