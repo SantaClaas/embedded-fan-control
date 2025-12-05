@@ -245,6 +245,8 @@ async fn display_routine(
             }
         }
 
+        info!("[Display] Update after debounce");
+
         if let Some(update) = display_update_state.0 {
             // Turn on the fan on home assistant if it was off before
             // We already checked above if the new state is not the same as the current state
@@ -257,8 +259,12 @@ async fn display_routine(
                     fan: Fan::One,
                     payload: command,
                 };
+
                 //TODO handle back pressure when channel is full. Try to send until new message comes in
-                mqtt_out.send(publish).await;
+                if let Err(channel::TrySendError::Full(_publish)) = mqtt_out.try_send(publish) {
+                    error!("[Display] MQTT out channel is full",);
+                    continue;
+                }
             }
 
             // Update MQTT
@@ -266,8 +272,12 @@ async fn display_routine(
                 fan: Fan::One,
                 payload: update.into(),
             };
+
             //TODO handle back pressure when channel is full. Try to send until new message comes in
-            mqtt_out.send(publish).await;
+            if let Err(channel::TrySendError::Full(_publish)) = mqtt_out.try_send(publish) {
+                error!("[Display] MQTT out channel is full",);
+                continue;
+            }
 
             // Persist new state
             current_display_state.0.replace(update);
@@ -288,7 +298,10 @@ async fn display_routine(
                 };
 
                 //TODO handle back pressure when channel is full. Try to send until new message comes in
-                mqtt_out.send(publish).await;
+                if let Err(channel::TrySendError::Full(_publish)) = mqtt_out.try_send(publish) {
+                    error!("[Display] MQTT out channel is full",);
+                    continue;
+                }
             }
 
             // Update MQTT
@@ -298,7 +311,10 @@ async fn display_routine(
             };
 
             //TODO handle back pressure when channel is full. Try to send until new message comes in
-            mqtt_out.send(publish).await;
+            if let Err(channel::TrySendError::Full(_publish)) = mqtt_out.try_send(publish) {
+                error!("[Display] MQTT out channel is full",);
+                continue;
+            }
 
             // Persist new state
             current_display_state.1.replace(update);
@@ -541,8 +557,9 @@ async fn mqtt_brain_routine(
     //TODO use state loaded from fan
     let mut last_fan_state = (SetPoint::ZERO, SetPoint::ZERO);
     loop {
-        info!("Waiting for new publish");
+        info!("[MQTT Brain] Waiting for new publish");
         let message = receiver_in.receive().await;
+        info!("[MQTT Brain] Received publish");
 
         let publish = match message {
             Err(error) => {
@@ -615,13 +632,15 @@ async fn fan_control_routine(
     modbus: &'static ModbusOnceLock,
     display_state: watch::Sender<'static, CriticalSectionRawMutex, SetPoint, 2>,
 ) {
-    let modbus_mutex = modbus.get().await;
-
     let fan_identifier = match *fan_address {
         2 => "[Fan 1]",
         3 => "[Fan 2]",
         other => "Unknown (oops)",
     };
+
+    info!("{} Waiting for MODBUS initialization", fan_identifier);
+    let modbus_mutex = modbus.get().await;
+    info!("{} MODBUS initialized", fan_identifier);
 
     //TODO load initial fan speed through modbus from fan and make current_speed non optional
     let mut current_set_point: Option<SetPoint> = None;
@@ -640,7 +659,9 @@ async fn fan_control_routine(
         info!("{} Received fan state", fan_identifier);
 
         // Instruct modbus to send update
+        info!("{} Attempting to acquire lock (again?)", fan_identifier);
         let mut modbus = modbus_mutex.lock().await;
+        info!("{} Acquired lock on modbus (again?)", fan_identifier);
         // Check we have the latest state in case it was updated while waiting for the lock
         set_point = current_fan_speed.try_take().unwrap_or(set_point);
 
@@ -650,6 +671,7 @@ async fn fan_control_routine(
             *set_point,
         );
 
+        info!("{} Sending fan state update through modbus", fan_identifier);
         const MAX_ATTEMPTS: u8 = 3;
         let mut attempt = 1;
         while let Err(error) = modbus.send_3(&function).await
@@ -671,7 +693,9 @@ async fn fan_control_routine(
             // Exponential backoff
             // Safe power of 2 because maximum value is 3 (900ms max)
             Timer::after_millis(u64::from(attempt).pow(2) * 100).await;
+            info!("{} Waiting for lock on modbus for retry", fan_identifier);
             modbus = modbus_mutex.lock().await;
+            info!("{} Acquired lock on modbus for retry", fan_identifier);
         }
 
         if attempt > MAX_ATTEMPTS {
