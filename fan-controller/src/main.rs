@@ -14,6 +14,7 @@ use embassy_rp::peripherals::{
 };
 use embassy_rp::pio::{InterruptHandler as PioInterruptHandler, Pio, PioPin};
 use embassy_rp::uart::BufferedInterruptHandler;
+use embassy_rp::usb::Out;
 use embassy_rp::{Peripherals, bind_interrupts};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::{self, Channel};
@@ -460,6 +461,7 @@ impl From<SetPoint> for UpdateSpeedPayload {
 }
 
 enum OutgoingPublish {
+    Discovery,
     UpdateSpeed {
         fan: Fan,
         payload: UpdateSpeedPayload,
@@ -473,6 +475,7 @@ enum OutgoingPublish {
 impl Publish for OutgoingPublish {
     fn topic(&self) -> &str {
         match self {
+            OutgoingPublish::Discovery => topic::fan_controller::DISCOVERY,
             OutgoingPublish::UpdateSpeed {
                 fan: Fan::One,
                 payload: _,
@@ -493,7 +496,10 @@ impl Publish for OutgoingPublish {
     }
 
     fn payload(&self) -> &[u8] {
+        const DISCOVERY_PAYLOAD: &[u8] = env!("FAN_CONTROLLER_DISCOVERY_PAYLOAD").as_bytes();
+
         match self {
+            OutgoingPublish::Discovery => DISCOVERY_PAYLOAD,
             OutgoingPublish::UpdateSpeed { fan: _, payload } => {
                 // set_point.0.to_be_bytes()
                 payload.0.as_bytes()
@@ -957,6 +963,10 @@ async fn main(spawner: Spawner) {
             .expect("Expected receiver to be configured to allow 2 receivers"),
     );
     let sender_out = OUT.sender();
+
+    info!("[Main] Seinding discovery");
+    sender_out.send(OutgoingPublish::Discovery).await;
+    info!("[Main] Sent out discocery");
     unwrap!(spawner.spawn(display_routine(display_receivers, &LED_STATE, sender_out)));
 
     static FAN_ONE_STATE: Signal<CriticalSectionRawMutex, SetPoint> = Signal::new();

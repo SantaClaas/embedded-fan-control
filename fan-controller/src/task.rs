@@ -1,4 +1,3 @@
-use crate::PingRequest;
 use crate::fan::set_point::SetPoint;
 use crate::mqtt::packet::connect::Connect;
 use crate::mqtt::packet::disconnect::Disconnect;
@@ -9,6 +8,7 @@ use crate::mqtt::packet::subscribe_acknowledgement::SubscribeAcknowledgement;
 use crate::mqtt::task::send;
 use crate::mqtt::{self};
 use crate::mqtt::{TryDecode, non_zero_u16};
+use crate::{OutgoingPublish, PingRequest};
 use crate::{configuration, fan, gain_control};
 use ::mqtt::QualityOfService;
 use core::future::poll_fn;
@@ -249,11 +249,6 @@ enum Message<'a, T: Publish> {
     #[deprecated(
         note = "Use generic Publish. This is only used by Home Assistant discovery which needs to be moved out of MQTT and thus removed"
     )]
-    /// Publish messages used internally to manage the MQTT state
-    PublishInternal(publish::Publish<'a>),
-    #[deprecated(
-        note = "Migrate to MQTT not being aware of used messages. Use normal Publish with generic T"
-    )]
     PredefinedPublish(PredefinedPublish),
 }
 
@@ -302,19 +297,7 @@ async fn talk<T: Publish>(
 
                 info!("[MQTT/talk] Publish completed successfully");
             }
-            Message::PublishInternal(publish) => {
-                info!(
-                    "[MQTT/talk] Sending internal publish {:?} {:?}",
-                    publish.topic_name,
-                    core::str::from_utf8(publish.payload).unwrap_or("(Payload is not UTF-8)")
-                );
-                if let Err(error) = send(&mut *writer, publish).await {
-                    error!("[MQTT/talk] Error sending internal publish: {:?}", error);
-                    continue;
-                }
 
-                info!("[MQTT/talk] Internal publish completed successfully");
-            }
             Message::PredefinedPublish(publish) => match publish {
                 PredefinedPublish::FanPercentageState { setting } => {
                     info!("[MQTT/talk] Sending percentage state publish {}", setting);
@@ -440,26 +423,6 @@ async fn set_up_subscriptions<T: Publish, const SUBSCRIPTIONS: usize>(
         return;
     }
     info!("[Subscription] Set up subscriptions complete")
-}
-
-async fn set_up_discovery<T: Publish>(
-    outgoing: &Channel<CriticalSectionRawMutex, Message<'_, T>, 8>,
-) {
-    const DISCOVERY_PAYLOAD: &[u8] = env!("FAN_CONTROLLER_DISCOVERY_PAYLOAD").as_bytes();
-    info!(
-        "Sending discovery payload to {}",
-        topic::fan_controller::DISCOVERY,
-    );
-    //TODO make constant and refactor to allow people to dynamically subscribe
-    let discovery_publish = Message::PublishInternal(publish::Publish {
-        topic_name: topic::fan_controller::DISCOVERY,
-        payload: DISCOVERY_PAYLOAD,
-    });
-
-    info!("[Discovery] Sending out discovery payload");
-    outgoing.send(discovery_publish).await;
-    info!("[Discovery] Sent discovery payload");
-    //TODO wait for packet acknowledgement
 }
 
 /// Keep alive task
@@ -803,15 +766,12 @@ pub(super) async fn mqtt_with_connect<
     let talk = talk(&writer, &outgoing, &last_packet);
 
     // Future 3
-    let set_up = join(
-        set_up_subscriptions(
-            non_zero_u16!(1),
-            &acknowledgements,
-            &outgoing,
-            &SUBSCRIPTIONS,
-            &waker,
-        ),
-        set_up_discovery(&outgoing),
+    let set_up = set_up_subscriptions(
+        non_zero_u16!(1),
+        &acknowledgements,
+        &outgoing,
+        &SUBSCRIPTIONS,
+        &waker,
     );
 
     // Future 4
