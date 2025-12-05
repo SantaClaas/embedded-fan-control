@@ -68,41 +68,6 @@ async fn network_task(stack: &'static Stack<NetDriver<'static>>) -> ! {
     stack.run().await
 }
 
-#[derive(Clone, Copy)]
-enum Event {}
-static EVENT: PubSubChannel<CriticalSectionRawMutex, Event, 8, 4, 4> = PubSubChannel::new();
-async fn trigger_event(mutex: &Mutex<CriticalSectionRawMutex, Option<u32>>) {
-    let mut round = 0;
-    loop {
-        Timer::after_secs(3).await;
-        let mut mutex = mutex.lock().await;
-        *mutex = Some(round);
-        round += 1;
-    }
-}
-
-async fn wait_for_event(mutex: &Mutex<CriticalSectionRawMutex, Option<u32>>) {
-    loop {
-        let value = poll_fn(|context| match mutex.try_lock() {
-            Ok(guard) => match *guard {
-                None => Poll::Pending,
-                Some(value) => Poll::Ready(value),
-            },
-            Err(_error) => Poll::Pending,
-        })
-        .await;
-
-        info!("Got value {}", value);
-    }
-}
-async fn how_to() {
-    let mutex = Mutex::<CriticalSectionRawMutex, Option<u32>>::new(None);
-
-    let f1 = trigger_event(&mutex);
-    let f2 = wait_for_event(&mutex);
-    join(f1, f2).await;
-}
-
 async fn gain_control(
     spawner: Spawner,
     pwr_pin: PIN_23,
