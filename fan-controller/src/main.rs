@@ -14,7 +14,6 @@ use embassy_rp::peripherals::{
 };
 use embassy_rp::pio::{InterruptHandler as PioInterruptHandler, Pio, PioPin};
 use embassy_rp::uart::BufferedInterruptHandler;
-use embassy_rp::usb::Out;
 use embassy_rp::{Peripherals, bind_interrupts};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::{self, Channel};

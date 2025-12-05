@@ -1,3 +1,4 @@
+use crate::PingRequest;
 use crate::fan::set_point::SetPoint;
 use crate::mqtt::packet::connect::Connect;
 use crate::mqtt::packet::disconnect::Disconnect;
@@ -8,7 +9,6 @@ use crate::mqtt::packet::subscribe_acknowledgement::SubscribeAcknowledgement;
 use crate::mqtt::task::send;
 use crate::mqtt::{self};
 use crate::mqtt::{TryDecode, non_zero_u16};
-use crate::{OutgoingPublish, PingRequest};
 use crate::{configuration, fan, gain_control};
 use ::mqtt::QualityOfService;
 use core::future::poll_fn;
@@ -17,7 +17,7 @@ use core::task::Poll;
 use cyw43::{Control, NetDriver};
 use defmt::{Format, error, info, unwrap, warn};
 use embassy_executor::Spawner;
-use embassy_futures::join::{join, join5};
+use embassy_futures::join::join5;
 use embassy_net::dns::{DnsQueryType, DnsSocket};
 use embassy_net::driver::Driver;
 use embassy_net::tcp::{TcpSocket, TcpWriter};
@@ -246,10 +246,6 @@ enum PredefinedPublish {
 enum Message<'a, T: Publish> {
     Subscribe(Subscribe<'a>),
     Publish(T),
-    #[deprecated(
-        note = "Use generic Publish. This is only used by Home Assistant discovery which needs to be moved out of MQTT and thus removed"
-    )]
-    PredefinedPublish(PredefinedPublish),
 }
 
 impl<T> From<T> for Message<'_, T>
@@ -297,84 +293,6 @@ async fn talk<T: Publish>(
 
                 info!("[MQTT/talk] Publish completed successfully");
             }
-
-            Message::PredefinedPublish(publish) => match publish {
-                PredefinedPublish::FanPercentageState { setting } => {
-                    info!("[MQTT/talk] Sending percentage state publish {}", setting);
-                    // let buffer: StringBuffer<5> = setting.into();
-                    let buffer = match heapless::String::<5>::try_from(*setting) {
-                        Ok(buffer) => buffer,
-                        Err(error) => {
-                            error!(
-                                "[MQTT/talk] Error converting setting to string: {:?}",
-                                error
-                            );
-                            continue;
-                        }
-                    };
-
-                    let packet = publish::Publish {
-                        topic_name: "fancontroller/speed/percentage_state",
-                        payload: buffer.as_bytes(),
-                    };
-
-                    if let Err(error) = send(&mut *writer, packet).await {
-                        error!("[MQTT/talk] Error sending predefined publish: {:?}", error);
-                        continue;
-                    }
-
-                    info!("[MQTT/talk] Predefined publish completed successfully");
-                }
-                PredefinedPublish::FanOnState { is_on } => {
-                    //TODO update state
-                    let packet = if is_on {
-                        publish::Publish {
-                            topic_name: "fancontroller/on/state",
-                            payload: b"ON",
-                        }
-                    } else {
-                        publish::Publish {
-                            topic_name: "fancontroller/on/state",
-                            payload: b"OFF",
-                        }
-                    };
-
-                    info!("[MQTT/talk] Sending on state publish");
-                    if let Err(error) = send(&mut *writer, packet).await {
-                        error!("[MQTT/talk] Error sending predefined publish: {:?}", error);
-                        continue;
-                    }
-
-                    info!("[MQTT/talk] On state publish completed successfully");
-                }
-                PredefinedPublish::SensorTemperature { temperature, fan } => {
-                    // The value is divided by 10 in the value template that is submitted with home assistant discovery
-                    let formatted = match heapless::String::<3>::try_from(temperature) {
-                        Ok(formatted) => formatted,
-                        Err(error) => {
-                            error!(
-                                "[MQTT/talk] Error writing temperature {} to heapless::String",
-                                temperature
-                            );
-                            continue;
-                        }
-                    };
-                    let packet = publish::Publish {
-                        topic_name: match fan {
-                            fan::Fan::One => "fancontroller/sensor/fan-1/temperature",
-                            fan::Fan::Two => "fancontroller/sensor/fan-2/temperature",
-                        },
-                        payload: formatted.as_bytes(),
-                    };
-                    info!("[MQTT/talk] Sending sensor temperature publish");
-                    if let Err(error) = send(&mut *writer, packet).await {
-                        error!("[MQTT/talk] Error sending predefined publish: {:?}", error);
-                        continue;
-                    }
-
-                    info!("[MQTT/talk] Sensor temperature publish completed successfully");
-                }
-            },
         }
 
         last_packet.signal(Instant::now());
