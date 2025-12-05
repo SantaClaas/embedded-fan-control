@@ -565,46 +565,6 @@ async fn keep_alive(
     }
 }
 
-async fn update_homeassistant<T: Publish>(
-    outgoing: &Channel<CriticalSectionRawMutex, Message<'_, T>, 8>,
-    receiver: &mut embassy_sync::watch::Receiver<'_, CriticalSectionRawMutex, FanState, 3>,
-) {
-    // let Some(mut receiver): Option<
-    //     embassy_sync::watch::Receiver<'_, CriticalSectionRawMutex, FanState, 3>,
-    // > = FAN_CONTROLLER.fan_states.0.receiver() else {
-    //     error!("Fan state receiver was not set up. Cannot update Homeassistant");
-    //     return;
-    // };
-
-    // If there is no initial value this will cause an initial update to homeassistant
-    // which is good as we don't know the state on homeassistant
-    let mut previous_state = receiver.try_get().unwrap_or(FanState {
-        is_on: false,
-        setting: SetPoint::ZERO,
-    });
-
-    loop {
-        let state = receiver.changed().await;
-
-        info!(
-            "UPDATING HOMEASSISTANT {}",
-            if state.is_on { "ON" } else { "OFF" }
-        );
-        let message =
-            Message::PredefinedPublish(PredefinedPublish::FanOnState { is_on: state.is_on });
-        outgoing.send(message).await;
-
-        // Update setting before is on state for smoother transition in homeassistant UI
-        info!("UPDATING HOMEASSISTANT {}", state.setting);
-        let message = Message::PredefinedPublish(PredefinedPublish::FanPercentageState {
-            setting: state.setting,
-        });
-        outgoing.send(message).await;
-
-        previous_state = state;
-    }
-}
-
 async fn poll_sensors(fans: ModbusOnceLock) {
     loop {
         let mut fans = fans.get().await.lock().await;
