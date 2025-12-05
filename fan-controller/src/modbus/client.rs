@@ -12,11 +12,8 @@ use embedded_io_async::{Read, Write};
 
 use crate::{
     configuration,
-    fan::{self, BAUD_RATE, Fan, FanResponse, address, holding_registers, set_point::SetPoint},
-    modbus::{
-        self,
-        function::{WriteHoldingRegister, read_input_register::ReadInputRegister},
-    },
+    fan::{BAUD_RATE, FanResponse, address, holding_registers, set_point::SetPoint},
+    modbus::{self, function::WriteHoldingRegister},
 };
 
 pub(crate) enum Error {
@@ -85,7 +82,7 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
         // Before closing we need to flush the buffer to ensure that all data is written
         // This requires blocking or we get a WouldBlock error. I don't understand why (TODO)
         let result = self.uart.blocking_flush();
-        if let Err(error) = result {
+        if let Err(_) = result {
             error!("uart flush error");
         }
 
@@ -127,7 +124,7 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
         let fan_identifier = match *message.device_address() {
             2 => "[Fan 1]",
             3 => "[Fan 2]",
-            other => "Unknown (oops)",
+            _other => "Unknown (oops)",
         };
 
         // Write then read
@@ -144,7 +141,7 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
         // Before closing we need to flush the buffer to ensure that all data is written
         // This requires blocking or we get a WouldBlock error. I don't understand why (TODO)
         let result = self.uart.blocking_flush();
-        if let Err(error) = result {
+        if let Err(_error) = result {
             error!("{} UART flush error", fan_identifier);
         }
 
@@ -204,7 +201,7 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
         // Before closing we need to flush the buffer to ensure that all data is written
         // This requires blocking or we get a WouldBlock error. I don't understand why (TODO)
         let result = self.uart.blocking_flush();
-        if let Err(error) = result {
+        if let Err(_error) = result {
             error!("uart flush error");
         }
 
@@ -291,56 +288,5 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
         info!("sending message to fan 2: {:?}", message);
         let _ = self.send::<8>(&message).await?;
         Ok(())
-    }
-
-    ///TODO decouple from modbus
-    #[deprecated(note = "Needs to be decoupled from modbus")]
-    pub(crate) async fn get_temperature(&mut self, fan: Fan) -> Result<u16, Error> {
-        let message = modbus::Message::new(
-            match fan {
-                Fan::One => *address::FAN_1,
-                Fan::Two => *address::FAN_2,
-            },
-            ReadInputRegister::new(0xd02e, 1),
-        );
-
-        let test: FanResponse<7> = self.send_2(message).await?;
-
-        let register_address = (*fan::input_registers::TEMPERATURE_SENSOR_1).to_be_bytes();
-        let mut message: [u8; 8] = [
-            // Device address
-            match fan {
-                Fan::One => *address::FAN_1,
-                Fan::Two => *address::FAN_2,
-            },
-            // Modbus function code
-            modbus::function::code::READ_INPUT_REGISTER,
-            // Input register address
-            register_address[0],
-            register_address[1],
-            // Number of registers to read
-            0,
-            1,
-            // CRC is set later
-            0,
-            0,
-        ];
-
-        let checksum = modbus::CRC.checksum(&message[..6]).to_be_bytes();
-
-        // They come out reversed (or is us using to_be_bytes reversed?)
-        message[6] = checksum[1];
-        message[7] = checksum[0];
-        info!("Sending read temperature message {:?}", message);
-
-        let response = self.send::<7>(&message).await?;
-        let response = response.as_slice();
-
-        //TODO read the correct number of bytes
-        let length = response[2];
-        let temperature = u16::from_be_bytes([response[3], response[4]]);
-        info!("Temperature (divide by 10): {}", temperature);
-
-        Ok(temperature)
     }
 }
