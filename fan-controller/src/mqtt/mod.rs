@@ -5,7 +5,6 @@ use core::convert::Infallible;
 
 use defmt::Format;
 
-pub(crate) mod client;
 pub(crate) mod packet;
 pub(crate) mod task;
 pub(crate) mod v2;
