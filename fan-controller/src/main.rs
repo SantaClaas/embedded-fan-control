@@ -105,60 +105,6 @@ async fn gain_control(
     (net_device, control)
 }
 
-/// This task handles inputs from physical buttons to change the fan speed
-#[embassy_executor::task]
-async fn input(pin_18: PIN_18) {
-    // The button just rotates through fan settings. This is because we currently only have one button
-    // Will probably use something more advanced in the future
-    let mut button = Debouncer::new(Input::new(pin_18, Pull::Up), Duration::from_millis(250));
-
-    let mut fan_state = fan::State::default();
-    let sender = FAN_CONTROLLER.fan_states.0.sender();
-
-    loop {
-        // Falling edge for our button -> button down (pressing down
-        // Rising edge for our button -> button up (letting go after press)
-        // Act on press as there is delay between pressing and letting go and it feels snappier
-        button.debounce_falling_edge().await;
-        info!("Button pressed");
-        // Record time of button press for naive debounce
-        let start = Instant::now();
-
-        // Advance to next fan state
-        fan_state = fan_state.next();
-
-        let state = match fan_state {
-            fan::State::Off => {
-                let setting = FAN_CONTROLLER
-                    .fan_states
-                    .0
-                    .try_get()
-                    .map(|state| state.setting)
-                    .unwrap_or(SetPoint::ZERO);
-                FanState {
-                    setting,
-                    is_on: false,
-                }
-            }
-            fan::State::Low => FanState {
-                setting: fan::user_setting::LOW,
-                is_on: true,
-            },
-            fan::State::Medium => FanState {
-                setting: fan::user_setting::MEDIUM,
-                is_on: true,
-            },
-            fan::State::High => FanState {
-                setting: fan::user_setting::HIGH,
-                is_on: true,
-            },
-        };
-
-        // Optimistically update setting
-        sender.send(state);
-    }
-}
-
 #[embassy_executor::task]
 async fn input_routine(
     pin: PIN_18,
