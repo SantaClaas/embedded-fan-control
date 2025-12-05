@@ -10,9 +10,9 @@ mod address {
         }
     }
 
-    impl Into<u16> for Address {
-        fn into(self) -> u16 {
-            self.0
+    impl From<Address> for u16 {
+        fn from(value: Address) -> Self {
+            value.0
         }
     }
 

@@ -137,7 +137,7 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
         let bytes = message.as_ref();
         info!("{} Sending message to fan: {:?}", fan_identifier, bytes);
         // As ref because &[u8; 8] is not the same as &[u8]
-        let result = with_timeout(configuration::FAN_TIMEOUT, self.uart.write_all(&bytes)).await?;
+        let result = with_timeout(configuration::FAN_TIMEOUT, self.uart.write_all(bytes)).await?;
 
         info!("{} UART write result: {:?}", fan_identifier, result);
 
@@ -248,7 +248,7 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
         // Send update through UART to MAX845 to modbus fans
         // Form message to fan 1
         let register_address = (*holding_registers::REFERENCE_SET_POINT).to_be_bytes();
-        let value: u16 = set_point.deref().clone();
+        let value: u16 = *set_point.deref();
         let mut message: [u8; 8] = [
             // Device address fan 1
             *address::FAN_1,

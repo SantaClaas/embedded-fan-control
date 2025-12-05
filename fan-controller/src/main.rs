@@ -706,7 +706,7 @@ async fn fan_control_routine(
             //TODO or provide a counter to detect the endless loop
 
             // There is no Option::copied or Option::cloned for some reason in core
-            current_set_point.inspect(|speed| other_fan_speed.signal(speed.clone()));
+            current_set_point.inspect(|speed| other_fan_speed.signal(*speed));
             continue;
         }
 
