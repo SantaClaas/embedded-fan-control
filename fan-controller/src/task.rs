@@ -19,7 +19,7 @@ use core::task::Poll;
 use cyw43::{Control, NetDriver};
 use defmt::{Format, error, info, unwrap, warn};
 use embassy_executor::Spawner;
-use embassy_futures::join::{join, join4, join5};
+use embassy_futures::join::{join, join5};
 use embassy_net::dns::{DnsQueryType, DnsSocket};
 use embassy_net::driver::Driver;
 use embassy_net::tcp::{TcpSocket, TcpWriter};
@@ -33,13 +33,14 @@ use embassy_sync::mutex::Mutex;
 use embassy_sync::pubsub::subscriber::Sub;
 use embassy_sync::signal::Signal;
 use embassy_sync::waitqueue::AtomicWaker;
-use embassy_time::{Duration, Instant, Timer, with_deadline, with_timeout};
+use embassy_time::{Duration, Instant, TimeoutError, Timer, with_deadline, with_timeout};
 use embedded_io_async::Read;
 use rand::RngCore;
 use static_cell::StaticCell;
 
 #[embassy_executor::task]
 async fn network_task(stack: &'static Stack<NetDriver<'static>>) -> ! {
+    info!("Started network task");
     stack.run().await
 }
 
@@ -48,7 +49,7 @@ async fn handle_subscribe_acknowledgement<'f, const SUBSCRIPTIONS: usize>(
     //TODO rework this to be a channel that sends the packet identifier as acknowledgement
     acknowledgements: &Mutex<CriticalSectionRawMutex, [bool; SUBSCRIPTIONS]>,
 ) {
-    info!("[Subscription] Received subscribe acknowledgement");
+    info!("[Subscription] Received subscribe acknowledgement. Waiting for acknowledgement lock");
     let mut acknowledgements = acknowledgements.lock().await;
     info!("[Subscription] Locked ACKNOWLEDGEMENTS");
     // Validate server sends a valid packet identifier or we get bamboozled and panic
@@ -199,7 +200,7 @@ async fn listen<
 ) {
     let mut buffer = [0; 1024];
     loop {
-        info!("Waiting for packet");
+        info!("[MQTT/listen] Waiting for packet");
         let result = reader.read(&mut buffer).await;
         let bytes_read = match result {
             // This indicates the TCP connection was closed. (See embassy-net documentation)
@@ -248,8 +249,10 @@ async fn listen<
                 // If users still want to use a From implementation then they can still do this
                 // as any type that implements From, automatically implements TryFrom
                 let result = Send::try_from(publish);
+
+                info!("[MQTT/listen] Sending out received send packet from publish");
                 sender.send(result).await;
-                info!("Handled publish")
+                info!("[MQTT/listen] Sent out received send packet from publish")
             }
             SubscribeAcknowledgement::TYPE => {
                 let subscribe_acknowledgement =
@@ -264,8 +267,10 @@ async fn listen<
                         }
                     };
 
+                info!("[MQTT/listen] Waiting for subscribe acknowledgement handling");
                 handle_subscribe_acknowledgement(&subscribe_acknowledgement, acknowledgements)
                     .await;
+                info!("[MQTT/listen] Subscribe acknowledgement handled");
             }
             PingResponse::TYPE => {
                 info!("Received ping response");
@@ -282,7 +287,9 @@ async fn listen<
                     }
                 };
 
+                info!("[MQTT/listen] Waiting for ping response handling");
                 handle_ping_response(ping_response, ping_response_signal).await;
+                info!("[MQTT/listen] Ping response handled");
             }
             Disconnect::TYPE => {
                 info!("Received disconnect");
@@ -342,45 +349,60 @@ async fn talk<T: Publish>(
     last_packet: &Signal<CriticalSectionRawMutex, Instant>,
 ) {
     loop {
+        info!("[MQTT/talk] Waiting for next message to send out");
         let message = outgoing.receive().await;
+        info!("[MQTT/talk] Message received");
 
+        info!("[MQTT/talk] Waiting for lock on writer");
         let mut writer = writer.lock().await;
+        info!("[MQTT/talk] Writer lock acquired");
+
         match message {
             Message::Subscribe(subscribe) => {
-                info!("Sending subscribe");
+                info!("[MQTT/talk] Sending subscribe");
                 if let Err(error) = send(&mut *writer, subscribe).await {
-                    error!("Error sending subscribe: {:?}", error);
+                    error!("[MQTT/talk] Error sending subscribe: {:?}", error);
                     continue;
                 }
+                info!("[MQTT/talk] Subscribe sent");
             }
             Message::Publish(publish) => {
                 info!(
-                    "Sending publish {:?}",
-                    core::str::from_utf8(publish.payload()).unwrap()
+                    "[MQTT/talk] Sending publish {:?} {:?}",
+                    publish.topic(),
+                    core::str::from_utf8(publish.payload()).unwrap_or("Payload is not UTF-8")
                 );
                 if let Err(error) = send(&mut *writer, publish).await {
-                    error!("Error sending publish: {:?}", error);
+                    error!("[MQTT/talk] Error sending publish: {:?}", error);
                     continue;
                 }
+
+                info!("[MQTT/talk] Publish completed successfully");
             }
             Message::PublishInternal(publish) => {
                 info!(
-                    "Sending internal publish {:?}",
-                    core::str::from_utf8(publish.payload).unwrap()
+                    "[MQTT/talk] Sending internal publish {:?} {:?}",
+                    publish.topic_name,
+                    core::str::from_utf8(publish.payload).unwrap_or("(Payload is not UTF-8)")
                 );
                 if let Err(error) = send(&mut *writer, publish).await {
-                    error!("Error sending internal publish: {:?}", error);
+                    error!("[MQTT/talk] Error sending internal publish: {:?}", error);
                     continue;
                 }
+
+                info!("[MQTT/talk] Internal publish completed successfully");
             }
             Message::PredefinedPublish(publish) => match publish {
                 PredefinedPublish::FanPercentageState { setting } => {
-                    info!("Sending percentage state publish {}", setting);
+                    info!("[MQTT/talk] Sending percentage state publish {}", setting);
                     // let buffer: StringBuffer<5> = setting.into();
                     let buffer = match heapless::String::<5>::try_from(*setting) {
                         Ok(buffer) => buffer,
                         Err(error) => {
-                            error!("Error converting setting to string: {:?}", error);
+                            error!(
+                                "[MQTT/talk] Error converting setting to string: {:?}",
+                                error
+                            );
                             continue;
                         }
                     };
@@ -391,9 +413,11 @@ async fn talk<T: Publish>(
                     };
 
                     if let Err(error) = send(&mut *writer, packet).await {
-                        error!("Error sending predefined publish: {:?}", error);
+                        error!("[MQTT/talk] Error sending predefined publish: {:?}", error);
                         continue;
                     }
+
+                    info!("[MQTT/talk] Predefined publish completed successfully");
                 }
                 PredefinedPublish::FanOnState { is_on } => {
                     //TODO update state
@@ -409,11 +433,13 @@ async fn talk<T: Publish>(
                         }
                     };
 
-                    info!("Sending on state publish");
+                    info!("[MQTT/talk] Sending on state publish");
                     if let Err(error) = send(&mut *writer, packet).await {
-                        error!("Error sending predefined publish: {:?}", error);
+                        error!("[MQTT/talk] Error sending predefined publish: {:?}", error);
                         continue;
                     }
+
+                    info!("[MQTT/talk] On state publish completed successfully");
                 }
                 PredefinedPublish::SensorTemperature { temperature, fan } => {
                     // The value is divided by 10 in the value template that is submitted with home assistant discovery
@@ -421,7 +447,7 @@ async fn talk<T: Publish>(
                         Ok(formatted) => formatted,
                         Err(error) => {
                             error!(
-                                "Error writing temperature {} to heapless::String",
+                                "[MQTT/talk] Error writing temperature {} to heapless::String",
                                 temperature
                             );
                             continue;
@@ -434,11 +460,13 @@ async fn talk<T: Publish>(
                         },
                         payload: formatted.as_bytes(),
                     };
-                    info!("Sending sensor temperature publish");
+                    info!("[MQTT/talk] Sending sensor temperature publish");
                     if let Err(error) = send(&mut *writer, packet).await {
-                        error!("Error sending predefined publish: {:?}", error);
+                        error!("[MQTT/talk] Error sending predefined publish: {:?}", error);
                         continue;
                     }
+
+                    info!("[MQTT/talk] Sensor temperature publish completed successfully");
                 }
             },
         }
@@ -468,7 +496,11 @@ async fn set_up_subscriptions<T: Publish, const SUBSCRIPTIONS: usize>(
         packet_identifier,
     });
 
+    info!("[Subscription] Sending out subscription request");
     outgoing.send(message).await;
+    info!("[Subscription] Sent subscription request");
+
+    info!("[Subscription] Waiting for subscription acknowledgements");
 
     const TIMEOUT: Duration = Duration::from_secs(30);
     let result = with_timeout(
@@ -501,7 +533,9 @@ async fn set_up_discovery<T: Publish>(
         payload: DISCOVERY_PAYLOAD,
     });
 
+    info!("[Discovery] Sending out discovery payload");
     outgoing.send(discovery_publish).await;
+    info!("[Discovery] Sent discovery payload");
     //TODO wait for packet acknowledgement
 }
 
@@ -524,14 +558,18 @@ async fn keep_alive(
         // The server waits for 1.5 times the keep alive interval, so being off by a bit due to
         // network, async overhead or the clock not being exactly precise is fine
         let deadline = last_send + configuration::KEEP_ALIVE;
+        info!("[Keep Alive] Waiting for next packet or keep alive timeout");
         let result = with_deadline(deadline, last_packet.wait()).await;
         match result {
-            Err(TimeoutError) => {
-                info!("Sending keep alive ping request");
+            Err(TimeoutError {}) => {
+                info!("[Keep Alive] Sending keep alive ping request");
                 let mut writer = writer.lock().await;
                 // Send keep alive ping request
                 if let Err(error) = send(&mut *writer, PingRequest).await {
-                    error!("Error sending keep alive ping request: {:?}", error);
+                    error!(
+                        "[Keep Alive] Error sending keep alive ping request: {:?}",
+                        error
+                    );
                     client_state.signal(ClientState::ConnectionLost);
                     return;
                 }
@@ -541,24 +579,25 @@ async fn keep_alive(
                 last_send = Instant::now();
 
                 // Wait for ping response
+                info!("[Keep Alive] Waiting for ping response");
                 if let Err(TimeoutError) =
                     with_timeout(configuration::MQTT_TIMEOUT, ping_response.wait()).await
                 {
                     // Assume disconnect from server
-                    error!("Timeout waiting for ping response. Disconnecting");
+                    error!("[Keep Alive] Timeout waiting for ping response. Disconnecting");
                     client_state.signal(ClientState::ConnectionLost);
                     return;
                 }
 
                 let response_duration = Instant::now() - last_send;
                 info!(
-                    "Received and processed ping response in {:?} ({}μs) after sending ping request",
+                    "[Keep Alive] Received and processed ping response in {:?} ({}μs) after sending ping request",
                     response_duration,
                     response_duration.as_micros()
                 );
             }
             Ok(last_packet) => {
-                info!("Sent packet. Resetting timer to send keep alive");
+                info!("[Keep Alive] Sent packet. Resetting timer to send keep alive");
                 last_send = last_packet;
             }
         }
@@ -616,8 +655,11 @@ pub(super) async fn set_up_network_stack(
     dio: impl PioPin,
     clk: impl PioPin,
 ) -> &'static Stack<NetDriver<'static>> {
+    info!("[Network] Initializing network stack");
     let (net_device, mut control) =
         gain_control(spawner, pwr_pin, cs_pin, pio, dma, dio, clk).await;
+
+    info!("[Network] Initializing network stack");
 
     static STACK: StaticCell<Stack<NetDriver<'static>>> = StaticCell::new();
     static RESOURCES: StaticCell<StackResources<5>> = StaticCell::new();
@@ -634,38 +676,44 @@ pub(super) async fn set_up_network_stack(
 
     unwrap!(spawner.spawn(network_task(stack)));
     // Join Wi-Fi network
+    info!("[Network] Joining wifi network");
     join_wifi_network(&mut control).await;
+    info!("[Network] Joined wifi network");
 
     // Wait for DHCP
-    info!("Waiting for DHCP");
+    info!("[Network] Waiting for DHCP");
     while !stack.is_config_up() {
+        info!("[Network] DHCP not yet up");
         Timer::after_millis(100).await;
     }
+    info!("[Network] DHCP is up");
 
-    info!("DHCP is up");
-
-    info!("Waiting for link up");
+    info!("[Network] Waiting for link up");
     while !stack.is_link_up() {
+        info!("[Network] Link not yet up");
         Timer::after_millis(500).await;
     }
+    info!("[Network] Link is up");
 
-    info!("Link is up");
-
-    info!("Waiting for stack to be up");
+    info!("[Network] Waiting for stack to be up");
     stack.wait_config_up().await;
-    info!("Stack is up");
+    info!("[Network] Stack is up");
 
     stack
 }
 
 async fn join_wifi_network(control: &mut Control<'_>) {
     loop {
+        info!("[Join Wifi] Attempting to join Wi-Fi network");
         match control
             .join_wpa2(configuration::WIFI_NETWORK, configuration::WIFI_PASSWORD)
             .await
         {
             Ok(_) => break,
-            Err(error) => info!("Error joining Wi-Fi network with status: {}", error.status),
+            Err(error) => info!(
+                "[Join Wifi] Error joining Wi-Fi network with status: {}",
+                error.status
+            ),
         }
     }
 }
@@ -681,13 +729,15 @@ where
 
     loop {
         //TODO support IPv6
+        info!("[Resolve MQTT broker address] Waiting for DNS query");
         let result = dns_client.query(mqtt_broker_address, DnsQueryType::A).await;
+        info!("[Resolve MQTT broker address] DNS query completed");
 
         let mut addresses = match result {
             Ok(addresses) => addresses,
             Err(error) => {
                 info!(
-                    "Error resolving MQTT broker IP address with {}: {:?}",
+                    "[Resolve MQTT broker address] Error resolving MQTT broker IP address with {}: {:?}",
                     mqtt_broker_address, error,
                 );
                 // Exponential backoff doesn't seem necessary here
@@ -699,7 +749,9 @@ where
         };
 
         if addresses.is_empty() {
-            info!("No addresses found for Home Assistant MQTT broker");
+            info!(
+                "[Resolve MQTT broker address] No addresses found for Home Assistant MQTT broker"
+            );
             Timer::after_millis(500).await;
             continue;
         }
@@ -729,8 +781,11 @@ async fn handle_publish_send<'receiver, Send: Publish, const SEND: usize>(
     outgoing: &Channel<CriticalSectionRawMutex, Message<'_, Send>, 8>,
 ) {
     loop {
+        info!("[Publish Send] Waiting for message");
         let message = receiver.receive().await;
+        info!("[Publish Send] Received message. Sending to MQTT outgoing");
         outgoing.send(message.into()).await;
+        info!("[Publish Send] Message sent to MQTT outgoing");
     }
 }
 pub(super) async fn mqtt_with_connect<
@@ -757,36 +812,37 @@ pub(super) async fn mqtt_with_connect<
     let mut send_buffer = [0; 1024];
     let mut socket = TcpSocket::new(stack, &mut receive_buffer, &mut send_buffer);
 
-    info!("Resolving MQTT broker IP address");
+    info!("[MQTT/main] Resolving MQTT broker IP address");
     // Get home assistant MQTT broker IP address
     let address = resolve_mqtt_broker_address(stack, mqtt_broker_configuration.address).await;
-    info!("MQTT broker IP address resolved");
+    info!("[MQTT/main] MQTT broker IP address resolved");
 
-    info!("Connecting to MQTT broker through TCP");
+    info!("[MQTT/main] Connecting to MQTT broker through TCP");
     let endpoint = IpEndpoint::new(address, configuration::MQTT_BROKER_PORT);
     // Connect
+
     while let Err(error) = socket.connect(endpoint).await {
         info!(
-            "Error connecting to Home Assistant MQTT broker: {:?}",
+            "[MQTT/main] Error connecting to Home Assistant MQTT broker: {:?}",
             error
         );
         Timer::after_millis(500).await;
     }
-    info!("Connected to MQTT broker through TCP");
+    info!("[MQTT/main] Connected to MQTT broker through TCP");
 
     use crate::mqtt::task;
 
     //TODO error handling
     let packet = defmt::unwrap!(Connect::try_from(mqtt_broker_configuration));
 
-    info!("Establishing MQTT connection");
+    info!("[MQTT/main] Establishing MQTT connection");
     let (mut reader, mut writer) = socket.split();
 
     if let Err(error) = task::connect(&mut writer, &mut reader, packet).await {
-        warn!("Error connecting to MQTT broker: {:?}", error);
+        warn!("[MQTT/main] Error connecting to MQTT broker: {:?}", error);
         return;
     };
-    info!("MQTT connection established");
+    info!("[MQTT/main] MQTT connection established");
 
     //TODO yes static "global" state is bad, but I am still learning how to use wakers and polling
     // with futures so this will be refactored when I made it work
