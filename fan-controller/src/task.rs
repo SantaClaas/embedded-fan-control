@@ -565,28 +565,6 @@ async fn keep_alive(
     }
 }
 
-async fn poll_sensors(fans: ModbusOnceLock) {
-    loop {
-        let mut fans = fans.get().await.lock().await;
-        let fans = fans.deref_mut();
-
-        let temperature = match fans.get_temperature(fan::Fan::One).await {
-            Ok(temperature) => temperature,
-            Err(modbus::client::Error::Timeout(_)) => {
-                error!("Timeout getting temperature for fan 1");
-                return;
-            }
-            Err(modbus::client::Error::Uart(error)) => {
-                error!("Uart error getting temperature for fan 1: {:?}", error);
-                return;
-            }
-        };
-
-        Timer::after_secs(10).await;
-        todo!("Send temperature to Home Assistant");
-    }
-}
-
 const SUBSCRIBE_OPTIONS: mqtt::packet::subscribe::Options = mqtt::packet::subscribe::Options::new(
     QualityOfService::AtMostOnceDelivery,
     false,
