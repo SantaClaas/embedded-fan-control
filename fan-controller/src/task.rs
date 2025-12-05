@@ -9,8 +9,8 @@ use crate::mqtt::packet::subscribe_acknowledgement::SubscribeAcknowledgement;
 use crate::mqtt::task::send;
 use crate::mqtt::{self};
 use crate::mqtt::{TryDecode, non_zero_u16};
-use crate::{FanState, configuration, fan, gain_control};
 use crate::{ModbusOnceLock, modbus};
+use crate::{configuration, fan, gain_control};
 use ::mqtt::QualityOfService;
 use core::future::poll_fn;
 use core::num::NonZeroU16;
@@ -94,80 +94,6 @@ async fn wait_for_acknowledgement<const SUBSCRIPTIONS: usize>(
     .await;
 
     info!("[Subscription] Subscribe acknowledgement received")
-}
-
-/// A handler that takes MQTT publishes and sets the fan settings accordingly
-async fn handle_publish<'f>(
-    publish: &'f publish::Publish<'f>,
-    sender: &embassy_sync::watch::Sender<'_, CriticalSectionRawMutex, FanState, 3>,
-) {
-    info!("Handling publish");
-
-    // This part is not MQTT but application specific
-    match publish.topic_name {
-        "fancontroller/speed/percentage" => {
-            let payload = match core::str::from_utf8(publish.payload) {
-                Ok(payload) => payload,
-                Err(error) => {
-                    warn!(
-                        "Expected percentage_command_topic payload (speed percentage) to be a valid UTF-8 string with a number"
-                    );
-                    return;
-                }
-            };
-
-            // And then to an integer...
-            let set_point = payload.parse::<u16>();
-            let set_point = match set_point {
-                Ok(set_point) => set_point,
-                Err(error) => {
-                    warn!(
-                        "Expected speed percentage to be a number string. Payload is: {}",
-                        payload
-                    );
-                    return;
-                }
-            };
-
-            info!("SETTING FAN {}", set_point);
-            let Ok(setting) = SetPoint::new(set_point) else {
-                warn!(
-                    "Setting fan speed out of bounds. Not accepting new setting: {}",
-                    set_point
-                );
-                return;
-            };
-
-            sender.send(FanState {
-                setting,
-                // Set to on when there is a value set
-                is_on: true,
-            });
-            // Home assistant and fan update will be done by receiver
-        }
-        topic::fan_controller::COMMAND => {
-            info!("Received fan set on command from homeassistant");
-            info!(
-                "Payload: {:?}",
-                core::str::from_utf8(publish.payload).unwrap()
-            );
-            let is_on = publish.payload == b"ON";
-            info!("TURNING FAN {}", if is_on { "ON" } else { "OFF" });
-
-            sender.send(FanState {
-                setting: sender
-                    .try_get()
-                    .map(|state| state.setting)
-                    .unwrap_or(SetPoint::ZERO),
-                is_on,
-            });
-            // Home assistant and fan update will be done by receiver
-        }
-        other => warn!(
-            "Unexpected topic: {} with payload: {}",
-            other, publish.payload
-        ),
-    }
 }
 
 /// Callback handler for pings received when listening

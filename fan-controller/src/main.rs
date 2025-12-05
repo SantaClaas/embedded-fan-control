@@ -154,41 +154,6 @@ async fn input_routine(
 type ModbusMutex = Mutex<CriticalSectionRawMutex, modbus::Client<'static, UART0, PIN_4>>;
 type ModbusOnceLock = OnceLock<ModbusMutex>;
 
-/// Fan state can have a setting while being off although and we emulate that behavior because
-/// fan devices actually don't have that behavior
-#[derive(PartialEq, Clone)]
-struct FanState {
-    is_on: bool,
-    setting: SetPoint,
-}
-
-struct FanController {
-    /// Is on and the setting update independent of each other on homeassistant.
-    /// Update this state even though it might not yet be set on the fan devices.
-    /// Use optimistic updates.
-    /// Senders:
-    /// - MQTT (server to client)
-    /// - Button
-    /// Receivers:
-    /// - Fan
-    /// - MQTT (client to server)
-    fan_states: (
-        Watch<CriticalSectionRawMutex, FanState, 3>,
-        Watch<CriticalSectionRawMutex, FanState, 3>,
-    ),
-}
-
-impl FanController {
-    const fn new() -> Self {
-        Self {
-            fan_states: (Watch::new(), Watch::new()),
-        }
-    }
-}
-
-#[deprecated(note = "Use the new system")]
-static FAN_CONTROLLER: FanController = FanController::new();
-
 /// This routine takes the latest fan state updates and updates all parts of the device that display a state.
 /// This includes at the time of writing Home Assistant through MQTT and two status LEDs on the device.
 /// Displays fan status with 2 LEDs:
