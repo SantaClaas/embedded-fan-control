@@ -1,15 +1,11 @@
 #![no_std]
 #![no_main]
 
-use core::future::poll_fn;
-use core::ops::DerefMut;
-use core::task::Poll;
 use cyw43::{Control, NetDriver};
 use cyw43_pio::PioSpi;
 use debounce::Debouncer;
 use defmt::*;
 use embassy_executor::Spawner;
-use embassy_futures::join::join;
 use embassy_futures::select::{Either, Either3, select, select3};
 use embassy_net::Stack;
 use embassy_rp::gpio::{Input, Level, Output, Pin, Pull};
@@ -23,10 +19,9 @@ use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::{self, Channel};
 use embassy_sync::mutex::Mutex;
 use embassy_sync::once_lock::OnceLock;
-use embassy_sync::pubsub::PubSubChannel;
 use embassy_sync::signal::Signal;
 use embassy_sync::watch::{self, Watch};
-use embassy_time::{Duration, Instant, Timer};
+use embassy_time::{Duration, Timer};
 use mqtt::TryDecode;
 use static_cell::StaticCell;
 
