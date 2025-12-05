@@ -427,10 +427,12 @@ async fn display_routine(
                 .0
                 .and_then(|current| SetStateCommandValue::from_change(current, update))
             {
+                // Update setting before is on state for smoother transition in homeassistant UI
                 let publish = OutgoingPublish::UpdateState {
                     fan: Fan::One,
                     payload: command,
                 };
+                //TODO handle back pressure when channel is full. Try to send until new message comes in
                 mqtt_out.send(publish).await;
             }
 
@@ -439,6 +441,7 @@ async fn display_routine(
                 fan: Fan::One,
                 payload: update.into(),
             };
+            //TODO handle back pressure when channel is full. Try to send until new message comes in
             mqtt_out.send(publish).await;
 
             // Persist new state
@@ -458,6 +461,8 @@ async fn display_routine(
                     fan: Fan::Two,
                     payload: command,
                 };
+
+                //TODO handle back pressure when channel is full. Try to send until new message comes in
                 mqtt_out.send(publish).await;
             }
 
@@ -466,6 +471,8 @@ async fn display_routine(
                 fan: Fan::Two,
                 payload: update.into(),
             };
+
+            //TODO handle back pressure when channel is full. Try to send until new message comes in
             mqtt_out.send(publish).await;
 
             // Persist new state

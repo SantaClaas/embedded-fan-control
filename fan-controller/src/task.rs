@@ -19,7 +19,7 @@ use core::task::Poll;
 use cyw43::{Control, NetDriver};
 use defmt::{Format, error, info, unwrap, warn};
 use embassy_executor::Spawner;
-use embassy_futures::join::{join, join4};
+use embassy_futures::join::{join, join4, join5};
 use embassy_net::dns::{DnsQueryType, DnsSocket};
 use embassy_net::driver::Driver;
 use embassy_net::tcp::{TcpSocket, TcpWriter};
@@ -316,12 +316,24 @@ enum PredefinedPublish {
 enum Message<'a, T: Publish> {
     Subscribe(Subscribe<'a>),
     Publish(T),
+    #[deprecated(
+        note = "Use generic Publish. This is only used by Home Assistant discovery which needs to be moved out of MQTT and thus removed"
+    )]
     /// Publish messages used internally to manage the MQTT state
     PublishInternal(publish::Publish<'a>),
     #[deprecated(
         note = "Migrate to MQTT not being aware of used messages. Use normal Publish with generic T"
     )]
     PredefinedPublish(PredefinedPublish),
+}
+
+impl<T> From<T> for Message<'_, T>
+where
+    T: Publish,
+{
+    fn from(publish: T) -> Self {
+        Message::Publish(publish)
+    }
 }
 
 async fn talk<T: Publish>(
@@ -773,6 +785,16 @@ pub(super) struct MqttBrokerConfiguration<'a> {
     pub(super) keep_alive_seconds: Duration,
 }
 
+/// This is piping the output of the receiver into the sender. This is in fact so simple that there should be something built-in to replace this
+async fn handle_publish_send<'receiver, Send: Publish, const SEND: usize>(
+    receiver: channel::Receiver<'receiver, CriticalSectionRawMutex, Send, SEND>,
+    outgoing: &Channel<CriticalSectionRawMutex, Message<'_, Send>, 8>,
+) {
+    loop {
+        let message = receiver.receive().await;
+        outgoing.send(message.into()).await;
+    }
+}
 pub(super) async fn mqtt_with_connect<
     'tcp,
     'sender,
@@ -878,20 +900,10 @@ pub(super) async fn mqtt_with_connect<
     // Future 4
     let keep_alive = keep_alive(&writer, &last_packet, &client_state, &ping_response);
 
-    // Future 5 update homeassistant when change occurs
-    // let update_homeassistant = update_homeassistant(&outgoing, &mut receiver);
-
-    // Future 6
-    // let poll_sensors = poll_sensors(fans);
+    // Future 5
+    let handle_publish_send = handle_publish_send(receiver, &outgoing);
 
     //TODO cancel all tasks when client loses connection
 
-    join4(
-        listen, talk, keep_alive,
-        set_up,
-        // Join because there is only a join with max 5 arguments 😬
-        // join(update_homeassistant(), poll_sensors(fans)),
-        // update_homeassistant,
-    )
-    .await;
+    join5(listen, talk, keep_alive, set_up, handle_publish_send).await;
 }
