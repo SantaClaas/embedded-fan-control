@@ -125,8 +125,9 @@ async fn input_routine(
         // Falling edge for our button -> button down (pressing down
         // Rising edge for our button -> button up (letting go after press)
         // Act on press as there is delay between pressing and letting go and it feels snappier
+        info!("[Button] Waiting for falling edge");
         button.debounce_falling_edge().await;
-        info!("Button pressed");
+        info!("[Button] Falling edge detected");
 
         // As the button controls both fans it will force them to be synchronous
         // Take the lowest of both fan states to decide the next advancement
@@ -147,58 +148,6 @@ async fn input_routine(
 
         fan_state.0.signal(next_set_point);
         fan_state.1.signal(next_set_point);
-    }
-}
-
-#[deprecated(note = "There are now two separate tasks that update the fan independently")]
-/// Update fans whenenver the fan setting or on state changes
-#[embassy_executor::task]
-async fn update_fans(fans: &'static ModbusOnceLock) {
-    let Some(mut receiver) = FAN_CONTROLLER.fan_states.0.receiver() else {
-        // Not using asserts because they are hard to debug on embedded where it crashed
-        error!("No receiver for fan is on state. This should never happen.");
-        return;
-    };
-
-    // Only comparing on state causes button triggers to be ignored
-    let mut previous = FAN_CONTROLLER.fan_states.0.try_get().unwrap_or(FanState {
-        is_on: false,
-        setting: SetPoint::ZERO,
-    });
-
-    loop {
-        // This is expected to always provide the latest value.
-        // Even if it had multiple updates while this loop was throttled
-        let state = receiver.changed_and(|new| *new != previous).await;
-
-        // Update previous before continue
-        previous = state.clone();
-
-        info!("Updating fans");
-        let mut fans = fans.get().await.lock().await;
-        let fans = fans.deref_mut();
-
-        let setting = if state.is_on {
-            state.setting
-        } else {
-            // Turn off fans
-            SetPoint::ZERO
-        };
-
-        match fans.set_set_point(&setting).await {
-            Ok(_) => {}
-            Err(modbus::client::Error::Timeout(_)) => {
-                error!("Timeout setting fan speed");
-                continue;
-            }
-            Err(modbus::client::Error::Uart(error)) => {
-                error!("Uart error setting fan speed: {:?}", error);
-                continue;
-            }
-        }
-
-        // Throttle updates send to the fans
-        Timer::after_millis(500).await;
     }
 }
 
