@@ -651,8 +651,8 @@ async fn fan_control_routine(
     'signal_loop: loop {
         info!("{} Waiting for fan state update", fan_identifier);
         let mut set_point = current_fan_speed.wait().await;
-        if current_set_point.is_some_and(|speed| speed == speed) {
-            //TODO consider to update fan display state nontheless
+        if current_set_point.is_some_and(|speed| speed == set_point) {
+            //TODO consider to update fan display state nonetheless
             info!(
                 "{} Fan state update received but has same state",
                 fan_identifier
