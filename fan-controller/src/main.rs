@@ -825,6 +825,7 @@ async fn led_routine(
     led_2.set_low();
 
     let mut current_state = None;
+
     loop {
         if let Some(new_state) = led_state.try_take() {
             current_state = Some(new_state);
@@ -848,6 +849,8 @@ async fn led_routine(
             }) => {
                 led_1.set_level(*led_1_level);
                 led_2.set_level(*led_2_level);
+                // Stop and wait until next update as there is no animation playing or it would cause an endless loop
+                current_state = Some(led_state.wait().await);
             }
             Some(LedState::Unsynchronized {
                 led_1: ref led_1_state,
