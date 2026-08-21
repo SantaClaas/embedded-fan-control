@@ -761,6 +761,7 @@ impl From<SetPoint> for Blink {
     }
 }
 
+#[derive(Clone, Copy)]
 enum LedState {
     Synchronized { led_1: Level, led_2: Level },
     Unsynchronized { led_1: Blink, led_2: Blink },
@@ -804,6 +805,57 @@ async fn blink<'d, T: Pin>(led: &mut Output<'d, T>, blink: Blink) {
     }
 }
 
+/// Plays one cycle of the animation that displays `state` on the LEDs.
+/// The caller repeats this for as long as the state stays the same.
+///
+/// States that are a static picture rather than an animation never return. They rely on the
+/// caller cancelling them once a new state arrives. Returning instead would put the caller
+/// into an endless loop without an await which starves every other task on the executor.
+async fn animate<'a, 'b, T: Pin, U: Pin>(
+    led_1: &mut Output<'a, T>,
+    led_2: &mut Output<'b, U>,
+    state: Option<LedState>,
+) {
+    match state {
+        // Using a quick switch between states as something moving faster gives the illusion of loading faster
+        None => {
+            const PAUSE_TIME: u64 = 250;
+            Timer::after_millis(PAUSE_TIME).await;
+            led_2.set_low();
+            led_1.set_high();
+            Timer::after_millis(PAUSE_TIME).await;
+            led_1.set_low();
+            led_2.set_high();
+        }
+        Some(LedState::Synchronized {
+            led_1: led_1_level,
+            led_2: led_2_level,
+        }) => {
+            led_1.set_level(led_1_level);
+            led_2.set_level(led_2_level);
+            // Nothing to animate. Park until the caller cancels us with the next state.
+            core::future::pending::<()>().await
+        }
+        Some(LedState::Unsynchronized {
+            led_1: led_1_state,
+            led_2: led_2_state,
+        }) => {
+            /*
+             * Note: blink counts can be the same but that does not mean the fan state is the same.
+             * The blink counts just represent if the fan is running within a certain range (low, medium, high).
+             * Within these ranges, the fan state can be different.
+             */
+
+            // Switching between blinking the state of one LED/fan and only then the other is intended
+            // to make it clearer that they don't run the same
+            blink(led_1, led_1_state).await;
+            Timer::after_secs(5).await;
+            blink(led_2, led_2_state).await;
+            Timer::after_secs(5).await;
+        }
+    }
+}
+
 /// This task controls the LEDs based on the current state of the fan.
 /// It acts a bit like the MQTT task that is used to display the state of the fans in Home Assistant.
 #[embassy_executor::task]
@@ -827,48 +879,20 @@ async fn led_routine(
     let mut current_state = None;
 
     loop {
-        if let Some(new_state) = led_state.try_take() {
-            current_state = Some(new_state);
-        }
-
-        match current_state {
-            // Using a quick switch between states as something moving faster gives the illusion of loading faster
-            None => {
-                const PAUSE_TIME: u64 = 250;
-                Timer::after_millis(PAUSE_TIME).await;
-                led_2.set_low();
-                led_1.set_high();
-                Timer::after_millis(PAUSE_TIME).await;
-                led_1.set_low();
-                led_2.set_high();
-                // Continue loop and repeat if state did not change
-            }
-            Some(LedState::Synchronized {
-                led_1: ref led_1_level,
-                led_2: ref led_2_level,
-            }) => {
-                led_1.set_level(*led_1_level);
-                led_2.set_level(*led_2_level);
-                // Stop and wait until next update as there is no animation playing or it would cause an endless loop
-                current_state = Some(led_state.wait().await);
-            }
-            Some(LedState::Unsynchronized {
-                led_1: ref led_1_state,
-                led_2: ref led_2_state,
-            }) => {
-                /*
-                 * Note: blink counts can be the same but that does not mean the fan state is the same.
-                 * The blink counts just represent if the fan is running within a certain range (low, medium, high).
-                 * Within these ranges, the fan state can be different.
-                 */
-
-                // Switching between blinking the state of one LED/fan and only then the other is intended
-                // to make it clearer that they don't run the same
-                blink(&mut led_1, *led_1_state).await;
-                Timer::after_secs(5).await;
-                blink(&mut led_2, *led_2_state).await;
-                Timer::after_secs(5).await;
-            }
+        // Taking the next state and yielding to the executor both happen here and nowhere
+        // else. That keeps every animation interruptible and makes it impossible for one
+        // of them to starve the executor by looping without an await.
+        // Signal::wait is cancellation safe so an animation that gets cancelled halfway
+        // through just starts over with the new state.
+        match select(
+            led_state.wait(),
+            animate(&mut led_1, &mut led_2, current_state),
+        )
+        .await
+        {
+            Either::First(new_state) => current_state = Some(new_state),
+            // The animation played to the end without an update coming in so repeat it
+            Either::Second(()) => {}
         }
     }
 }
