@@ -36,7 +36,7 @@ strength of that `Ok(())`.
 frame is arriving, and reads exactly the length of that frame with `read_exact` instead of a
 possibly short `read`. A successful write is confirmed by comparing the whole frame against the
 request, which validates the register, the value, and the checksum at once. Exception frames are
-checksum checked and returned as `ExchangeError::Exception`, so the existing retry loop now fires for a fan
+checksum checked and returned as `WriteError::Exception`, so the existing retry loop now fires for a fan
 that answers but refuses. Every failure carries the reason and, where it applies, which part of the
 exchange it happened in, so the retry log in `fan_control_routine` identifies the fault without
 having to read back through the trace. After any failure the receive buffer is drained, so a partial frame cannot
@@ -117,13 +117,11 @@ Reading holding registers (function code `0x03`) is now implemented. `ReadHoldin
 exactly one register, which keeps the response a fixed length, and `Client::read_holding_register`
 returns its contents. The parts both functions share are factored out of the write path rather than
 copied: `send_request` drives the line and writes the frame, and `read_header` reads the address and
-function code, turns an exception frame into `ExchangeError::Exception`, and returns once the header is the
-answer that was asked for, so each transaction only has to read its own body. A read is rejected if
-it announces a byte count other than the one register asked for, which is checked before the
-checksum because a different length means the wrong bytes were just read. `Exception` covers both
-functions now: `0x03` (response too long) only exists for reads, and `WriteRefused` became
-`AccessRefused` because `0x04` also means a register that cannot be read. `send_3` was renamed to
-`write_holding_register` to pair with it.
+function code and checks an exception frame, reporting a refusal as the raw code because the
+specification lists different ones per function. Each transaction then only has to read its own
+body. A read is rejected if it announces a byte count other than the one register asked for, which
+is checked before the checksum because a different length means the wrong bytes were just read.
+`send_3` was renamed to `write_holding_register` to pair with it.
 
 `fan_control_routine` reads the set point before it waits for anything, and sends what it gets into
 the display `Watch`, so the LEDs, Home Assistant and the button all start from what the fans are
