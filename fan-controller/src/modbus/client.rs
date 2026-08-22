@@ -5,7 +5,7 @@ use embassy_rp::{
     interrupt::typelevel::Binding,
     uart::{self, BufferedInterruptHandler, BufferedUart, RxPin, TxPin},
 };
-use embassy_time::{Duration, block_for, with_timeout};
+use embassy_time::{Duration, with_timeout};
 use embedded_io_async::{Read, ReadExactError, Write};
 
 use crate::{
@@ -168,20 +168,6 @@ impl From<ExchangeError> for ReadError {
         Self::Exchange(error)
     }
 }
-
-/// How long the MAX845 keeps driving the line after the last byte was flushed, so the end of the
-/// request is not cut off. Flushing only empties the FIFO, the last character can still be in the
-/// shift register.
-///
-/// Two bounds to stay between, both at 19200 baud 8E1 which is 11 bits or 573 µs per character:
-/// - at least one character, so the last one finishes leaving the shift register
-/// - less than 3,5 characters (2,0 ms), because that is the minimum pause the fan waits before it
-///   starts answering. Holding the driver longer means talking over the start of its response.
-///   See MODBUS Parameter RadiCal im Spiralgehäuse V1.00, section 1.2.2
-///
-/// This was 5 ms, which reached into the fan's answer. Timings in microseconds are not accurate
-/// and this is worth re-tuning on hardware, but stay inside the two bounds above
-const BLOCK_FOR: Duration = Duration::from_micros(800);
 
 /// The device address and the function code, which every response starts with and which decide
 /// how long the rest of the frame is
@@ -414,20 +400,23 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
 
         info!("{} Request written", fan_identifier);
 
-        // Before closing we need to flush the buffer to ensure that all data is written
-        // This requires blocking or we get a WouldBlock error. I don't understand why (TODO)
+        // Flushing only drains the software buffer, which empties as soon as the interrupt handler
+        // has moved the frame into the hardware FIFO. At that point none of it has reached the wire
         let result = self.uart.blocking_flush();
         if let Err(_error) = result {
             error!("{} UART flush error", fan_identifier);
         }
 
-        // In addition to flushing we need to wait for some time before turning off data in on the
-        // MAX845 because we might be too fast and cut off the last byte or more. (This happened)
-        // I saw someone using 120 microseconds (https://youtu.be/i46jdhvRej4?t=886).
-        // See [BLOCK_FOR] for how long to wait and why.
-        // Timer::after(Duration::from_micros(1_000)).await;
-        // Using an await timer breaks this. Probably because it yields to the scheduler
-        block_for(BLOCK_FOR);
+        // So wait for the transmitter itself to go idle. BUSY stays asserted until the FIFO has
+        // drained and the last character has left the shift register, which is the only moment the
+        // whole frame is actually on the line. Handing the line back before that cuts the frame off
+        // mid-way and the fan drops it on the checksum, which looks exactly like a silent fan.
+        // A fixed wait was here before and could not work: it has to cover the whole frame, not the
+        // one character a plain Uart would have left over, and the frame length is not a constant.
+        // Busy waiting rather than awaiting a timer, because yielding to the scheduler here means
+        // the line is handed back late, and the fan starts answering 3,5 characters after the frame
+        // ends. See MODBUS Parameter RadiCal im Spiralgehäuse V1.00, section 1.2.2
+        while self.uart.busy() {}
 
         // Close sending data to enable receiving data
         self.driver_enable.set_low();
