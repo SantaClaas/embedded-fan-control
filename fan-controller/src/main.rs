@@ -104,10 +104,7 @@ async fn gain_control(
 async fn input_routine(
     pin: PIN_18,
     mut display_state: (DisplayStateReceiver, DisplayStateReceiver),
-    fan_state: (
-        &'static Signal<CriticalSectionRawMutex, SetPoint>,
-        &'static Signal<CriticalSectionRawMutex, SetPoint>,
-    ),
+    fan_state: (&'static SetPointSignal, &'static SetPointSignal),
 ) {
     // The button just rotates through fan settings. This is because we currently only have one button
     // Will probably use something more advanced in the future
@@ -138,13 +135,48 @@ async fn input_routine(
             SetPoint::ZERO
         };
 
-        fan_state.0.signal(next_set_point);
-        fan_state.1.signal(next_set_point);
+        fan_state
+            .0
+            .signal(RequestedSetPoint::FromUser(next_set_point));
+        fan_state
+            .1
+            .signal(RequestedSetPoint::FromUser(next_set_point));
     }
 }
 
 type ModbusMutex = Mutex<CriticalSectionRawMutex, modbus::Client<'static, UART0, PIN_4>>;
 type ModbusOnceLock = OnceLock<ModbusMutex>;
+
+/// A set point signalled to a [`fan_control_routine`], together with where it came from. The
+/// origin is what decides whether a fan that cannot be reached drags the other one with it
+#[derive(Clone, Copy, Format)]
+enum RequestedSetPoint {
+    /// Home Assistant or the button asked for this speed
+    FromUser(SetPoint),
+    /// The other fan is pushing this one back to the speed they were last in sync at, because its
+    /// own write failed
+    FromOtherFan(SetPoint),
+}
+
+impl RequestedSetPoint {
+    fn set_point(self) -> SetPoint {
+        match self {
+            Self::FromUser(set_point) | Self::FromOtherFan(set_point) => set_point,
+        }
+    }
+
+    /// Whether failing to apply this should push the other fan back, to keep the two from drifting
+    /// apart and putting the house under or over pressure.
+    ///
+    /// Only a request from a user does. A correction that fails means the bus is down rather than
+    /// the two fans disagreeing, and answering it with another correction is exactly what made the
+    /// fans signal each other back and forth without ever stopping
+    fn should_correct_other_fan(self) -> bool {
+        matches!(self, Self::FromUser(_))
+    }
+}
+
+type SetPointSignal = Signal<CriticalSectionRawMutex, RequestedSetPoint>;
 
 /// How many routines watch a fan's confirmed set point: the displays, the button, and the MQTT
 /// brain that restores the last running speed when Home Assistant turns the fans back on
@@ -575,8 +607,8 @@ async fn mqtt_brain_routine(
         Result<IncomingPublish, FromPublishError>,
         CHANNEL_SIZE,
     >,
-    fan_one_state: &'static Signal<CriticalSectionRawMutex, SetPoint>,
-    fan_two_state: &'static Signal<CriticalSectionRawMutex, SetPoint>,
+    fan_one_state: &'static SetPointSignal,
+    fan_two_state: &'static SetPointSignal,
     mut display_state: (DisplayStateReceiver, DisplayStateReceiver),
 ) {
     // Remembering the last speed the fans were running at for when Home Assistant turns the device
@@ -639,15 +671,15 @@ async fn mqtt_brain_routine(
                 command: FanCommand::SetSpeed { set_point },
             } => match target {
                 Fan::One => {
-                    fan_one_state.signal(set_point);
+                    fan_one_state.signal(RequestedSetPoint::FromUser(set_point));
                     if is_synchronization_on {
-                        fan_two_state.signal(set_point);
+                        fan_two_state.signal(RequestedSetPoint::FromUser(set_point));
                     }
                 }
                 Fan::Two => {
-                    fan_two_state.signal(set_point);
+                    fan_two_state.signal(RequestedSetPoint::FromUser(set_point));
                     if is_synchronization_on {
-                        fan_one_state.signal(set_point);
+                        fan_one_state.signal(RequestedSetPoint::FromUser(set_point));
                     }
                 }
             },
@@ -656,12 +688,20 @@ async fn mqtt_brain_routine(
                 command: FanCommand::SetState(new_state),
             } => match target {
                 Fan::One => match new_state {
-                    SetStateCommandValue::On => fan_one_state.signal(last_fan_state.0),
-                    SetStateCommandValue::Off => fan_one_state.signal(SetPoint::ZERO),
+                    SetStateCommandValue::On => {
+                        fan_one_state.signal(RequestedSetPoint::FromUser(last_fan_state.0))
+                    }
+                    SetStateCommandValue::Off => {
+                        fan_one_state.signal(RequestedSetPoint::FromUser(SetPoint::ZERO))
+                    }
                 },
                 Fan::Two => match new_state {
-                    SetStateCommandValue::On => fan_two_state.signal(last_fan_state.1),
-                    SetStateCommandValue::Off => fan_two_state.signal(SetPoint::ZERO),
+                    SetStateCommandValue::On => {
+                        fan_two_state.signal(RequestedSetPoint::FromUser(last_fan_state.1))
+                    }
+                    SetStateCommandValue::Off => {
+                        fan_two_state.signal(RequestedSetPoint::FromUser(SetPoint::ZERO))
+                    }
                 },
             },
         }
@@ -687,7 +727,7 @@ async fn back_off(attempt: u8) {
 async fn read_set_point(
     modbus_mutex: &'static ModbusMutex,
     fan_address: modbus::device::Address,
-    requested_set_point: &'static Signal<CriticalSectionRawMutex, SetPoint>,
+    requested_set_point: &'static SetPointSignal,
     fan_identifier: &str,
 ) -> Option<SetPoint> {
     let function = modbus::function::ReadHoldingRegister::new(
@@ -762,8 +802,8 @@ async fn read_set_point(
 #[embassy_executor::task(pool_size = 2)]
 async fn fan_control_routine(
     fan_address: modbus::device::Address,
-    current_fan_speed: &'static Signal<CriticalSectionRawMutex, SetPoint>,
-    other_fan_speed: &'static Signal<CriticalSectionRawMutex, SetPoint>,
+    current_fan_speed: &'static SetPointSignal,
+    other_fan_speed: &'static SetPointSignal,
     modbus: &'static ModbusOnceLock,
     display_state: DisplayStateSender,
 ) {
@@ -789,8 +829,8 @@ async fn fan_control_routine(
     }
     'signal_loop: loop {
         info!("{} Waiting for fan state update", fan_identifier);
-        let mut set_point = current_fan_speed.wait().await;
-        if current_set_point.is_some_and(|speed| speed == set_point) {
+        let mut request = current_fan_speed.wait().await;
+        if current_set_point.is_some_and(|speed| speed == request.set_point()) {
             //TODO consider to update fan display state nonetheless
             info!(
                 "{} Fan state update received but has same state",
@@ -799,14 +839,15 @@ async fn fan_control_routine(
             continue;
         }
 
-        info!("{} Received fan state", fan_identifier);
+        info!("{} Received fan state {:?}", fan_identifier, request);
 
         // Instruct modbus to send update
         info!("{} Attempting to acquire lock (again?)", fan_identifier);
         let mut modbus = modbus_mutex.lock().await;
         info!("{} Acquired lock on modbus (again?)", fan_identifier);
         // Check we have the latest state in case it was updated while waiting for the lock
-        set_point = current_fan_speed.try_take().unwrap_or(set_point);
+        request = current_fan_speed.try_take().unwrap_or(request);
+        let set_point = request.set_point();
 
         let function = modbus::function::WriteHoldingRegister::new(
             fan_address,
@@ -844,14 +885,21 @@ async fn fan_control_routine(
                 fan_identifier, MAX_ATTEMPTS
             );
 
+            if !request.should_correct_other_fan() {
+                // This was already the other fan pushing this one back. Pushing back a second time
+                // is what used to bounce the same correction between the two fans forever
+                info!(
+                    "{} Leaving the other fan alone because this was its own correction",
+                    fan_identifier
+                );
+                continue;
+            }
+
             //TODO don't try to update other fan speed if we have a setting to allow fans to run out of sync
             // Set other fan to current fan speed to avoid them getting out of sync and creating over or underpressure in the house
-            //TODO fix endless loop when both fan speed setting fails and they keep retrying and sending each other instructions to set back to previous speed.
-            //TODO Could additionally provide a retry strategy to the signal that is set to once to avoid endless loop
-            //TODO or provide a counter to detect the endless loop
-
             // There is no Option::copied or Option::cloned for some reason in core
-            current_set_point.inspect(|speed| other_fan_speed.signal(*speed));
+            current_set_point
+                .inspect(|speed| other_fan_speed.signal(RequestedSetPoint::FromOtherFan(*speed)));
             continue;
         }
 
@@ -1131,8 +1179,8 @@ async fn main(spawner: Spawner) {
     info!("[Main] Sent out discocery");
     unwrap!(spawner.spawn(display_routine(display_receivers, &LED_STATE, sender_out)));
 
-    static FAN_ONE_STATE: Signal<CriticalSectionRawMutex, SetPoint> = Signal::new();
-    static FAN_TWO_STATE: Signal<CriticalSectionRawMutex, SetPoint> = Signal::new();
+    static FAN_ONE_STATE: SetPointSignal = Signal::new();
+    static FAN_TWO_STATE: SetPointSignal = Signal::new();
 
     let button_receivers = (
         FAN_ONE_DISPLAY_STATE

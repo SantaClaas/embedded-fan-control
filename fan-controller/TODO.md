@@ -8,11 +8,17 @@ treat them as a starting point rather than an exact address.
 The first section is a suggested order of work with the reasoning; the sections after it are the
 full inventory grouped by area, so nothing gets lost.
 
+All four ranked items are done. They are kept here rather than deleted because each one records
+what was actually wrong, what was decided, and what has never run on hardware — the four write-ups
+are the closest thing this firmware has to a changelog with reasons. Nothing that follows is ranked;
+pick from the inventory. The one thing worth doing before anything else is flashing the device and
+watching the log, because every one of the four is untested on hardware.
+
 ---
 
 ## Suggested priority
 
-### P0 — the two items that make the device wrong or dead in the field
+### P0 — the two items that made the device wrong or dead in the field
 
 **1. Validate the Modbus response** — done, `src/modbus/client.rs`
 
@@ -97,7 +103,7 @@ boot, so there is a real state to re-announce rather than a `None`.
 Messages that `talk` or `handle_publish_send` had picked up but not yet written are also lost when
 the session is cancelled; for state updates where only the latest value matters that is acceptable.
 
-### P1 — state is wrong after every reset
+### P1 — state was wrong after every reset
 
 **3. Read the fan speed on boot** — done, `src/modbus/`, `src/main.rs`
 
@@ -149,18 +155,37 @@ Untested on hardware. The read path has never run: worth checking on the first f
 answer `0x03` at all, what they report for a fan that is off, and whether the value comes back with
 the four least significant bits the fan ignores zeroed or as they were written.
 
-**4. Fans ping-pong forever when the bus is down** — `src/main.rs:849`
+**4. Fans ping-pong forever when the bus is down** — done, `src/main.rs`
 
-After exhausting `MAX_ATTEMPTS`, a fan signals the *other* fan back to its own last known good set
-point. If the bus itself is down, that fan fails too and signals back, and neither ever stops.
+After exhausting `MAX_ATTEMPTS`, a fan signalled the *other* fan back to its own last known good set
+point, to keep the two from drifting apart and putting the house under or over pressure. If the bus
+itself was down, that fan failed too and signalled back, and neither ever stopped. A slow churn
+rather than a spin — roughly four attempts at a 5 s timeout plus backoff per round — but it never
+terminated and kept cycling the Modbus mutex.
 
-It is a slow churn rather than a spin — roughly four attempts at a 5 s timeout plus backoff per
-round — but it never terminates and keeps cycling the Modbus mutex. It used to be impossible on a
-cold boot, because `current_set_point` stayed `None` until the first successful write and
-`Option::inspect` then does nothing. P1 item 3 removed that accident: the boot read can fill
-`current_set_point` before any write has succeeded, so a bus that dies right after boot now reaches
-this too. The fix options are already written in place at `src/main.rs:850` and `src/main.rs:851` —
-a once-only retry strategy carried on the signal, or a counter that detects the ping-pong.
+The signal now carries where the set point came from, as `RequestedSetPoint::FromUser` or
+`FromOtherFan`, and only a request from a user pushes the other fan back when it fails. That is
+option A from the notes that used to sit here, a retry strategy on the signal set to once, except
+the "once" falls out of what the value means rather than being counted.
+
+The reasoning is that a correction which fails is not the two fans disagreeing, it is the bus being
+down, and there is nothing left for a second correction to fix: the pushing fan is at its own set
+point and the fan being pushed already failed at that exact value. Answering it with another
+correction is precisely what bounced the same value back and forth. So a correction is applied and
+retried like anything else, but it never produces another correction, and every round of signalling
+ends after at most two: one if a single fan failed, two if both were commanded at once and both
+failed.
+
+That leaves the fans genuinely out of sync in one case — a fan that fails to apply a correction —
+which is the honest outcome, because nothing else can be tried until the bus comes back. It is not
+silent: the display state is only updated on a confirmed write, so the two LEDs blink the
+out-of-sync pattern until a later command succeeds.
+
+Option B, a counter that detects the loop, is not needed on top of this. It would spot the same
+situation later and without saying why it happened.
+
+Untested on hardware, and hard to reach on purpose: it needs both fans to fail after the retries,
+which means pulling the bus rather than anything Home Assistant can ask for.
 
 ### Cheap win worth slotting in anywhere
 
@@ -178,13 +203,10 @@ change that turns the only meaningful unit tests in the firmware back on.
 
 | Where | Item |
 |---|---|
-| `src/main.rs:633` | Make `is_synchronization_on` configurable through a switch (hardcoded `true`) |
-| `src/main.rs:847` | Skip pushing the other fan's speed when a setting allows the fans to run out of sync |
-| `src/main.rs:849` | Fix the endless loop when both fans fail and keep signalling each other back |
-| `src/main.rs:850` | Option A: a retry strategy on the signal, set to once |
-| `src/main.rs:851` | Option B: a counter that detects the loop |
-| `src/main.rs:794` | Consider updating the display state even when the new set point equals the current one |
-| `src/main.rs:262`, `:275`, `:300`, `:313` | Handle backpressure when the MQTT out channel is full |
+| `src/main.rs:665` | Make `is_synchronization_on` configurable through a switch (hardcoded `true`) |
+| `src/main.rs:898` | Skip pushing the other fan's speed when a setting allows the fans to run out of sync |
+| `src/main.rs:834` | Consider updating the display state even when the new set point equals the current one |
+| `src/main.rs:294`, `:307`, `:332`, `:345` | Handle backpressure when the MQTT out channel is full |
 
 The four backpressure sites are the same code twice per fan (state update, then speed update) and
 currently log an error and drop the publish, so Home Assistant silently misses the update. Since
