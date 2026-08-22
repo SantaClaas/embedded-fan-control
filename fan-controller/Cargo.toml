@@ -46,6 +46,7 @@ panic-probe = "0.3.2"
 portable-atomic = { version = "1.7", features = ["critical-section"] }
 rand = { version = "0.8.5", default-features = false }
 reqwless = { version = "0.12.1", features = ["defmt"] }
+set_point = { version = "0.1.0", path = "../set_point", features = ["defmt"] }
 static_cell = "2"
 topic = { version = "0.1.0", path = "../topic" }
 

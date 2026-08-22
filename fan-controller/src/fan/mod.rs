@@ -1,7 +1,9 @@
 //! ebm-pabst [RadiCal centrifugal fans in scroll housings for residential ventilation](https://www.ebmpapst.com/us/en/campaigns/product-campaigns/centrifugal-fans/radical-with-scroll-housing.html)
 //! specific configuration and constants
 
-pub(crate) mod set_point;
+/// Its own crate so it can be tested on the host, re-exported here because it is part of what a
+/// fan is. See the crate documentation for why it cannot live in this one
+pub(crate) use ::set_point;
 
 use embassy_rp::uart::{self, DataBits, Parity, StopBits};
 

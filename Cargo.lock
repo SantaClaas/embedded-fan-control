@@ -1027,6 +1027,7 @@ dependencies = [
  "rand",
  "reqwless",
  "serde_json",
+ "set_point",
  "static_cell",
  "thiserror 2.0.12",
  "topic",
@@ -2128,6 +2129,14 @@ dependencies = [
  "serde",
  "unescaper",
  "winapi",
+]
+
+[[package]]
+name = "set_point"
+version = "0.1.0"
+dependencies = [
+ "defmt 1.0.1",
+ "heapless 0.8.0",
 ]
 
 [[package]]

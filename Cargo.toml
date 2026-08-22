@@ -4,6 +4,7 @@ members = [
     "fan-controller",
     "home_assistant_discovery",
     "mqtt",
+    "set_point",
     "topic",
 ]
 resolver = "3"
