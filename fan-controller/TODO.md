@@ -48,7 +48,7 @@ Untested on hardware. The exception, checksum, and incomplete-frame paths have n
 enabled into the window where the fan may already be answering. Both want a look at the log on the
 first flash.
 
-Still open in the same area: `src/modbus/client.rs:187`, why the flush must be blocking to avoid
+Still open in the same area: `src/modbus/client.rs:329`, why the flush must be blocking to avoid
 `WouldBlock`.
 
 **2. The MQTT client never reconnects** — done, `src/task.rs`
@@ -92,33 +92,75 @@ Follow-up in the same area: nothing is re-announced after reconnecting. Home Ass
 discovered entities, so the device does not disappear, but its state is whatever it was before the
 drop until the next fan change publishes a new one. Re-publishing the discovery payload and the
 current display state on every successful connect needs a signal from the session out to
-`display_routine`, which is easier once P1 item 3 has removed the `Option` from the display state.
+`display_routine`. P1 item 3 made that worth doing: the display state is now seeded from the fans on
+boot, so there is a real state to re-announce rather than a `None`.
 Messages that `talk` or `handle_publish_send` had picked up but not yet written are also lost when
 the session is cancelled; for state updates where only the latest value matters that is acceptable.
 
 ### P1 — state is wrong after every reset
 
-**3. Read the fan speed on boot** — `README.md`, `src/main.rs:649`, `src/main.rs:561`
+**3. Read the fan speed on boot** — done, `src/modbus/`, `src/main.rs`
 
-After a reset the fans keep spinning at whatever they were set to, but the controller assumes
-nothing: `current_set_point` starts as `None` and `last_fan_state` starts at `SetPoint::ZERO`. So
-the LEDs and the Home Assistant state are wrong until someone issues a command, and a Home
-Assistant "on" restores a set point that was never actually in effect.
+After a reset the fans keep spinning at whatever they were set to, but the controller assumed
+nothing: `current_set_point` started as `None` and `last_fan_state` at `SetPoint::ZERO`. The LEDs
+and the Home Assistant state were wrong until someone issued a command, and a Home Assistant "on"
+restored a set point that was never actually in effect.
 
-This needs a read-holding-register function; `src/modbus/function/` currently only implements
-`WriteHoldingRegister`. Landing it also removes the `Option` from `current_set_point` and is a
-prerequisite for the README item about the button picking up state changed through Home Assistant.
+Reading holding registers (function code `0x03`) is now implemented. `ReadHoldingRegister` asks for
+exactly one register, which keeps the response a fixed length, and `Client::read_holding_register`
+returns its contents. The parts both functions share are factored out of the write path rather than
+copied: `send_request` drives the line and writes the frame, and `read_header` reads the address and
+function code, turns an exception frame into `Error::Exception`, and returns once the header is the
+answer that was asked for, so each transaction only has to read its own body. A read is rejected if
+it announces a byte count other than the one register asked for, which is checked before the
+checksum because a different length means the wrong bytes were just read. `Exception` covers both
+functions now: `0x03` (response too long) only exists for reads, and `WriteRefused` became
+`AccessRefused` because `0x04` also means a register that cannot be read. `send_3` was renamed to
+`write_holding_register` to pair with it.
 
-**4. Fans ping-pong forever when the bus is down** — `src/main.rs:713`
+`fan_control_routine` reads the set point before it waits for anything, and sends what it gets into
+the display `Watch`, so the LEDs, Home Assistant and the button all start from what the fans are
+actually doing. `read_set_point` retries `MAX_ATTEMPTS` times sharing the write path's backoff, and
+gives up early if a set point is requested in the meantime — a command is worth more than the state
+being read, and an unreachable fan costs a timeout per attempt.
+
+`current_set_point` stays an `Option` rather than becoming a plain `SetPoint` as this item
+originally suggested. A fan that does not answer leaves its state genuinely unknown, and every place
+that uses it — the redundant-write check and the "push the other fan back" path — already treats not
+knowing as its own case. Filling it with a guess would make those two silently wrong instead.
+
+`last_fan_state` no longer starts at zero and no longer records the set points that Home Assistant
+asks for. `mqtt_brain_routine` now watches the confirmed display state of both fans, so it is seeded
+from the boot read and picks up the speeds set with the button as well, and it only remembers
+non-zero speeds since zero is the state "on" restores from. It records what a fan actually accepted
+rather than what was asked of it, so a failed write no longer leaves a speed behind that was never
+in effect. The display `Watch` went from two receivers to three for this, through a
+`DISPLAY_STATE_RECEIVERS` alias so the count lives in one place.
+
+`display_routine` also tells Home Assistant whether the fans are on or off on the first update after
+boot. It only published that on a *change*, and the first update is not a change, so the speed
+arrived without the on/off state that Home Assistant needs to render it.
+
+The 250 ms alternating LED pattern that `documentation.md` describes as "while the initial fan speed
+data is getting read from the fan" needed no work: it is what `led_routine` already plays before it
+has an `LedState`. It just describes reality now instead of blinking until the first command.
+
+Untested on hardware. The read path has never run: worth checking on the first flash that the fans
+answer `0x03` at all, what they report for a fan that is off, and whether the value comes back with
+the four least significant bits the fan ignores zeroed or as they were written.
+
+**4. Fans ping-pong forever when the bus is down** — `src/main.rs:849`
 
 After exhausting `MAX_ATTEMPTS`, a fan signals the *other* fan back to its own last known good set
 point. If the bus itself is down, that fan fails too and signals back, and neither ever stops.
 
 It is a slow churn rather than a spin — roughly four attempts at a 5 s timeout plus backoff per
-round — but it never terminates and keeps cycling the Modbus mutex. Note it cannot happen on a cold
-boot: `current_set_point` is `None` until the first success, so `Option::inspect` does nothing.
-The fix options are already written in place at `src/main.rs:714` and `src/main.rs:715` — a
-once-only retry strategy carried on the signal, or a counter that detects the ping-pong.
+round — but it never terminates and keeps cycling the Modbus mutex. It used to be impossible on a
+cold boot, because `current_set_point` stayed `None` until the first successful write and
+`Option::inspect` then does nothing. P1 item 3 removed that accident: the boot read can fill
+`current_set_point` before any write has succeeded, so a bus that dies right after boot now reaches
+this too. The fix options are already written in place at `src/main.rs:850` and `src/main.rs:851` —
+a once-only retry strategy carried on the signal, or a counter that detects the ping-pong.
 
 ### Cheap win worth slotting in anywhere
 
@@ -136,15 +178,13 @@ change that turns the only meaningful unit tests in the firmware back on.
 
 | Where | Item |
 |---|---|
-| `src/main.rs:561` | `last_fan_state` should come from state loaded from the fan, not a hardcoded `ZERO` |
-| `src/main.rs:649` | Load the initial fan speed over Modbus so `current_set_point` stops being an `Option` |
-| `src/main.rs:589` | Make `is_synchronization_on` configurable through a switch (hardcoded `true`) |
-| `src/main.rs:711` | Skip pushing the other fan's speed when a setting allows the fans to run out of sync |
-| `src/main.rs:713` | Fix the endless loop when both fans fail and keep signalling each other back |
-| `src/main.rs:714` | Option A: a retry strategy on the signal, set to once |
-| `src/main.rs:715` | Option B: a counter that detects the loop |
-| `src/main.rs:655` | Consider updating the display state even when the new set point equals the current one |
-| `src/main.rs:258`, `:271`, `:295`, `:308` | Handle backpressure when the MQTT out channel is full |
+| `src/main.rs:633` | Make `is_synchronization_on` configurable through a switch (hardcoded `true`) |
+| `src/main.rs:847` | Skip pushing the other fan's speed when a setting allows the fans to run out of sync |
+| `src/main.rs:849` | Fix the endless loop when both fans fail and keep signalling each other back |
+| `src/main.rs:850` | Option A: a retry strategy on the signal, set to once |
+| `src/main.rs:851` | Option B: a counter that detects the loop |
+| `src/main.rs:794` | Consider updating the display state even when the new set point equals the current one |
+| `src/main.rs:262`, `:275`, `:300`, `:313` | Handle backpressure when the MQTT out channel is full |
 
 The four backpressure sites are the same code twice per fan (state update, then speed update) and
 currently log an error and drop the publish, so Home Assistant silently misses the update. Since
@@ -188,10 +228,10 @@ the rest are protocol conformance polish against a broker you control.
 
 | Where | Item |
 |---|---|
-| `src/modbus/client.rs:187` | Understand why the flush must be blocking to avoid `WouldBlock` |
+| `src/modbus/client.rs:329` | Understand why the flush must be blocking to avoid `WouldBlock` |
 
-Response validation and the short-read hazard are done; see P0 item 1. Reading holding registers is
-still unimplemented, which is what blocks P1 item 3.
+Response validation and the short-read hazard are done; see P0 item 1, and reading holding
+registers is done; see P1 item 3.
 
 ### Configuration — `src/configuration.rs`
 
