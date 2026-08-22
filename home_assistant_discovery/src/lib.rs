@@ -73,6 +73,7 @@ pub struct Origin {
 
 /// Device classes added as needed based on https://www.home-assistant.io/integrations/sensor/#device-class
 #[derive(Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum DeviceClass {
     Temperature,
     Humidity,

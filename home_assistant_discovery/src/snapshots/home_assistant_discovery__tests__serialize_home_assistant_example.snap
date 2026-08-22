@@ -20,14 +20,14 @@ expression: payload
   "cmps": {
     "some_unique_component_id1": {
       "p": "sensor",
-      "dev_cla": "Temperature",
+      "dev_cla": "temperature",
       "unit_of_meas": "°C",
       "val_tpl": "{{ value_json.temperature}}",
       "uniq_id": "temp01ae_t"
     },
     "some_unique_id2": {
       "p": "sensor",
-      "dev_cla": "Humidity",
+      "dev_cla": "humidity",
       "unit_of_meas": "%",
       "val_tpl": "{{ value_json.humidity}}",
       "uniq_id": "temp01ae_h"
