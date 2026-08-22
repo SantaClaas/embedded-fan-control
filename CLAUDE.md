@@ -52,11 +52,6 @@ is bound to `clippy-all`, and `bacon test -- <name>` runs a single test.
   `topic` constants, serializes it to JSON, and exposes it as `FAN_CONTROLLER_DISCOVERY_PAYLOAD`.
   The firmware publishes that string verbatim on boot. Changing MQTT topics or discovery fields
   means editing `topic/src/lib.rs` and/or `build.rs` — not the firmware.
-- `discovery_payload.json` and `setup_discovery_payload()` are an *alternative, currently disabled*
-  path (commented out in `build.rs::main`) that minifies a hand-written payload using Home
-  Assistant's own abbreviation table. It reads
-  `fan-controller/home-assistant/core/homeassistant/components/mqtt/abbreviations.py`, a submodule
-  that is not checked out, so re-enabling it requires fetching that repo first.
 - The build script also embeds the short git hash as semver build metadata in the reported
   software version, and re-runs on `../.git/HEAD` changes.
 
@@ -67,9 +62,8 @@ is bound to `clippy-all`, and `bacon test -- <name>` runs a single test.
 | `fan-controller` | `thumbv6m-none-eabi` | The firmware. Everything below supports it. |
 | `mqtt` | `no_std` | Protocol-level MQTT types shared between firmware and build script. Feature-gated `defmt` / `serde` so the same types work on device and on host. |
 | `topic` | `no_std` | The single source of truth for Home Assistant MQTT topic strings, composed at compile time with `const_format`. Used by both the firmware and `build.rs`. |
-| `home_assistant_discovery` | host | Serde model of the Home Assistant MQTT discovery payload. Build-dependency only. |
+| `home_assistant_discovery` | host | Serde model of the Home Assistant MQTT discovery payload. Build-dependency only. `components` is a `BTreeMap` so the generated payload is byte-stable across builds. |
 | `debug-listener` | host | Reads the RS-485/Modbus line off a USB serial adapter to inspect fan traffic. The port path is hardcoded in `src/main.rs`. |
-| `exponential_distribution` | host | Scratch experiment for randomizing MQTT keep-alive ping intervals. Not wired into anything. |
 
 Note `mqtt` appears twice in the firmware: the workspace crate (`::mqtt`) holds protocol constants,
 while `fan-controller/src/mqtt/` (`crate::mqtt`) holds the packet encode/decode and client task.
@@ -118,16 +112,17 @@ be encoded straight into the TCP buffer without intermediate allocation — ther
 - Fan Modbus addresses start at `0x02`/`0x03`; `0x01` is avoided as a likely factory default.
 - UART is 19_200 baud, 8 data bits, **even** parity, 1 stop bit.
 
-## Known-broken state
+## Testing reality
 
-Both test modules currently fail to compile and are marked with TODOs in the source:
+`home_assistant_discovery` is the only crate whose tests actually run — `cd home_assistant_discovery
+&& cargo test`.
 
-- `home_assistant_discovery/src/lib.rs` tests reference `topic::fan_controller::fan_1::STATE`, but
-  the `topic` crate moved those into a `state` submodule (`fan_1::state::STATE`).
-- `fan-controller/src/fan/set_point.rs` tests reference `fan::MAX_SET_POINT` and `SetPoint::MAX`,
-  neither of which exists, and they cannot run on the embedded target anyway.
-
-Do not assume `cargo test` is green before touching these.
+`fan-controller` cannot be tested by any normal means, so don't waste time trying: `cargo test`
+targets `thumbv6m-none-eabi`, which has no test harness, and `cargo test --target
+aarch64-apple-darwin` fails because `cortex-m` uses ARM inline assembly. The `#[cfg(test)]` module
+in `src/fan/set_point.rs` is therefore never compiled. It is kept correct by hand (verified against
+a scratch copy of the module), but it will silently rot again — making `SetPoint` host-testable
+would require extracting it into its own crate.
 
 ## Reference documents
 

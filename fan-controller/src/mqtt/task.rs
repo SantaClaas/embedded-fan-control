@@ -1,3 +1,6 @@
+//! Tasks that need to be done to run MQTT
+//! - Keep alive
+
 use super::packet::connect_acknowledgement;
 use crate::mqtt::packet::GetPartsError;
 use crate::mqtt::packet::connect::{Connect, EncodeError};
@@ -7,9 +10,6 @@ use crate::mqtt::{TryDecode, TryEncode};
 use core::fmt::Debug;
 use defmt::{Format, info, warn};
 use embedded_io_async::{Read, Write};
-
-///! Tasks that need to be done to run MQTT
-///! - Keep alive
 
 #[derive(Debug, Format)]
 pub(crate) enum SendError<T: Debug + Format, E> {

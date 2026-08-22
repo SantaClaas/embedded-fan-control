@@ -1,7 +1,7 @@
 //! # Home Assistant Discovery Library
 //! Tools and utilities for creating the discovery payload for MQTT Home Assistant devices during build time for embedded systems.
 
-use std::{collections::HashMap, rc::Rc};
+use std::{collections::BTreeMap, rc::Rc};
 
 use mqtt::QualityOfService;
 use serde::Serialize;
@@ -132,7 +132,7 @@ pub struct DiscoveryPayload {
     #[serde(rename = "o")]
     pub origin: Origin,
     #[serde(rename = "cmps")]
-    pub components: HashMap<String, Component>,
+    pub components: BTreeMap<String, Component>,
     #[serde(rename = "qos")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub quality_of_service: Option<QualityOfService>,
@@ -170,7 +170,7 @@ mod tests {
                 software_version: Some("2.1".into()),
                 support_url: Some("https://bla2mqtt.example.com/support"),
             },
-            components: HashMap::from([
+            components: BTreeMap::from([
                 (
                     "some_unique_component_id1".to_string(),
                     Component::Sensor {
@@ -216,15 +216,15 @@ mod tests {
                 software_version: version,
                 support_url: Some("https://github.com/SantaClaas/embedded-fan-control"),
             },
-            components: HashMap::from([
+            components: BTreeMap::from([
                 // Fan 1
                 (
                     "fan-1".to_string(),
                     Component::Fan {
                         name: Some("Fan 1"),
                         unique_id: Some("fancontroller/fan-1"),
-                        state_topic: Some(topic::fan_controller::fan_1::STATE),
-                        command_topic: topic::fan_controller::fan_1::COMMAND,
+                        state_topic: Some(topic::fan_controller::fan_1::state::STATE),
+                        command_topic: topic::fan_controller::fan_1::state::COMMAND,
                         percentage_state_topic: Some(
                             topic::fan_controller::fan_1::percentage::STATE,
                         ),
@@ -240,8 +240,8 @@ mod tests {
                     Component::Fan {
                         name: Some("Fan 2"),
                         unique_id: Some("fancontroller/fan-2"),
-                        state_topic: Some(topic::fan_controller::fan_2::STATE),
-                        command_topic: topic::fan_controller::fan_2::COMMAND,
+                        state_topic: Some(topic::fan_controller::fan_2::state::STATE),
+                        command_topic: topic::fan_controller::fan_2::state::COMMAND,
                         percentage_state_topic: Some(
                             topic::fan_controller::fan_2::percentage::STATE,
                         ),

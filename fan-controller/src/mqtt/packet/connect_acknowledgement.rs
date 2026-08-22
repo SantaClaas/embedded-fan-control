@@ -2,20 +2,6 @@ use crate::TryDecode;
 use crate::mqtt::{ConnectErrorReasonCode, UnknownConnectErrorReasonCode, variable_byte_integer};
 use defmt::{Format, info};
 
-// pub(crate) struct Properties {
-//     /// The session expiry interval in seconds
-//     session_expiry_interval: Option<u32>,
-//     receive_maximum: Option<u16>,
-//     maximum_qualitiy_of_service: Option<QualityOfService>,
-//     is_retain_available: Option<bool>,
-//     maximum_packet_size: Option<u32>,
-//     //TODO
-//     // assigned_client_identifier: Option<&'a str>,
-//     topic_alias_maximum: Option<u16>,
-//     //TODO
-//     reason_string: Option<&'a str>,
-// }
-
 #[derive(Format, Clone)]
 pub(crate) struct ConnectAcknowledgement {
     pub(crate) is_session_present: bool,

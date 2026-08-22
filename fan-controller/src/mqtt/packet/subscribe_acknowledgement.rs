@@ -29,57 +29,9 @@ impl<'a> SubscribeAcknowledgement<'a> {
 
         offset += properties_length;
 
-        // const DEFAULT: Option<SubscribeReasonCode> = None;
-        // let mut reason_codes = [DEFAULT; 2];
         // Payload
         // Reason code for each subscribed topic in the same order
         let reason_codes = &buffer[offset..];
-        // let mut index = 0;
-        // while index < reason_codes.len() {
-        //     let Some(code) = buffer.get(offset + index) else {
-        //         break;
-        //     };
-        //
-        //     reason_codes[index] = Some(match code {
-        //         0x00 => SubscribeReasonCode::GrantedQualityOfService(
-        //             QualityOfService::AtMostOnceDelivery,
-        //         ),
-        //         0x01 => SubscribeReasonCode::GrantedQualityOfService(
-        //             QualityOfService::AtLeastOnceDelivery,
-        //         ),
-        //         0x02 => SubscribeReasonCode::GrantedQualityOfService(
-        //             QualityOfService::ExactlyOnceDelivery,
-        //         ),
-        //         0x80 => SubscribeReasonCode::ErrorCode(SubscribeErrorReasonCode::UnspecifiedError),
-        //         0x83 => SubscribeReasonCode::ErrorCode(
-        //             SubscribeErrorReasonCode::ImplementationSpecificError,
-        //         ),
-        //         0x87 => SubscribeReasonCode::ErrorCode(SubscribeErrorReasonCode::NotAuthorized),
-        //         0x8F => {
-        //             SubscribeReasonCode::ErrorCode(SubscribeErrorReasonCode::TopicFilterInvalid)
-        //         }
-        //         0x91 => {
-        //             SubscribeReasonCode::ErrorCode(SubscribeErrorReasonCode::PacketIdentifierInUse)
-        //         }
-        //         0x97 => SubscribeReasonCode::ErrorCode(SubscribeErrorReasonCode::QuotaExceeded),
-        //         0x9E => SubscribeReasonCode::ErrorCode(
-        //             SubscribeErrorReasonCode::SharedSubscriptionsNotSupported,
-        //         ),
-        //         0xA1 => SubscribeReasonCode::ErrorCode(
-        //             SubscribeErrorReasonCode::SubscriptionIdentifiersNotSupported,
-        //         ),
-        //         0xA2 => SubscribeReasonCode::ErrorCode(
-        //             SubscribeErrorReasonCode::WildcardSubscriptionsNotSupported,
-        //         ),
-        //         other => {
-        //             //TODO handle invalid reason code
-        //             warn!("Invalid reason code: {:?}", other);
-        //             break;
-        //         }
-        //     });
-        //
-        //     index += 1;
-        // }
 
         Ok(SubscribeAcknowledgement {
             packet_identifier,

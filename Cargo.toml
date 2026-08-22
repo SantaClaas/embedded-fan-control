@@ -1,7 +1,6 @@
 [workspace]
 members = [
     "debug-listener",
-    "exponential_distribution",
     "fan-controller",
     "home_assistant_discovery",
     "mqtt",

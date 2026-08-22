@@ -118,7 +118,6 @@ impl<'a> TryDecode<'a> for Publish<'a> {
     type Error = ReadError;
 
     fn try_decode(flags: u8, variable_header_and_payload: &'a [u8]) -> Result<Self, Self::Error> {
-        // let is_re_delivery = (flags & 0b0000_1000) != 0;
         let quality_of_service_level = (flags & 0b0000_0110) >> 1;
         if quality_of_service_level > 0 {
             // This changes the layout of the packet and adds a packet identifier
@@ -129,7 +128,6 @@ impl<'a> TryDecode<'a> for Publish<'a> {
         }
 
         // Ignore retain flag as it should only matter for packets send to the server
-        // let is_retain = (flags & 0b0000_0001) != 0;
 
         let mut offset = 0;
         // Variable header

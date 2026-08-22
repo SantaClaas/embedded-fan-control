@@ -8,7 +8,7 @@ pub(crate) const MAX: u16 = 64_000;
 #[derive(Debug, Format, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct SetPoint(u16);
 
-#[derive(Debug, Format)]
+#[derive(Debug, Format, PartialEq, Eq)]
 pub(crate) struct SetPointOutOfBoundsError;
 
 impl SetPoint {
@@ -62,30 +62,28 @@ impl FromStr for SetPoint {
 
 #[cfg(test)]
 mod tests {
-    //! The tests don't run on the embedded target, so we need to import the std crate
-    //TODO needs to be fixed to make run
+    //! These tests cannot run in this crate: it only builds for `thumbv6m-none-eabi`, which has no
+    //! test harness, and it cannot build for the host because `cortex-m` uses ARM inline assembly.
+    //TODO move `SetPoint` into a host-testable crate so these actually run
     extern crate std;
-    use crate::fan::{SetPoint, SetPointOutOfBoundsError};
 
     use super::*;
 
     /// These are important hardcoded values I want to make sure are not changed accidentally
     #[test]
     fn setting_does_not_exceed_max_set_point() {
-        core::assert_eq!(fan::MAX_SET_POINT, 64_000);
+        core::assert_eq!(MAX, 64_000);
         core::assert_eq!(SetPoint::new(64_000), Ok(SetPoint(64_000)));
         core::assert_eq!(SetPoint::new(64_000 + 1), Err(SetPointOutOfBoundsError));
         core::assert_eq!(SetPoint::new(u16::MAX), Err(SetPointOutOfBoundsError));
     }
 
-    //TODO have not checked if test compiles
     #[test]
     fn fits_into_string() -> Result<(), SetPointOutOfBoundsError> {
-        let set_point = SetPoint::new(12345)?;
-        let string = set_point.to_string();
-        core::assert_eq!(string.len(), 5);
+        let set_point = SetPoint::new(12_345)?;
+        core::assert_eq!(set_point.to_string().len(), 5);
 
-        let set_point = SetPoint::MAX;
+        let set_point = SetPoint::new(MAX)?;
         core::assert_eq!(*set_point, 64_000);
         core::assert_eq!(set_point.to_string(), "64000");
 
