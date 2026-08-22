@@ -45,22 +45,34 @@ async fn handle_subscribe_acknowledgement<'f, const SUBSCRIPTIONS: usize>(
     acknowledgement: &'f SubscribeAcknowledgement<'f>,
     //TODO rework this to be a channel that sends the packet identifier as acknowledgement
     acknowledgements: &Mutex<CriticalSectionRawMutex, [bool; SUBSCRIPTIONS]>,
+    waker: &AtomicWaker,
 ) {
     info!("[Subscription] Received subscribe acknowledgement. Waiting for acknowledgement lock");
-    let mut acknowledgements = acknowledgements.lock().await;
-    info!("[Subscription] Locked ACKNOWLEDGEMENTS");
-    // Validate server sends a valid packet identifier or we get bamboozled and panic
-    let Some(_value) = acknowledgements.get_mut(acknowledgement.packet_identifier as usize) else {
-        warn!(
-            "[Subscription] Received subscribe acknowledgement for out of bounds packet identifier"
-        );
-        return;
-    };
+    {
+        let mut acknowledgements = acknowledgements.lock().await;
+        info!("[Subscription] Locked ACKNOWLEDGEMENTS");
+        // Validate server sends a valid packet identifier or we get bamboozled and panic
+        let Some(value) = acknowledgements.get_mut(acknowledgement.packet_identifier as usize)
+        else {
+            warn!(
+                "[Subscription] Received subscribe acknowledgement for out of bounds packet identifier"
+            );
+            return;
+        };
 
-    info!(
-        "[Subscription] Received acknowledgement {} Reason codes: {:#04x}",
-        acknowledgement.packet_identifier, acknowledgement.reason_codes
-    );
+        // Record the acknowledgement. This is what [`wait_for_acknowledgement`] polls for, so
+        // without it the subscription setup waits for its full timeout even though the broker
+        // answered
+        *value = true;
+
+        info!(
+            "[Subscription] Received acknowledgement {} Reason codes: {:#04x}",
+            acknowledgement.packet_identifier, acknowledgement.reason_codes
+        );
+    }
+
+    // Wake after the lock is released so the waiting future's try_lock succeeds when it polls
+    waker.wake();
 }
 
 async fn wait_for_acknowledgement<const SUBSCRIPTIONS: usize>(
@@ -73,20 +85,28 @@ async fn wait_for_acknowledgement<const SUBSCRIPTIONS: usize>(
     // is only one waker and the other call of this function will lock the mutex. To solve this
     // we could use structs from [embassy-sync::waitqueue] and/or a blocking mutex to remove the
     // try_lock which is used because the lock function is async and we can not easily await here
-    poll_fn(|context| match acknowledgements.try_lock() {
-        Ok(mut guard) => {
-            let packet = guard.get_mut(packet_identifier.get() as usize).unwrap();
-            if *packet {
-                Poll::Ready(())
-            } else {
-                // Waker needs to be overwritten on each poll.
-                // Read the Rust async book on wakers for more details
-                let context_waker = context.waker();
-                waker.register(context_waker);
-                Poll::Pending
+    poll_fn(|context| {
+        // Register before looking at the acknowledgements, never after. The other way round
+        // misses an acknowledgement recorded between the check and the registration: the wake
+        // happens while there is no waker to wake and this future then sleeps until the timeout.
+        // Registering on every poll is required because waking takes the waker back out.
+        waker.register(context.waker());
+
+        match acknowledgements.try_lock() {
+            // Checking after registering also covers an acknowledgement that was already
+            // recorded before this future was polled for the first time
+            Ok(guard) => {
+                let packet = guard.get(packet_identifier.get() as usize).unwrap();
+                if *packet {
+                    Poll::Ready(())
+                } else {
+                    Poll::Pending
+                }
             }
+            // Only recording an acknowledgement takes the lock, and that wakes the waker
+            // registered above once it releases the lock, so this gets polled again
+            Err(_error) => Poll::Pending,
         }
-        Err(_error) => Poll::Pending,
     })
     .await;
 
@@ -133,6 +153,7 @@ async fn listen<
     reader: &mut impl Read<Error = ReadError>,
     sender: &channel::Sender<'_, CriticalSectionRawMutex, Result<Send, FromError>, SEND>,
     acknowledgements: &Mutex<CriticalSectionRawMutex, [bool; SUBSCRIPTIONS]>,
+    acknowledgement_waker: &AtomicWaker,
     ping_response_signal: &Signal<CriticalSectionRawMutex, PingResponse>,
 ) -> SessionEnd {
     let mut buffer = [0; 1024];
@@ -204,8 +225,12 @@ async fn listen<
                     };
 
                 info!("[MQTT/listen] Waiting for subscribe acknowledgement handling");
-                handle_subscribe_acknowledgement(&subscribe_acknowledgement, acknowledgements)
-                    .await;
+                handle_subscribe_acknowledgement(
+                    &subscribe_acknowledgement,
+                    acknowledgements,
+                    acknowledgement_waker,
+                )
+                .await;
                 info!("[MQTT/listen] Subscribe acknowledgement handled");
             }
             PingResponse::TYPE => {
@@ -693,7 +718,13 @@ pub(super) async fn mqtt_with_connect<
                 let writer = Mutex::<CriticalSectionRawMutex, TcpWriter<'_>>::new(writer);
 
                 // Future 1
-                let listen = listen(&mut reader, &sender, &acknowledgements, &ping_response);
+                let listen = listen(
+                    &mut reader,
+                    &sender,
+                    &acknowledgements,
+                    &waker,
+                    &ping_response,
+                );
 
                 // Future 2
                 let talk = talk(&writer, &outgoing, &last_packet);
