@@ -2,7 +2,8 @@
 
 Every outstanding item in the firmware, collected from [README.md](README.md),
 [documentation.md](documentation.md), and `//TODO` comments in `src/`.
-Paths and line numbers are relative to `fan-controller/` and were accurate as of commit `9b59619`.
+Paths and line numbers are relative to `fan-controller/`. They drift as the source changes, so
+treat them as a starting point rather than an exact address.
 
 The first section is a suggested order of work with the reasoning; the sections after it are the
 full inventory grouped by area, so nothing gets lost.
@@ -13,30 +14,42 @@ full inventory grouped by area, so nothing gets lost.
 
 ### P0 — the two items that make the device wrong or dead in the field
 
-**1. Validate the Modbus response** — `src/modbus/client.rs:115`, `src/modbus/client.rs:104`
+**1. Validate the Modbus response** — done, `src/modbus/client.rs`
 
-`Client::send_3` ends in `Ok(())` unconditionally. It never inspects `response_buffer` and never
-even checks `bytes_read`. Anything that is not a UART error or a timeout counts as success: a
-Modbus exception response, a reply from the *other* fan, or line noise.
+`Client::send_3` used to end in an unconditional `Ok(())`: it never inspected the response bytes and
+never checked how many arrived, so anything that was not a UART error or a timeout counted as
+success — a modbus exception, a reply from the *other* fan, or line noise.
 
-That matters more than it looks, because the whole "confirmed set point" design rests on it. The
-`Watch` senders are documented as publishing only after the fan acknowledged the write, and
-`fan_control_routine` updates `current_set_point`, the display state, the LEDs, and the Home
-Assistant state on the strength of that `Ok(())`. Right now that acknowledgement is not real.
+That mattered because the whole "confirmed set point" design rests on it. The `Watch` senders are
+documented as publishing only after the fan acknowledged the write, and `fan_control_routine`
+updates `current_set_point`, the display state, the LEDs, and the Home Assistant state on the
+strength of that `Ok(())`.
 
-Two related defects live in the same function:
+`send_3` now reads the address and function code first, branches on whether an echo or an exception
+frame is arriving, and reads exactly the length of that frame with `read_exact` instead of a
+possibly short `read`. A successful write is confirmed by comparing the whole frame against the
+request, which validates the register, the value, and the checksum at once. Exception frames are
+checksum checked and returned as `Error::Exception`, so the existing retry loop now fires for a fan
+that answers but refuses. Every failure carries the reason and, where it applies, which part of the
+exchange it happened in, so the retry log in `fan_control_routine` identifies the fault without
+having to read back through the trace. After any failure the receive buffer is drained, so a partial frame cannot
+be read as the answer to the next transaction — both fans share the UART, so leftovers from one
+would otherwise alias onto the other.
 
-- The `//TODO` at `src/modbus/client.rs:104` worries the read waits for the buffer to fill.
-  It is the opposite: `embedded_io_async::Read::read` returns as soon as at least one byte is
-  available, so a *short* read is the hazard — the rest of the frame stays in the RX buffer and the
-  next transaction consumes it as its own response. Both fans share the UART, so leftovers alias
-  across fans.
-- A write-holding-register response echoes the request, so the expected length is known. `read_exact`
-  into a fixed 8-byte frame, then validate device address, function code (including the `0x80`
-  exception bit), register, value, and CRC — and drain the RX buffer on any error before returning.
+The vendor specification confirms the frame layout this relies on: the response to `0x06` echoes
+the request, an exception sets the MSB of the function code and carries a single code byte, and the
+fan stays silent rather than answering when the address, length, or checksum of the request is
+wrong. It also documents that the fan ignores the four least significant bits of a set point, which
+`LOW` and `MEDIUM` both set, so the echo is compared with those bits masked rather than byte for
+byte.
 
-Do this first: the retry work, the "confirm in Home Assistant" item, and any out-of-sync detection
-are only meaningful once a failed write actually reports as failed.
+Untested on hardware. The exception, checksum, and incomplete-frame paths have never run, and
+`BLOCK_FOR` was changed from 5 ms to 800 µs at the same time — the old value kept the driver
+enabled into the window where the fan may already be answering. Both want a look at the log on the
+first flash.
+
+Still open in the same area: `src/modbus/client.rs:187`, why the flush must be blocking to avoid
+`WouldBlock`.
 
 **2. The MQTT client never reconnects** — `src/task.rs:682`, plus the reboot item in `README.md`
 
@@ -147,9 +160,10 @@ the rest are protocol conformance polish against a broker you control.
 
 | Where | Item |
 |---|---|
-| `src/modbus/client.rs:115` | Validate the response from the fan and read the correct number of bytes — see P0 item 1 |
-| `src/modbus/client.rs:104` | The short-read hazard described in P0 item 1 |
-| `src/modbus/client.rs:79` | Understand why the flush must be blocking to avoid `WouldBlock` |
+| `src/modbus/client.rs:187` | Understand why the flush must be blocking to avoid `WouldBlock` |
+
+Response validation and the short-read hazard are done; see P0 item 1. Reading holding registers is
+still unimplemented, which is what blocks P1 item 3.
 
 ### Configuration — `src/configuration.rs`
 

@@ -678,15 +678,15 @@ async fn fan_control_routine(
         info!("{} Sending fan state update through modbus", fan_identifier);
         const MAX_ATTEMPTS: u8 = 3;
         let mut attempt = 1;
-        while let Err(_error) = modbus.send_3(&function).await
+        while let Err(error) = modbus.send_3(&function).await
             && attempt <= MAX_ATTEMPTS
         {
             // Release lock so other tasks get a chance to access modbus for sending messages to devices
             drop(modbus);
 
             error!(
-                "{} Failed to send fan state update with attempt {}",
-                fan_identifier, attempt
+                "{} Failed to send fan state update with attempt {}: {:?}",
+                fan_identifier, attempt, error
             );
             attempt += 1;
 
