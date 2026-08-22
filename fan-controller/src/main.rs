@@ -103,10 +103,7 @@ async fn gain_control(
 #[embassy_executor::task]
 async fn input_routine(
     pin: PIN_18,
-    mut display_state: (
-        watch::Receiver<'static, CriticalSectionRawMutex, SetPoint, 2>,
-        watch::Receiver<'static, CriticalSectionRawMutex, SetPoint, 2>,
-    ),
+    mut display_state: (DisplayStateReceiver, DisplayStateReceiver),
     fan_state: (
         &'static Signal<CriticalSectionRawMutex, SetPoint>,
         &'static Signal<CriticalSectionRawMutex, SetPoint>,
@@ -149,6 +146,15 @@ async fn input_routine(
 type ModbusMutex = Mutex<CriticalSectionRawMutex, modbus::Client<'static, UART0, PIN_4>>;
 type ModbusOnceLock = OnceLock<ModbusMutex>;
 
+/// How many routines watch a fan's confirmed set point: the displays, the button, and the MQTT
+/// brain that restores the last running speed when Home Assistant turns the fans back on
+const DISPLAY_STATE_RECEIVERS: usize = 3;
+type DisplayStateWatch = Watch<CriticalSectionRawMutex, SetPoint, DISPLAY_STATE_RECEIVERS>;
+type DisplayStateSender =
+    watch::Sender<'static, CriticalSectionRawMutex, SetPoint, DISPLAY_STATE_RECEIVERS>;
+type DisplayStateReceiver =
+    watch::Receiver<'static, CriticalSectionRawMutex, SetPoint, DISPLAY_STATE_RECEIVERS>;
+
 /// This routine takes the latest fan state updates and updates all parts of the device that display a state.
 /// This includes at the time of writing Home Assistant through MQTT and two status LEDs on the device.
 /// Displays fan status with 2 LEDs:
@@ -158,10 +164,7 @@ type ModbusOnceLock = OnceLock<ModbusMutex>;
 /// On On -> Fan on high setting
 #[embassy_executor::task]
 async fn display_routine(
-    mut display_state: (
-        watch::Receiver<'static, CriticalSectionRawMutex, SetPoint, 2>,
-        watch::Receiver<'static, CriticalSectionRawMutex, SetPoint, 2>,
-    ),
+    mut display_state: (DisplayStateReceiver, DisplayStateReceiver),
     led_state: &'static Signal<CriticalSectionRawMutex, LedState>,
     mqtt_out: channel::Sender<'static, CriticalSectionRawMutex, OutgoingPublish, CHANNEL_SIZE>,
 ) {
@@ -243,12 +246,13 @@ async fn display_routine(
         info!("[Display] Update after debounce");
 
         if let Some(update) = display_update_state.0 {
-            // Turn on the fan on home assistant if it was off before
+            // Tell home assistant the fan turned on or off. The first update after boot is not a
+            // change but still has to be reported, because home assistant has no idea yet
             // We already checked above if the new state is not the same as the current state
-            if let Some(command) = current_display_state
-                .0
-                .and_then(|current| SetStateCommandValue::from_change(current, update))
-            {
+            if let Some(command) = current_display_state.0.map_or_else(
+                || SetStateCommandValue::from_first(update),
+                |current| SetStateCommandValue::from_change(current, update),
+            ) {
                 // Update setting before is on state for smoother transition in homeassistant UI
                 let publish = OutgoingPublish::UpdateState {
                     fan: Fan::One,
@@ -281,12 +285,13 @@ async fn display_routine(
         }
 
         if let Some(update) = display_update_state.1 {
-            // Turn on the fan on home assistant if it was off before
+            // Tell home assistant the fan turned on or off. The first update after boot is not a
+            // change but still has to be reported, because home assistant has no idea yet
             // We already checked above if the new state is not the same as the current state
-            if let Some(command) = current_display_state
-                .1
-                .and_then(|current| SetStateCommandValue::from_change(current, update))
-            {
+            if let Some(command) = current_display_state.1.map_or_else(
+                || SetStateCommandValue::from_first(update),
+                |current| SetStateCommandValue::from_change(current, update),
+            ) {
                 let publish = OutgoingPublish::UpdateState {
                     fan: Fan::Two,
                     payload: command,
@@ -354,7 +359,23 @@ enum SetStateCommandValue {
     Off,
 }
 
+impl From<SetPoint> for SetStateCommandValue {
+    fn from(speed: SetPoint) -> Self {
+        if speed == SetPoint::ZERO {
+            SetStateCommandValue::Off
+        } else {
+            SetStateCommandValue::On
+        }
+    }
+}
+
 impl SetStateCommandValue {
+    /// The state to report for a set point when there is no previous one to compare against, which
+    /// is the first update after boot: not a change, but the state the fans were already in
+    fn from_first(speed: SetPoint) -> Option<Self> {
+        Some(Self::from(speed))
+    }
+
     fn from_change(old_speed: SetPoint, new_speed: SetPoint) -> Option<Self> {
         if old_speed == SetPoint::ZERO && new_speed != SetPoint::ZERO {
             Some(SetStateCommandValue::On)
@@ -556,13 +577,36 @@ async fn mqtt_brain_routine(
     >,
     fan_one_state: &'static Signal<CriticalSectionRawMutex, SetPoint>,
     fan_two_state: &'static Signal<CriticalSectionRawMutex, SetPoint>,
+    mut display_state: (DisplayStateReceiver, DisplayStateReceiver),
 ) {
-    // Remembering the last fan state for when the home assistant turns the device off and then on again
-    //TODO use state loaded from fan
+    // Remembering the last speed the fans were running at for when Home Assistant turns the device
+    // off and then on again. It comes from the confirmed state rather than from the commands that
+    // arrive here, so it starts at the speed read back from the fans on boot and also picks up the
+    // speeds set with the button. Zero is not remembered: it is the state that "on" restores from
     let mut last_fan_state = (SetPoint::ZERO, SetPoint::ZERO);
     loop {
         info!("[MQTT Brain] Waiting for new publish");
-        let message = receiver_in.receive().await;
+        let message = match select3(
+            receiver_in.receive(),
+            display_state.0.changed(),
+            display_state.1.changed(),
+        )
+        .await
+        {
+            Either3::First(message) => message,
+            Either3::Second(set_point) => {
+                if set_point != SetPoint::ZERO {
+                    last_fan_state.0 = set_point;
+                }
+                continue;
+            }
+            Either3::Third(set_point) => {
+                if set_point != SetPoint::ZERO {
+                    last_fan_state.1 = set_point;
+                }
+                continue;
+            }
+        };
         info!("[MQTT Brain] Received publish");
 
         let publish = match message {
@@ -595,14 +639,12 @@ async fn mqtt_brain_routine(
                 command: FanCommand::SetSpeed { set_point },
             } => match target {
                 Fan::One => {
-                    last_fan_state.0 = set_point;
                     fan_one_state.signal(set_point);
                     if is_synchronization_on {
                         fan_two_state.signal(set_point);
                     }
                 }
                 Fan::Two => {
-                    last_fan_state.1 = set_point;
                     fan_two_state.signal(set_point);
                     if is_synchronization_on {
                         fan_one_state.signal(set_point);
@@ -626,6 +668,95 @@ async fn mqtt_brain_routine(
     }
 }
 
+/// How often a modbus transaction is attempted before the fan counts as unreachable
+const MAX_ATTEMPTS: u8 = 3;
+
+/// Waits before the next attempt of a modbus transaction: the attempt number squared, times
+/// 100 ms. [`MAX_ATTEMPTS`] keeps the attempt number small enough for this to stay well inside a
+/// `u64` and inside a second or two
+async fn back_off(attempt: u8) {
+    Timer::after_millis(u64::from(attempt).pow(2) * 100).await;
+}
+
+/// Reads the set point a fan is currently running at.
+///
+/// Returns `None` when the fan stays silent, answers with a value outside the set point range, or
+/// a set point is requested before the read succeeds. That leaves the state unknown, which
+/// everything displaying or restoring a fan state already treats as its own case, so guessing here
+/// would be worse than admitting it.
+async fn read_set_point(
+    modbus_mutex: &'static ModbusMutex,
+    fan_address: modbus::device::Address,
+    requested_set_point: &'static Signal<CriticalSectionRawMutex, SetPoint>,
+    fan_identifier: &str,
+) -> Option<SetPoint> {
+    let function = modbus::function::ReadHoldingRegister::new(
+        fan_address,
+        fan::holding_registers::REFERENCE_SET_POINT,
+    );
+
+    for attempt in 1..=MAX_ATTEMPTS {
+        info!(
+            "{} Reading the current set point from the fan",
+            fan_identifier
+        );
+        let result = modbus_mutex
+            .lock()
+            .await
+            .read_holding_register(&function)
+            .await;
+
+        match result {
+            // The fan ignores the four least significant bits of a set point, so the value that
+            // comes back can be slightly below the one that was written. That is close enough for
+            // everything this state is used for and rounding it back up would invent precision
+            Ok(value) => match SetPoint::new(value) {
+                Ok(set_point) => {
+                    info!(
+                        "{} Fan is running at set point {}",
+                        fan_identifier, *set_point
+                    );
+                    return Some(set_point);
+                }
+                Err(_error) => {
+                    error!(
+                        "{} Fan reports set point {} which is above the maximum of {}",
+                        fan_identifier,
+                        value,
+                        fan::set_point::MAX
+                    );
+                    return None;
+                }
+            },
+            Err(error) => error!(
+                "{} Failed to read the current set point on attempt {}: {:?}",
+                fan_identifier, attempt, error
+            ),
+        }
+
+        // A fan that does not answer takes a timeout per attempt, which is long enough that a
+        // command can arrive in the meantime. That command is a state worth more than the one
+        // being read, so stop asking and let it be applied
+        if requested_set_point.signaled() {
+            info!(
+                "{} A set point was requested while reading the current one. Applying that instead",
+                fan_identifier
+            );
+            return None;
+        }
+
+        if attempt < MAX_ATTEMPTS {
+            back_off(attempt).await;
+        }
+    }
+
+    error!(
+        "{} Giving up reading the current set point after {} attempts. The fan state stays unknown until it is set",
+        fan_identifier, MAX_ATTEMPTS
+    );
+    None
+}
+
 /// Receives the fan state updates and sends them to modbus as modbus messages
 /// After a successful response, this sends an update to the fan display logic unit
 #[embassy_executor::task(pool_size = 2)]
@@ -634,7 +765,7 @@ async fn fan_control_routine(
     current_fan_speed: &'static Signal<CriticalSectionRawMutex, SetPoint>,
     other_fan_speed: &'static Signal<CriticalSectionRawMutex, SetPoint>,
     modbus: &'static ModbusOnceLock,
-    display_state: watch::Sender<'static, CriticalSectionRawMutex, SetPoint, 2>,
+    display_state: DisplayStateSender,
 ) {
     let fan_identifier = match *fan_address {
         2 => "[Fan 1]",
@@ -646,8 +777,16 @@ async fn fan_control_routine(
     let modbus_mutex = modbus.get().await;
     info!("{} MODBUS initialized", fan_identifier);
 
-    //TODO load initial fan speed through modbus from fan and make current_speed non optional
-    let mut current_set_point: Option<SetPoint> = None;
+    // The fans keep running while the controller resets, so whatever they are set to now is the
+    // state to start from. Reading it back is what lets the LEDs, Home Assistant and the button
+    // describe what is actually happening instead of assuming the fans are off.
+    // Stays `None` when the fan cannot be reached, which is honest about not knowing rather than
+    // guessing at a speed
+    let mut current_set_point =
+        read_set_point(modbus_mutex, fan_address, current_fan_speed, fan_identifier).await;
+    if let Some(set_point) = current_set_point {
+        display_state.send(set_point);
+    }
     'signal_loop: loop {
         info!("{} Waiting for fan state update", fan_identifier);
         let mut set_point = current_fan_speed.wait().await;
@@ -676,9 +815,8 @@ async fn fan_control_routine(
         );
 
         info!("{} Sending fan state update through modbus", fan_identifier);
-        const MAX_ATTEMPTS: u8 = 3;
         let mut attempt = 1;
-        while let Err(error) = modbus.send_3(&function).await
+        while let Err(error) = modbus.write_holding_register(&function).await
             && attempt <= MAX_ATTEMPTS
         {
             // Release lock so other tasks get a chance to access modbus for sending messages to devices
@@ -694,9 +832,7 @@ async fn fan_control_routine(
                 continue 'signal_loop;
             }
 
-            // Exponential backoff
-            // Safe power of 2 because maximum value is 3 (900ms max)
-            Timer::after_millis(u64::from(attempt).pow(2) * 100).await;
+            back_off(attempt).await;
             info!("{} Waiting for lock on modbus for retry", fan_identifier);
             modbus = modbus_mutex.lock().await;
             info!("{} Acquired lock on modbus for retry", fan_identifier);
@@ -977,16 +1113,16 @@ async fn main(spawner: Spawner) {
 
     // The display state is updated after the fan state has been successfully applied
     // and is used to update any component that displays the fan state like the LEDs or Home Assistant through MQTT
-    static FAN_ONE_DISPLAY_STATE: Watch<CriticalSectionRawMutex, SetPoint, 2> = Watch::new();
-    static FAN_TWO_DISPLAY_STATE: Watch<CriticalSectionRawMutex, SetPoint, 2> = Watch::new();
+    static FAN_ONE_DISPLAY_STATE: DisplayStateWatch = Watch::new();
+    static FAN_TWO_DISPLAY_STATE: DisplayStateWatch = Watch::new();
 
     let display_receivers = (
         FAN_ONE_DISPLAY_STATE
             .receiver()
-            .expect("Expected receiver to be configured to allow 2 receivers"),
+            .expect("Expected the watch to be configured for DISPLAY_STATE_RECEIVERS receivers"),
         FAN_TWO_DISPLAY_STATE
             .receiver()
-            .expect("Expected receiver to be configured to allow 2 receivers"),
+            .expect("Expected the watch to be configured for DISPLAY_STATE_RECEIVERS receivers"),
     );
     let sender_out = OUT.sender();
 
@@ -1001,10 +1137,10 @@ async fn main(spawner: Spawner) {
     let button_receivers = (
         FAN_ONE_DISPLAY_STATE
             .receiver()
-            .expect("Expected receiver to be configured to allow 2 receivers"),
+            .expect("Expected the watch to be configured for DISPLAY_STATE_RECEIVERS receivers"),
         FAN_TWO_DISPLAY_STATE
             .receiver()
-            .expect("Expected receiver to be configured to allow 2 receivers"),
+            .expect("Expected the watch to be configured for DISPLAY_STATE_RECEIVERS receivers"),
     );
     unwrap!(spawner.spawn(input_routine(
         pin_18,
@@ -1012,11 +1148,21 @@ async fn main(spawner: Spawner) {
         (&FAN_ONE_STATE, &FAN_TWO_STATE)
     )));
 
+    let brain_receivers = (
+        FAN_ONE_DISPLAY_STATE
+            .receiver()
+            .expect("Expected the watch to be configured for DISPLAY_STATE_RECEIVERS receivers"),
+        FAN_TWO_DISPLAY_STATE
+            .receiver()
+            .expect("Expected the watch to be configured for DISPLAY_STATE_RECEIVERS receivers"),
+    );
+
     let receiver_in = IN.receiver();
     unwrap!(spawner.spawn(mqtt_brain_routine(
         receiver_in,
         &FAN_ONE_STATE,
-        &FAN_TWO_STATE
+        &FAN_TWO_STATE,
+        brain_receivers
     )));
 
     let display_fan_one_sender = FAN_ONE_DISPLAY_STATE.sender();

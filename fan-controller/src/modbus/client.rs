@@ -10,7 +10,7 @@ use embedded_io_async::{Read, ReadExactError, Write};
 
 use crate::{
     configuration,
-    modbus::function::{WriteHoldingRegister, code},
+    modbus::function::{ReadHoldingRegister, WriteHoldingRegister, code},
 };
 
 /// Which part of the response was being read when something went wrong. The parts are read one
@@ -23,6 +23,8 @@ pub(crate) enum Part {
     Exception,
     /// The register, the value, and the checksum echoed back after a successful write
     Echo,
+    /// The byte count, the register contents, and the checksum that follow a successful read
+    Data,
 }
 
 /// The device answered, but not with the acknowledgement that was asked for
@@ -38,19 +40,25 @@ pub(crate) enum InvalidResponse {
     Checksum(Part),
     /// The frame does not echo the request. Holds the whole frame that arrived, which can be
     /// compared against the request that was logged when it was sent
-    Echo([u8; RESPONSE_LENGTH]),
+    Echo([u8; WRITE_RESPONSE_LENGTH]),
+    /// A read answered with a different number of data bytes than the one register that was asked
+    /// for. Holds the byte count it announced
+    ByteCount(u8),
 }
 
-/// The exception codes the fan documents for write single register.
-/// See MODBUS Parameter RadiCal im Spiralgehäuse V1.00, section 1.3.3
+/// The exception codes the fan documents for the two functions this client uses.
+/// See MODBUS Parameter RadiCal im Spiralgehäuse V1.00, sections 1.3.1 and 1.3.3
 #[derive(Debug, Clone, Copy, defmt::Format)]
 pub(crate) enum Exception {
     /// The register address is outside the D000 ... D614 range the fan accepts
     RegisterOutOfRange,
-    /// The register could not be written, either because the electronics are defective or because
-    /// this password level has no write permission for it
-    WriteRefused,
-    /// A code the specification does not list for this function
+    /// Reading only: the answer would exceed the 80 byte maximum telegram length, which means
+    /// more than 37 or zero registers were asked for
+    ResponseTooLong,
+    /// The register could not be read or written, because the electronics are defective or,
+    /// for a write, because this password level has no write permission for it
+    AccessRefused,
+    /// A code the specification does not list for these functions
     Unknown(u8),
 }
 
@@ -58,7 +66,8 @@ impl From<u8> for Exception {
     fn from(code: u8) -> Self {
         match code {
             0x02 => Self::RegisterOutOfRange,
-            0x04 => Self::WriteRefused,
+            0x03 => Self::ResponseTooLong,
+            0x04 => Self::AccessRefused,
             other => Self::Unknown(other),
         }
     }
@@ -74,7 +83,7 @@ pub(crate) enum Error {
     ResponseTimeout(Part),
     /// The UART failed while reading this part of the response
     ResponseUart(Part),
-    /// The fan answered with a modbus exception instead of performing the write
+    /// The fan answered with a modbus exception instead of performing the request
     Exception(Exception),
     InvalidResponse(InvalidResponse),
 }
@@ -102,7 +111,14 @@ const HEADER_LENGTH: usize = 2;
 const IGNORED_SET_POINT_BITS: u16 = 0x000F;
 
 /// A successful response to a write holding register request echoes the request back
-const RESPONSE_LENGTH: usize = 8;
+const WRITE_RESPONSE_LENGTH: usize = 8;
+
+/// A successful response to a read holding register request: the header, the byte count, the
+/// contents of the one register that was asked for, and the checksum
+const READ_RESPONSE_LENGTH: usize = 7;
+
+/// How many data bytes a read of the single register asked for has to announce
+const READ_BYTE_COUNT: u8 = 2;
 
 /// An exception response replaces the register and value of the echo with a single exception code
 const EXCEPTION_RESPONSE_LENGTH: usize = 5;
@@ -110,6 +126,15 @@ const EXCEPTION_RESPONSE_LENGTH: usize = 5;
 /// How long to wait for another byte while clearing the line after a failed transaction.
 /// Modbus separates frames by 3.5 characters of silence which is about 2 ms at 19200 baud 8E1
 const DISCARD_TIMEOUT: Duration = Duration::from_millis(5);
+
+/// Which of the two fans a device address belongs to, for the log
+fn fan_identifier(device_address: u8) -> &'static str {
+    match device_address {
+        2 => "[Fan 1]",
+        3 => "[Fan 2]",
+        _other => "Unknown (oops)",
+    }
+}
 
 /// Modbus transmits the checksum low byte first, unlike the rest of the frame
 fn is_checksum_valid(frame: &[u8]) -> bool {
@@ -144,119 +169,55 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
         }
     }
 
-    pub(crate) async fn send_3(&mut self, message: &WriteHoldingRegister) -> Result<(), Error> {
-        // For debugging
-        let fan_identifier = match *message.device_address() {
-            2 => "[Fan 1]",
-            3 => "[Fan 2]",
-            _other => "Unknown (oops)",
-        };
+    /// Writes a fan's set point and waits for the fan to acknowledge it
+    pub(crate) async fn write_holding_register(
+        &mut self,
+        message: &WriteHoldingRegister,
+    ) -> Result<(), Error> {
+        let fan_identifier = fan_identifier(*message.device_address());
 
-        let result = self.transact(message, fan_identifier).await;
-
-        // A failed transaction can leave part of a frame in the receive buffer. Dropping it keeps
-        // the next transaction from reading those leftovers as its own response. Both fans share
-        // this UART, so leftovers from one would otherwise be read as an answer from the other.
-        if result.is_err() {
-            self.discard_incoming(fan_identifier).await;
-        }
+        let result = self.transact_write(message, fan_identifier).await;
+        self.clear_line_after(&result, fan_identifier).await;
 
         result
     }
 
-    async fn transact(
+    /// Reads back what a fan currently holds in one of its registers
+    pub(crate) async fn read_holding_register(
+        &mut self,
+        message: &ReadHoldingRegister,
+    ) -> Result<u16, Error> {
+        let fan_identifier = fan_identifier(*message.device_address());
+
+        let result = self.transact_read(message, fan_identifier).await;
+        self.clear_line_after(&result, fan_identifier).await;
+
+        result
+    }
+
+    /// A failed transaction can leave part of a frame in the receive buffer. Dropping it keeps the
+    /// next transaction from reading those leftovers as its own response. Both fans share this
+    /// UART, so leftovers from one would otherwise be read as an answer from the other.
+    async fn clear_line_after<T>(&mut self, result: &Result<T, Error>, fan_identifier: &str) {
+        if result.is_err() {
+            self.discard_incoming(fan_identifier).await;
+        }
+    }
+
+    async fn transact_write(
         &mut self,
         message: &WriteHoldingRegister,
         fan_identifier: &str,
     ) -> Result<(), Error> {
-        // Write then read
-        // Set pin setting DE (driver enable) to on (high) on the MAX845 to send data
-        self.driver_enable.set_high();
-
         let request = message.as_ref();
-        info!("{} Sending message to fan: {:?}", fan_identifier, request);
-        // As ref because &[u8; 8] is not the same as &[u8]
-        with_timeout(configuration::FAN_TIMEOUT, self.uart.write_all(request))
-            .await
-            .map_err(|_timeout| Error::RequestTimeout)?
-            .map_err(|_error| Error::RequestUart)?;
+        self.send_request(request, fan_identifier).await?;
 
-        info!("{} Request written", fan_identifier);
-
-        // Before closing we need to flush the buffer to ensure that all data is written
-        // This requires blocking or we get a WouldBlock error. I don't understand why (TODO)
-        let result = self.uart.blocking_flush();
-        if let Err(_error) = result {
-            error!("{} UART flush error", fan_identifier);
-        }
-
-        // In addition to flushing we need to wait for some time before turning off data in on the
-        // MAX845 because we might be too fast and cut off the last byte or more. (This happened)
-        // I saw someone using 120 microseconds (https://youtu.be/i46jdhvRej4?t=886).
-        // See [BLOCK_FOR] for how long to wait and why.
-        // Timer::after(Duration::from_micros(1_000)).await;
-        // Using an await timer breaks this. Probably because it yields to the scheduler
-        block_for(BLOCK_FOR);
-
-        // Close sending data to enable receiving data
-        self.driver_enable.set_low();
-
-        // Read
         // The response is either an echo of the request or a shorter exception frame, so the
         // address and function code are read first to find out which one is arriving. Reading
         // exactly as many bytes as the frame holds leaves nothing behind for the next transaction.
-        let mut response = [0u8; RESPONSE_LENGTH];
-        info!("{} Waiting for response from fan", fan_identifier);
-        self.read_exact(&mut response[..HEADER_LENGTH], Part::Header)
+        let mut response = [0u8; WRITE_RESPONSE_LENGTH];
+        self.read_header(&mut response, request, fan_identifier)
             .await?;
-
-        if response[0] != request[0] {
-            warn!(
-                "{} Response came from device address {:?} instead of {:?}",
-                fan_identifier, response[0], request[0]
-            );
-            return Err(Error::InvalidResponse(InvalidResponse::DeviceAddress(
-                response[0],
-            )));
-        }
-
-        if response[1] == code::WRITE_SINGLE_REGISTER | code::EXCEPTION_MASK {
-            self.read_exact(
-                &mut response[HEADER_LENGTH..EXCEPTION_RESPONSE_LENGTH],
-                Part::Exception,
-            )
-            .await?;
-
-            let frame = &response[..EXCEPTION_RESPONSE_LENGTH];
-            if !is_checksum_valid(frame) {
-                warn!(
-                    "{} Exception response failed checksum: {:?}",
-                    fan_identifier, frame
-                );
-                return Err(Error::InvalidResponse(InvalidResponse::Checksum(
-                    Part::Exception,
-                )));
-            }
-
-            let exception = Exception::from(response[2]);
-            error!(
-                "{} Fan rejected the write with modbus exception {:?}",
-                fan_identifier, exception
-            );
-            return Err(Error::Exception(exception));
-        }
-
-        if response[1] != code::WRITE_SINGLE_REGISTER {
-            warn!(
-                "{} Response used function code {:?} instead of {:?}",
-                fan_identifier,
-                response[1],
-                code::WRITE_SINGLE_REGISTER
-            );
-            return Err(Error::InvalidResponse(InvalidResponse::FunctionCode(
-                response[1],
-            )));
-        }
 
         self.read_exact(&mut response[HEADER_LENGTH..], Part::Echo)
             .await?;
@@ -299,6 +260,157 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
         Ok(())
     }
 
+    async fn transact_read(
+        &mut self,
+        message: &ReadHoldingRegister,
+        fan_identifier: &str,
+    ) -> Result<u16, Error> {
+        let request = message.as_ref();
+        self.send_request(request, fan_identifier).await?;
+
+        // Unlike the write, the answer does not repeat the request: it carries a byte count and
+        // the register contents. Only one register was asked for, so its length is known in
+        // advance and the byte count is a check rather than something to act on.
+        let mut response = [0u8; READ_RESPONSE_LENGTH];
+        self.read_header(&mut response, request, fan_identifier)
+            .await?;
+
+        self.read_exact(&mut response[HEADER_LENGTH..], Part::Data)
+            .await?;
+
+        // Checked before the checksum: a different byte count means the frame is a different
+        // length than the one that was just read, so the checksum would fail for a reason that
+        // does not name the actual problem
+        if response[2] != READ_BYTE_COUNT {
+            warn!(
+                "{} Response announced {:?} data bytes instead of {:?}: {:?}",
+                fan_identifier, response[2], READ_BYTE_COUNT, response
+            );
+            return Err(Error::InvalidResponse(InvalidResponse::ByteCount(
+                response[2],
+            )));
+        }
+
+        if !is_checksum_valid(&response) {
+            warn!(
+                "{} Response failed checksum: {:?}",
+                fan_identifier, response
+            );
+            return Err(Error::InvalidResponse(InvalidResponse::Checksum(
+                Part::Data,
+            )));
+        }
+
+        let value = u16::from_be_bytes([response[3], response[4]]);
+        info!(
+            "{} Fan answered the read with {:?}: {:?}",
+            fan_identifier, value, response
+        );
+
+        Ok(value)
+    }
+
+    /// Drives the line, writes the request, and hands the line back to the fan
+    async fn send_request(&mut self, request: &[u8], fan_identifier: &str) -> Result<(), Error> {
+        // Write then read
+        // Set pin setting DE (driver enable) to on (high) on the MAX845 to send data
+        self.driver_enable.set_high();
+
+        info!("{} Sending message to fan: {:?}", fan_identifier, request);
+        // As ref because &[u8; 8] is not the same as &[u8]
+        with_timeout(configuration::FAN_TIMEOUT, self.uart.write_all(request))
+            .await
+            .map_err(|_timeout| Error::RequestTimeout)?
+            .map_err(|_error| Error::RequestUart)?;
+
+        info!("{} Request written", fan_identifier);
+
+        // Before closing we need to flush the buffer to ensure that all data is written
+        // This requires blocking or we get a WouldBlock error. I don't understand why (TODO)
+        let result = self.uart.blocking_flush();
+        if let Err(_error) = result {
+            error!("{} UART flush error", fan_identifier);
+        }
+
+        // In addition to flushing we need to wait for some time before turning off data in on the
+        // MAX845 because we might be too fast and cut off the last byte or more. (This happened)
+        // I saw someone using 120 microseconds (https://youtu.be/i46jdhvRej4?t=886).
+        // See [BLOCK_FOR] for how long to wait and why.
+        // Timer::after(Duration::from_micros(1_000)).await;
+        // Using an await timer breaks this. Probably because it yields to the scheduler
+        block_for(BLOCK_FOR);
+
+        // Close sending data to enable receiving data
+        self.driver_enable.set_low();
+
+        Ok(())
+    }
+
+    /// Reads the device address and function code every response starts with, and the rest of the
+    /// exception frame when the fan answered with one. Returns once the header is the answer that
+    /// was asked for, so the caller can read the rest of its own frame into the same buffer.
+    ///
+    /// The buffer has to hold at least [`EXCEPTION_RESPONSE_LENGTH`] bytes
+    async fn read_header(
+        &mut self,
+        response: &mut [u8],
+        request: &[u8],
+        fan_identifier: &str,
+    ) -> Result<(), Error> {
+        info!("{} Waiting for response from fan", fan_identifier);
+        self.read_exact(&mut response[..HEADER_LENGTH], Part::Header)
+            .await?;
+
+        if response[0] != request[0] {
+            warn!(
+                "{} Response came from device address {:?} instead of {:?}",
+                fan_identifier, response[0], request[0]
+            );
+            return Err(Error::InvalidResponse(InvalidResponse::DeviceAddress(
+                response[0],
+            )));
+        }
+
+        let function_code = request[1];
+        if response[1] == function_code | code::EXCEPTION_MASK {
+            self.read_exact(
+                &mut response[HEADER_LENGTH..EXCEPTION_RESPONSE_LENGTH],
+                Part::Exception,
+            )
+            .await?;
+
+            let frame = &response[..EXCEPTION_RESPONSE_LENGTH];
+            if !is_checksum_valid(frame) {
+                warn!(
+                    "{} Exception response failed checksum: {:?}",
+                    fan_identifier, frame
+                );
+                return Err(Error::InvalidResponse(InvalidResponse::Checksum(
+                    Part::Exception,
+                )));
+            }
+
+            let exception = Exception::from(response[2]);
+            error!(
+                "{} Fan rejected function code {:?} with modbus exception {:?}",
+                fan_identifier, function_code, exception
+            );
+            return Err(Error::Exception(exception));
+        }
+
+        if response[1] != function_code {
+            warn!(
+                "{} Response used function code {:?} instead of {:?}",
+                fan_identifier, response[1], function_code
+            );
+            return Err(Error::InvalidResponse(InvalidResponse::FunctionCode(
+                response[1],
+            )));
+        }
+
+        Ok(())
+    }
+
     /// Fills the whole buffer or fails. Reading exactly the frame length avoids the short reads
     /// [`Read::read`] would allow, which would leave the rest of the frame for the next caller.
     /// The part is carried into the error so a failure says which read did not complete
@@ -316,7 +428,7 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
     /// Reads until the line has been silent for [`DISCARD_TIMEOUT`] to drop a partial or
     /// unexpected frame before the next transaction starts
     async fn discard_incoming(&mut self, fan_identifier: &str) {
-        let mut discarded = [0u8; RESPONSE_LENGTH];
+        let mut discarded = [0u8; WRITE_RESPONSE_LENGTH];
         while let Ok(result) = with_timeout(DISCARD_TIMEOUT, self.uart.read(&mut discarded)).await {
             match result {
                 Ok(0) => break,
