@@ -129,6 +129,8 @@ would require extracting it into its own crate.
 - [fan-controller/documentation.md](fan-controller/documentation.md) — the LED status protocol
   (which blink pattern means which fan speed / out-of-sync state) and the Home Assistant
   onboarding sequence. Update it when LED behaviour changes.
-- [fan-controller/README.md](fan-controller/README.md) — the working TODO list for the firmware.
+- [fan-controller/TODO.md](fan-controller/TODO.md) — the working TODO list for the firmware:
+  every outstanding item with source line references and a suggested priority order. Keep it in
+  sync when adding or resolving a `//TODO` in `fan-controller/src/`.
 - [README.md](README.md) — probe firmware updates and where Home Assistant logs rejected discovery
   payloads.
