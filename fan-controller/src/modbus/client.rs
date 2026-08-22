@@ -13,37 +13,36 @@ use crate::{
     modbus::function::{ReadHoldingRegister, WriteHoldingRegister, code},
 };
 
-/// Which part of the response was being read when something went wrong. The parts are read one
-/// after the other because the header decides how long the rest of the frame is
+/// How sending a request to the fan failed
+#[derive(Debug, Clone, Copy, defmt::Format)]
+pub(crate) enum SendFailure {
+    /// Writing the request timed out
+    Timeout,
+    /// The UART failed while writing the request
+    Uart,
+}
+
+/// How receiving a run of bytes failed. Which part of the frame was being received is named by the
+/// caller, because it is the one that knows which read this was
+#[derive(Debug, Clone, Copy, defmt::Format)]
+pub(crate) enum ReceiveFailure {
+    /// Waiting for the bytes timed out. This is what a silent fan looks like
+    Timeout,
+    /// The UART failed while reading
+    Uart,
+    /// The line went silent partway through
+    Incomplete,
+}
+
+/// The parts of a response that every function reads the same way. The header comes first because
+/// it decides how long the rest of the frame is, and an exception frame is what arrives in place
+/// of an answer when the fan refuses
 #[derive(Debug, Clone, Copy, defmt::Format)]
 pub(crate) enum Part {
     /// The device address and the function code
     Header,
     /// The exception code and the checksum that follow an exception header
     Exception,
-    /// The register, the value, and the checksum echoed back after a successful write
-    Echo,
-    /// The byte count, the register contents, and the checksum that follow a successful read
-    Data,
-}
-
-/// The device answered, but not with the acknowledgement that was asked for
-#[derive(Debug, Clone, Copy, defmt::Format)]
-pub(crate) enum InvalidResponse {
-    /// The line went silent in the middle of this part of the frame
-    Incomplete(Part),
-    /// Another device answered. Holds the address it claims to come from
-    DeviceAddress(u8),
-    /// The answer was not to a write holding register request. Holds the function code it used
-    FunctionCode(u8),
-    /// The checksum of this part's frame does not match its contents
-    Checksum(Part),
-    /// The frame does not echo the request. Holds the whole frame that arrived, which can be
-    /// compared against the request that was logged when it was sent
-    Echo([u8; WRITE_RESPONSE_LENGTH]),
-    /// A read answered with a different number of data bytes than the one register that was asked
-    /// for. Holds the byte count it announced
-    ByteCount(u8),
 }
 
 /// The exception codes the fan documents for the two functions this client uses.
@@ -73,19 +72,67 @@ impl From<u8> for Exception {
     }
 }
 
+/// A failure in the part of a transaction that is the same whatever function was used: sending the
+/// request, reading the header, and reading the exception frame that can arrive instead of an
+/// answer. Both [`WriteError`] and [`ReadError`] carry this, and nothing in it belongs to only one
+/// of them
 #[derive(Debug, Clone, Copy, defmt::Format)]
-pub(crate) enum Error {
-    /// Sending the request timed out
-    RequestTimeout,
-    /// The UART failed while sending the request
-    RequestUart,
-    /// Waiting for this part of the response timed out. This is what a silent fan looks like
-    ResponseTimeout(Part),
-    /// The UART failed while reading this part of the response
-    ResponseUart(Part),
+pub(crate) enum ExchangeError {
+    /// Sending the request failed
+    Request(SendFailure),
+    /// Receiving this part of the response failed
+    Response(Part, ReceiveFailure),
+    /// Another device answered. Holds the address it claims to come from
+    DeviceAddress(u8),
+    /// The answer was to a different function than the request. Holds the function code it used
+    FunctionCode(u8),
+    /// The checksum of the exception frame does not match its contents. Only the exception frame
+    /// can fail a checksum here, because the header is two bytes and carries none of its own
+    ExceptionChecksum,
     /// The fan answered with a modbus exception instead of performing the request
     Exception(Exception),
-    InvalidResponse(InvalidResponse),
+}
+
+/// Writing a holding register failed. The echo is the part only this function reads, so it is the
+/// only error that can name it
+#[derive(Debug, Clone, Copy, defmt::Format)]
+pub(crate) enum WriteError {
+    /// Failed before the echo was reached
+    Exchange(ExchangeError),
+    /// Receiving the echoed register, value and checksum failed
+    Echo(ReceiveFailure),
+    /// The checksum of the echo does not match its contents
+    EchoChecksum,
+    /// The echo does not repeat the request. Holds the whole frame that arrived, which can be
+    /// compared against the request that was logged when it was sent
+    EchoMismatch([u8; WRITE_RESPONSE_LENGTH]),
+}
+
+impl From<ExchangeError> for WriteError {
+    fn from(error: ExchangeError) -> Self {
+        Self::Exchange(error)
+    }
+}
+
+/// Reading a holding register failed. The byte count and the register contents are the part only
+/// this function reads, so it is the only error that can name them
+#[derive(Debug, Clone, Copy, defmt::Format)]
+pub(crate) enum ReadError {
+    /// Failed before the register contents were reached
+    Exchange(ExchangeError),
+    /// Receiving the byte count, the register contents and the checksum failed
+    Contents(ReceiveFailure),
+    /// The checksum of the answer does not match its contents
+    ContentsChecksum,
+    /// The answer announced a different number of data bytes than the one register that was asked
+    /// for. Holds the byte count it announced
+    ByteCount(u8),
+}
+
+impl From<ExchangeError> for ReadError {
+    fn from(error: ExchangeError) -> Self {
+        Self::Exchange(error)
+    }
 }
 
 /// How long the MAX845 keeps driving the line after the last byte was flushed, so the end of the
@@ -173,7 +220,7 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
     pub(crate) async fn write_holding_register(
         &mut self,
         message: &WriteHoldingRegister,
-    ) -> Result<(), Error> {
+    ) -> Result<(), WriteError> {
         let fan_identifier = fan_identifier(*message.device_address());
 
         let result = self.transact_write(message, fan_identifier).await;
@@ -186,7 +233,7 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
     pub(crate) async fn read_holding_register(
         &mut self,
         message: &ReadHoldingRegister,
-    ) -> Result<u16, Error> {
+    ) -> Result<u16, ReadError> {
         let fan_identifier = fan_identifier(*message.device_address());
 
         let result = self.transact_read(message, fan_identifier).await;
@@ -198,7 +245,7 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
     /// A failed transaction can leave part of a frame in the receive buffer. Dropping it keeps the
     /// next transaction from reading those leftovers as its own response. Both fans share this
     /// UART, so leftovers from one would otherwise be read as an answer from the other.
-    async fn clear_line_after<T>(&mut self, result: &Result<T, Error>, fan_identifier: &str) {
+    async fn clear_line_after<T, E>(&mut self, result: &Result<T, E>, fan_identifier: &str) {
         if result.is_err() {
             self.discard_incoming(fan_identifier).await;
         }
@@ -208,7 +255,7 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
         &mut self,
         message: &WriteHoldingRegister,
         fan_identifier: &str,
-    ) -> Result<(), Error> {
+    ) -> Result<(), WriteError> {
         let request = message.as_ref();
         self.send_request(request, fan_identifier).await?;
 
@@ -219,17 +266,16 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
         self.read_header(&mut response, request, fan_identifier)
             .await?;
 
-        self.read_exact(&mut response[HEADER_LENGTH..], Part::Echo)
-            .await?;
+        self.receive_exact(&mut response[HEADER_LENGTH..])
+            .await
+            .map_err(WriteError::Echo)?;
 
         if !is_checksum_valid(&response) {
             warn!(
                 "{} Response failed checksum: {:?}",
                 fan_identifier, response
             );
-            return Err(Error::InvalidResponse(InvalidResponse::Checksum(
-                Part::Echo,
-            )));
+            return Err(WriteError::EchoChecksum);
         }
 
         // The echo repeats the register and the value that were written. The register has to match
@@ -249,7 +295,7 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
                 "{} Response {:?} does not echo the request {:?}",
                 fan_identifier, response, request
             );
-            return Err(Error::InvalidResponse(InvalidResponse::Echo(response)));
+            return Err(WriteError::EchoMismatch(response));
         }
 
         info!(
@@ -264,7 +310,7 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
         &mut self,
         message: &ReadHoldingRegister,
         fan_identifier: &str,
-    ) -> Result<u16, Error> {
+    ) -> Result<u16, ReadError> {
         let request = message.as_ref();
         self.send_request(request, fan_identifier).await?;
 
@@ -275,8 +321,9 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
         self.read_header(&mut response, request, fan_identifier)
             .await?;
 
-        self.read_exact(&mut response[HEADER_LENGTH..], Part::Data)
-            .await?;
+        self.receive_exact(&mut response[HEADER_LENGTH..])
+            .await
+            .map_err(ReadError::Contents)?;
 
         // Checked before the checksum: a different byte count means the frame is a different
         // length than the one that was just read, so the checksum would fail for a reason that
@@ -286,9 +333,7 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
                 "{} Response announced {:?} data bytes instead of {:?}: {:?}",
                 fan_identifier, response[2], READ_BYTE_COUNT, response
             );
-            return Err(Error::InvalidResponse(InvalidResponse::ByteCount(
-                response[2],
-            )));
+            return Err(ReadError::ByteCount(response[2]));
         }
 
         if !is_checksum_valid(&response) {
@@ -296,9 +341,7 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
                 "{} Response failed checksum: {:?}",
                 fan_identifier, response
             );
-            return Err(Error::InvalidResponse(InvalidResponse::Checksum(
-                Part::Data,
-            )));
+            return Err(ReadError::ContentsChecksum);
         }
 
         let value = u16::from_be_bytes([response[3], response[4]]);
@@ -311,7 +354,11 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
     }
 
     /// Drives the line, writes the request, and hands the line back to the fan
-    async fn send_request(&mut self, request: &[u8], fan_identifier: &str) -> Result<(), Error> {
+    async fn send_request(
+        &mut self,
+        request: &[u8],
+        fan_identifier: &str,
+    ) -> Result<(), ExchangeError> {
         // Write then read
         // Set pin setting DE (driver enable) to on (high) on the MAX845 to send data
         self.driver_enable.set_high();
@@ -320,8 +367,8 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
         // As ref because &[u8; 8] is not the same as &[u8]
         with_timeout(configuration::FAN_TIMEOUT, self.uart.write_all(request))
             .await
-            .map_err(|_timeout| Error::RequestTimeout)?
-            .map_err(|_error| Error::RequestUart)?;
+            .map_err(|_timeout| ExchangeError::Request(SendFailure::Timeout))?
+            .map_err(|_error| ExchangeError::Request(SendFailure::Uart))?;
 
         info!("{} Request written", fan_identifier);
 
@@ -356,28 +403,25 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
         response: &mut [u8],
         request: &[u8],
         fan_identifier: &str,
-    ) -> Result<(), Error> {
+    ) -> Result<(), ExchangeError> {
         info!("{} Waiting for response from fan", fan_identifier);
-        self.read_exact(&mut response[..HEADER_LENGTH], Part::Header)
-            .await?;
+        self.receive_exact(&mut response[..HEADER_LENGTH])
+            .await
+            .map_err(|failure| ExchangeError::Response(Part::Header, failure))?;
 
         if response[0] != request[0] {
             warn!(
                 "{} Response came from device address {:?} instead of {:?}",
                 fan_identifier, response[0], request[0]
             );
-            return Err(Error::InvalidResponse(InvalidResponse::DeviceAddress(
-                response[0],
-            )));
+            return Err(ExchangeError::DeviceAddress(response[0]));
         }
 
         let function_code = request[1];
         if response[1] == function_code | code::EXCEPTION_MASK {
-            self.read_exact(
-                &mut response[HEADER_LENGTH..EXCEPTION_RESPONSE_LENGTH],
-                Part::Exception,
-            )
-            .await?;
+            self.receive_exact(&mut response[HEADER_LENGTH..EXCEPTION_RESPONSE_LENGTH])
+                .await
+                .map_err(|failure| ExchangeError::Response(Part::Exception, failure))?;
 
             let frame = &response[..EXCEPTION_RESPONSE_LENGTH];
             if !is_checksum_valid(frame) {
@@ -385,9 +429,7 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
                     "{} Exception response failed checksum: {:?}",
                     fan_identifier, frame
                 );
-                return Err(Error::InvalidResponse(InvalidResponse::Checksum(
-                    Part::Exception,
-                )));
+                return Err(ExchangeError::ExceptionChecksum);
             }
 
             let exception = Exception::from(response[2]);
@@ -395,7 +437,7 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
                 "{} Fan rejected function code {:?} with modbus exception {:?}",
                 fan_identifier, function_code, exception
             );
-            return Err(Error::Exception(exception));
+            return Err(ExchangeError::Exception(exception));
         }
 
         if response[1] != function_code {
@@ -403,9 +445,7 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
                 "{} Response used function code {:?} instead of {:?}",
                 fan_identifier, response[1], function_code
             );
-            return Err(Error::InvalidResponse(InvalidResponse::FunctionCode(
-                response[1],
-            )));
+            return Err(ExchangeError::FunctionCode(response[1]));
         }
 
         Ok(())
@@ -413,15 +453,13 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
 
     /// Fills the whole buffer or fails. Reading exactly the frame length avoids the short reads
     /// [`Read::read`] would allow, which would leave the rest of the frame for the next caller.
-    /// The part is carried into the error so a failure says which read did not complete
-    async fn read_exact(&mut self, buffer: &mut [u8], part: Part) -> Result<(), Error> {
+    /// Which part of the frame this was is added by the caller, which is the only one that knows
+    async fn receive_exact(&mut self, buffer: &mut [u8]) -> Result<(), ReceiveFailure> {
         match with_timeout(configuration::FAN_TIMEOUT, self.uart.read_exact(buffer)).await {
             Ok(Ok(())) => Ok(()),
-            Ok(Err(ReadExactError::UnexpectedEof)) => {
-                Err(Error::InvalidResponse(InvalidResponse::Incomplete(part)))
-            }
-            Ok(Err(ReadExactError::Other(_error))) => Err(Error::ResponseUart(part)),
-            Err(_timeout) => Err(Error::ResponseTimeout(part)),
+            Ok(Err(ReadExactError::UnexpectedEof)) => Err(ReceiveFailure::Incomplete),
+            Ok(Err(ReadExactError::Other(_error))) => Err(ReceiveFailure::Uart),
+            Err(_timeout) => Err(ReceiveFailure::Timeout),
         }
     }
 
