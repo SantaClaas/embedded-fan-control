@@ -5,3 +5,7 @@
 # Vendor documentation such as the ebm-papst MODBUS specification. Copyrighted, and only
 # needed locally as a reference. Use git add -f to commit one deliberately
 *.pdf
+
+# Working directories Claude Code creates for agent sessions. Live git worktrees with their
+# own checkouts and build output, ephemeral and hundreds of megabytes
+/.claude/worktrees
