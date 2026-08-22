@@ -2,3 +2,6 @@
 /.idea
 .DS_Store
 .env
+# Vendor documentation such as the ebm-papst MODBUS specification. Copyrighted, and only
+# needed locally as a reference. Use git add -f to commit one deliberately
+*.pdf
