@@ -54,6 +54,14 @@ const _: () = {
 /// the client will stop waiting for a response which can lead to a disconnect or retry in some cases.
 pub(crate) const MQTT_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// The MQTT connection is established again after it was lost. The wait between attempts starts
+/// at this value and doubles up to [`MQTT_RECONNECT_BACKOFF_MAX`], so a broker that is down for a
+/// while is not asked every second while a short hiccup is still recovered from quickly.
+pub(crate) const MQTT_RECONNECT_BACKOFF_INITIAL: Duration = Duration::from_secs(1);
+
+/// The longest the client waits between two attempts to reconnect to the MQTT broker.
+pub(crate) const MQTT_RECONNECT_BACKOFF_MAX: Duration = Duration::from_secs(60);
+
 /// The timeout to wait for a response from the fans before cancelling waiting for a response.
 pub(crate) const FAN_TIMEOUT: Duration = Duration::from_secs(5);
 

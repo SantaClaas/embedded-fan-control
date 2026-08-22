@@ -16,7 +16,8 @@ use core::task::Poll;
 use cyw43::{Control, NetDriver};
 use defmt::{Format, error, info, unwrap, warn};
 use embassy_executor::Spawner;
-use embassy_futures::join::join5;
+use embassy_futures::join::join3;
+use embassy_futures::select::{Either3, select3};
 use embassy_net::dns::{DnsQueryType, DnsSocket};
 use embassy_net::driver::Driver;
 use embassy_net::tcp::{TcpSocket, TcpWriter};
@@ -101,8 +102,25 @@ async fn handle_ping_response(
     signal.signal(ping_response);
 }
 
-enum ClientState {
-    ConnectionLost,
+/// Why an MQTT session ended. Every variant means the connection to the broker is gone and has to
+/// be established again, so the session futures return this instead of signalling a state that
+/// nobody listens to.
+#[derive(Format)]
+enum SessionEnd {
+    /// The broker closed the TCP connection.
+    BrokerClosedConnection,
+    /// The broker sent a disconnect packet, which means it will not accept anything else on this
+    /// connection.
+    BrokerDisconnected,
+    /// Reading from the socket failed.
+    ReadError,
+    /// A packet could not be split into its parts, which means the stream is out of sync and
+    /// nothing that follows can be trusted.
+    MalformedPacket,
+    /// The keep alive ping request could not be sent.
+    PingRequestFailed,
+    /// The broker did not answer the keep alive ping request within [`configuration::MQTT_TIMEOUT`].
+    PingResponseTimeout,
 }
 
 async fn listen<
@@ -114,10 +132,9 @@ async fn listen<
 >(
     reader: &mut impl Read<Error = ReadError>,
     sender: &channel::Sender<'_, CriticalSectionRawMutex, Result<Send, FromError>, SEND>,
-    client_state: &Signal<CriticalSectionRawMutex, ClientState>,
     acknowledgements: &Mutex<CriticalSectionRawMutex, [bool; SUBSCRIPTIONS]>,
     ping_response_signal: &Signal<CriticalSectionRawMutex, PingResponse>,
-) {
+) -> SessionEnd {
     let mut buffer = [0; 1024];
     loop {
         info!("[MQTT/listen] Waiting for packet");
@@ -126,13 +143,12 @@ async fn listen<
             // This indicates the TCP connection was closed. (See embassy-net documentation)
             Ok(0) => {
                 warn!("MQTT broker closed connection");
-                client_state.signal(ClientState::ConnectionLost);
-                return;
+                return SessionEnd::BrokerClosedConnection;
             }
             Ok(bytes_read) => bytes_read,
             Err(error) => {
                 warn!("Error reading from MQTT broker: {:?}", error);
-                return;
+                return SessionEnd::ReadError;
             }
         };
 
@@ -142,7 +158,7 @@ async fn listen<
             Ok(parts) => parts,
             Err(error) => {
                 warn!("Error reading MQTT packet: {:?}", error);
-                return;
+                return SessionEnd::MalformedPacket;
             }
         };
 
@@ -217,7 +233,10 @@ async fn listen<
                 let disconnect =
                     Disconnect::try_decode(parts.flags, parts.variable_header_and_payload);
                 info!("Disconnect {:?}", disconnect);
-                //TODO disconnect TCP connection
+
+                // The broker will not accept anything else on this connection, so end the session
+                // and let the reconnect loop close the socket and start over
+                return SessionEnd::BrokerDisconnected;
             }
             other => info!("Unsupported packet type {}", other),
         }
@@ -328,9 +347,8 @@ async fn set_up_subscriptions<T: Publish, const SUBSCRIPTIONS: usize>(
 async fn keep_alive(
     writer: &Mutex<CriticalSectionRawMutex, TcpWriter<'_>>,
     last_packet: &Signal<CriticalSectionRawMutex, Instant>,
-    client_state: &Signal<CriticalSectionRawMutex, ClientState>,
     ping_response: &Signal<CriticalSectionRawMutex, PingResponse>,
-) {
+) -> SessionEnd {
     // Send keep alive packets after connection with connect packet is established.
     // Wait for a packet to be sent or the keep alive interval to time the wait out.
     // If the keep alive timed the wait out, send a ping request packet.
@@ -355,8 +373,7 @@ async fn keep_alive(
                         "[Keep Alive] Error sending keep alive ping request: {:?}",
                         error
                     );
-                    client_state.signal(ClientState::ConnectionLost);
-                    return;
+                    return SessionEnd::PingRequestFailed;
                 }
 
                 // Keep alive is time from when the last packet was sent and not when the ping response
@@ -370,8 +387,7 @@ async fn keep_alive(
                 {
                     // Assume disconnect from server
                     error!("[Keep Alive] Timeout waiting for ping response. Disconnecting");
-                    client_state.signal(ClientState::ConnectionLost);
-                    return;
+                    return SessionEnd::PingResponseTimeout;
                 }
 
                 let response_duration = Instant::now() - last_send;
@@ -573,6 +589,13 @@ async fn handle_publish_send<'receiver, Send: Publish, const SEND: usize>(
         info!("[Publish Send] Message sent to MQTT outgoing");
     }
 }
+
+/// Keeps the fan controller connected to the MQTT broker for as long as it is powered.
+///
+/// Runs one session at a time and never returns: when a session ends, everything belonging to it
+/// is dropped, the socket is closed and a new connection is established after a backoff. The fans
+/// keep running and the button keeps working while there is no connection, so being disconnected
+/// is a normal state to recover from rather than a reason to give up.
 pub(super) async fn mqtt_with_connect<
     'tcp,
     'sender,
@@ -595,91 +618,130 @@ pub(super) async fn mqtt_with_connect<
     // Now we can use it
     let mut receive_buffer = [0; 1024];
     let mut send_buffer = [0; 1024];
-    let mut socket = TcpSocket::new(stack, &mut receive_buffer, &mut send_buffer);
 
-    info!("[MQTT/main] Resolving MQTT broker IP address");
-    // Get home assistant MQTT broker IP address
-    let address = resolve_mqtt_broker_address(stack, mqtt_broker_configuration.address).await;
-    info!("[MQTT/main] MQTT broker IP address resolved");
+    // Every attempt that fails and every session that ends comes back here. The wait between
+    // attempts doubles up to a cap so a broker that stays down is not asked every second, and it
+    // is reset as soon as an MQTT connection was established.
+    let mut backoff = configuration::MQTT_RECONNECT_BACKOFF_INITIAL;
 
-    info!("[MQTT/main] Connecting to MQTT broker through TCP");
-    let endpoint = IpEndpoint::new(address, configuration::MQTT_BROKER_PORT);
-    // Connect
+    loop {
+        // A fresh socket per attempt. Reusing one would mean waiting for the previous connection
+        // to be fully closed first and the buffers are only borrowed for as long as it lives.
+        let mut socket = TcpSocket::new(stack, &mut receive_buffer, &mut send_buffer);
 
-    while let Err(error) = socket.connect(endpoint).await {
-        info!(
-            "[MQTT/main] Error connecting to Home Assistant MQTT broker: {:?}",
-            error
-        );
-        Timer::after_millis(500).await;
+        'attempt: {
+            info!("[MQTT/main] Resolving MQTT broker IP address");
+            // Get home assistant MQTT broker IP address
+            let address =
+                resolve_mqtt_broker_address(stack, mqtt_broker_configuration.address).await;
+            info!("[MQTT/main] MQTT broker IP address resolved");
+
+            info!("[MQTT/main] Connecting to MQTT broker through TCP");
+            let endpoint = IpEndpoint::new(address, configuration::MQTT_BROKER_PORT);
+
+            // One attempt only. Retrying is what the surrounding loop does, and doing it here as
+            // well would skip the backoff for the case that is most likely to need it.
+            if let Err(error) = socket.connect(endpoint).await {
+                warn!(
+                    "[MQTT/main] Error connecting to Home Assistant MQTT broker: {:?}",
+                    error
+                );
+                break 'attempt;
+            }
+            info!("[MQTT/main] Connected to MQTT broker through TCP");
+
+            use crate::mqtt::task;
+
+            //TODO error handling
+            let packet = defmt::unwrap!(Connect::try_from(mqtt_broker_configuration));
+
+            // The session borrows the socket through the reader and writer halves. Keeping it in
+            // its own scope ends those borrows so the socket can be closed below.
+            let session_end = {
+                info!("[MQTT/main] Establishing MQTT connection");
+                let (mut reader, mut writer) = socket.split();
+
+                if let Err(error) = task::connect(&mut writer, &mut reader, packet).await {
+                    warn!("[MQTT/main] Error connecting to MQTT broker: {:?}", error);
+                    break 'attempt;
+                };
+                info!("[MQTT/main] MQTT connection established");
+
+                // The connection works, so the next failure is a new problem and not a broker that
+                // has been unreachable for a while
+                backoff = configuration::MQTT_RECONNECT_BACKOFF_INITIAL;
+
+                //TODO yes static "global" state is bad, but I am still learning how to use wakers and polling
+                // with futures so this will be refactored when I made it work
+                // Contains the status of the subscribe packets send out. The packet identifier represents the
+                // index in the array
+                let acknowledgements: Mutex<CriticalSectionRawMutex, [bool; SUBSCRIPTIONS_LENGTH]> =
+                    Mutex::new([false; SUBSCRIPTIONS_LENGTH]);
+                // The waker needs to be woken to complete the subscribe acknowledgement future.
+                // The embassy documentation does not explain when to use [`AtomicWaker`] but I am assuming
+                // it is useful for cases like this where I need to mutate a static.
+                let waker: AtomicWaker = AtomicWaker::new();
+
+                let ping_response: Signal<CriticalSectionRawMutex, PingResponse> = Signal::new();
+
+                let outgoing: Channel<CriticalSectionRawMutex, Message<Send>, 8> = Channel::new();
+                // The instant when the last packet was sent to determine when the next keep alive has to be sent
+                let last_packet: Signal<CriticalSectionRawMutex, Instant> = Signal::new();
+
+                // Using a mutex for the writer, so it can be shared between the task that sends messages (for
+                // subscribing and publishing fan speed updates) and the task that sends the keep alive ping
+                let writer = Mutex::<CriticalSectionRawMutex, TcpWriter<'_>>::new(writer);
+
+                // Future 1
+                let listen = listen(&mut reader, &sender, &acknowledgements, &ping_response);
+
+                // Future 2
+                let talk = talk(&writer, &outgoing, &last_packet);
+
+                // Future 3
+                let set_up = set_up_subscriptions(
+                    non_zero_u16!(1),
+                    &acknowledgements,
+                    &outgoing,
+                    &SUBSCRIPTIONS,
+                    &waker,
+                );
+
+                // Future 4
+                let keep_alive = keep_alive(&writer, &last_packet, &ping_response);
+
+                // Future 5
+                let handle_publish_send = handle_publish_send(receiver, &outgoing);
+
+                // Only listening and the keep alive notice that the connection is gone. Selecting
+                // on them cancels the other three by dropping them, which is the point: they would
+                // otherwise keep waiting on a dead socket forever. Anything they had picked up but
+                // not yet written is lost with them, which is acceptable for state updates where
+                // only the latest value matters.
+                match select3(listen, keep_alive, join3(talk, set_up, handle_publish_send)).await {
+                    Either3::First(session_end) | Either3::Second(session_end) => session_end,
+                    Either3::Third(_) => defmt::unreachable!(
+                        "Talking and piping publishes out never return, so neither does joining them"
+                    ),
+                }
+            };
+
+            warn!(
+                "[MQTT/main] Lost connection to MQTT broker: {:?}. Reconnecting",
+                session_end
+            );
+        }
+
+        // Send a reset and wait for it to go out so the broker does not keep a half open
+        // connection around, then release the socket before waiting
+        socket.abort();
+        if let Err(error) = socket.flush().await {
+            warn!("[MQTT/main] Error closing the TCP connection: {:?}", error);
+        }
+        drop(socket);
+
+        info!("[MQTT/main] Reconnecting to MQTT broker in {:?}", backoff);
+        Timer::after(backoff).await;
+        backoff = Duration::min(backoff * 2, configuration::MQTT_RECONNECT_BACKOFF_MAX);
     }
-    info!("[MQTT/main] Connected to MQTT broker through TCP");
-
-    use crate::mqtt::task;
-
-    //TODO error handling
-    let packet = defmt::unwrap!(Connect::try_from(mqtt_broker_configuration));
-
-    info!("[MQTT/main] Establishing MQTT connection");
-    let (mut reader, mut writer) = socket.split();
-
-    if let Err(error) = task::connect(&mut writer, &mut reader, packet).await {
-        warn!("[MQTT/main] Error connecting to MQTT broker: {:?}", error);
-        return;
-    };
-    info!("[MQTT/main] MQTT connection established");
-
-    //TODO yes static "global" state is bad, but I am still learning how to use wakers and polling
-    // with futures so this will be refactored when I made it work
-    // Contains the status of the subscribe packets send out. The packet identifier represents the
-    // index in the array
-    let acknowledgements: Mutex<CriticalSectionRawMutex, [bool; SUBSCRIPTIONS_LENGTH]> =
-        Mutex::new([false; SUBSCRIPTIONS_LENGTH]);
-    // The waker needs to be woken to complete the subscribe acknowledgement future.
-    // The embassy documentation does not explain when to use [`AtomicWaker`] but I am assuming
-    // it is useful for cases like this where I need to mutate a static.
-    let waker: AtomicWaker = AtomicWaker::new();
-
-    let ping_response: Signal<CriticalSectionRawMutex, PingResponse> = Signal::new();
-
-    let client_state: Signal<CriticalSectionRawMutex, ClientState> = Signal::new();
-
-    let outgoing: Channel<CriticalSectionRawMutex, Message<Send>, 8> = Channel::new();
-    // The instant when the last packet was sent to determine when the next keep alive has to be sent
-    let last_packet: Signal<CriticalSectionRawMutex, Instant> = Signal::new();
-
-    // Using a mutex for the writer, so it can be shared between the task that sends messages (for
-    // subscribing and publishing fan speed updates) and the task that sends the keep alive ping
-    let writer = Mutex::<CriticalSectionRawMutex, TcpWriter<'_>>::new(writer);
-
-    // Future 1
-    let listen = listen(
-        &mut reader,
-        &sender,
-        &client_state,
-        &acknowledgements,
-        &ping_response,
-    );
-
-    // Future 2
-    let talk = talk(&writer, &outgoing, &last_packet);
-
-    // Future 3
-    let set_up = set_up_subscriptions(
-        non_zero_u16!(1),
-        &acknowledgements,
-        &outgoing,
-        &SUBSCRIPTIONS,
-        &waker,
-    );
-
-    // Future 4
-    let keep_alive = keep_alive(&writer, &last_packet, &client_state, &ping_response);
-
-    // Future 5
-    let handle_publish_send = handle_publish_send(receiver, &outgoing);
-
-    //TODO cancel all tasks when client loses connection
-
-    join5(listen, talk, keep_alive, set_up, handle_publish_send).await;
 }

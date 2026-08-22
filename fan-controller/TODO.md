@@ -51,20 +51,50 @@ first flash.
 Still open in the same area: `src/modbus/client.rs:187`, why the flush must be blocking to avoid
 `WouldBlock`.
 
-**2. The MQTT client never reconnects** — `src/task.rs:682`, plus the reboot item in `README.md`
+**2. The MQTT client never reconnects** — done, `src/task.rs`
 
-`mqtt_routine` (`src/main.rs:520`) calls `mqtt_with_connect` exactly once, with no surrounding loop.
-Inside, `join5` completes as soon as `listen` or `keep_alive` returns, and both return on a read
-error or timeout. When that happens the task finishes and is never respawned, so after any broker
-or Wi-Fi drop the controller is offline until it is power cycled.
+`mqtt_routine` (`src/main.rs`) called `mqtt_with_connect` exactly once, and the session inside it
+had no way to end cleanly: `listen` and `keep_alive` returned on a read error, a timeout or a
+closed connection, but `talk` and `handle_publish_send` loop forever, so `join5` never completed
+and the task hung on a dead socket. Either way the controller was offline until it was power
+cycled, quietly — the button routine is independent and keeps working, and no LED pattern signals
+that Home Assistant has been disconnected.
 
-The failure is quiet, which makes it worse: the button routine is independent and keeps working, and
-no LED pattern signals that Home Assistant has been disconnected.
+`mqtt_with_connect` is now a loop that runs one session at a time and never returns. Per attempt it
+creates a fresh socket, resolves the broker address, connects once, and runs the session; when the
+session ends it aborts the socket, flushes so the reset actually goes out, and waits before trying
+again. The wait starts at `MQTT_RECONNECT_BACKOFF_INITIAL` (1 s), doubles up to
+`MQTT_RECONNECT_BACKOFF_MAX` (60 s), and is reset as soon as an MQTT connection is established, so
+a short hiccup recovers immediately and a broker that is down for the evening is not asked every
+second. The TCP connect no longer retries on its own — that was the one path that would have
+skipped the backoff entirely.
 
-The initial TCP connect already retries forever (`src/task.rs:609`), so only post-connect loss is
-affected. Wrap the session in a reconnect loop with backoff, or take the watchdog-reboot approach
-already sketched in `README.md`. `src/task.rs:682` is the related cleanup — cancel the sibling tasks
-on connection loss rather than relying on `join5` unwinding.
+The session is now `select3(listen, keep_alive, join3(talk, set_up_subscriptions,
+handle_publish_send))`. Only the first two notice that the connection is gone; selecting on them
+drops the other three, which cancels them. That is the `src/task.rs` "cancel all tasks" TODO, and it
+is what makes reconnecting possible at all — everything belonging to a session (subscription
+acknowledgements, the outgoing channel, the writer mutex) is scoped to it and rebuilt on the next
+one, so subscriptions are re-established automatically.
+
+`listen` and `keep_alive` return a `SessionEnd` describing why instead of signalling a
+`ClientState` that nothing ever waited on, so the reconnect log says whether the broker closed the
+connection, sent a disconnect packet, the socket read failed, a packet could not be parsed, or the
+keep alive ping went unanswered. The write-only `ClientState` signal is gone. A received disconnect
+packet used to be logged and otherwise ignored, leaving the session to limp on until the keep alive
+timed out; it now ends the session like any other lost connection, which is also the `src/task.rs`
+"close the TCP connection on `Disconnect`" TODO.
+
+Untested on hardware. Worth watching on the first flash: that a broker restart is actually noticed
+and recovered from, and that reusing the socket buffers across attempts does not leave the stack in
+a bad state.
+
+Follow-up in the same area: nothing is re-announced after reconnecting. Home Assistant keeps its
+discovered entities, so the device does not disappear, but its state is whatever it was before the
+drop until the next fan change publishes a new one. Re-publishing the discovery payload and the
+current display state on every successful connect needs a signal from the session out to
+`display_routine`, which is easier once P1 item 3 has removed the `Option` from the display state.
+Messages that `talk` or `handle_publish_send` had picked up but not yet written are also lost when
+the session is cancelled; for state updates where only the latest value matters that is acceptable.
 
 ### P1 — state is wrong after every reset
 
@@ -125,16 +155,14 @@ latest-wins primitive fits better than blocking. Worth factoring into one helper
 
 | Where | Item |
 |---|---|
-| `src/task.rs:682` | Cancel all tasks when the client loses connection — see P0 item 2 |
-| `src/task.rs:45` | Rework subscribe acknowledgement into a channel that sends the packet identifier |
-| `src/task.rs:71` | `wait_for_acknowledgement` can hang if called concurrently: one waker plus a `try_lock`. Use `embassy-sync::waitqueue` and/or a blocking mutex |
-| `src/task.rs:632` | Replace the static "global" acknowledgement state once wakers and polling are settled |
-| `src/task.rs:300` | Free packet-identifier management |
-| `src/task.rs:220` | Actually close the TCP connection on `Disconnect` |
-| `src/task.rs:620` | Real error handling instead of `defmt::unwrap!` on `Connect::try_from` |
-| `src/task.rs:516` | Support IPv6 in broker DNS resolution (currently `DnsQueryType::A` only) |
+| `src/task.rs:46` | Rework subscribe acknowledgement into a channel that sends the packet identifier |
+| `src/task.rs:72` | `wait_for_acknowledgement` can hang if called concurrently: one waker plus a `try_lock`. Use `embassy-sync::waitqueue` and/or a blocking mutex |
+| `src/task.rs:674` | Replace the static "global" acknowledgement state once wakers and polling are settled |
+| `src/task.rs:319` | Free packet-identifier management |
+| `src/task.rs:655` | Real error handling instead of `defmt::unwrap!` on `Connect::try_from` |
+| `src/task.rs:532` | Support IPv6 in broker DNS resolution (currently `DnsQueryType::A` only) |
 
-The acknowledgement cluster (`:45`, `:71`, `:632`, `:300`) is one refactor, not four. The concurrency
+The acknowledgement cluster (`:46`, `:72`, `:674`, `:319`) is one refactor, not four. The concurrency
 hazard is real but is only exercised at startup with a fixed subscription set today; it becomes
 urgent if subscriptions ever become dynamic.
 
