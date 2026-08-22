@@ -45,31 +45,63 @@ pub(crate) enum Part {
     Exception,
 }
 
-/// The exception codes the fan documents for the two functions this client uses.
-/// See MODBUS Parameter RadiCal im Spiralgehäuse V1.00, sections 1.3.1 and 1.3.3
+/// The exception codes the fan documents for write single register.
+/// See MODBUS Parameter RadiCal im Spiralgehäuse V1.00, section 1.3.3
 #[derive(Debug, Clone, Copy, defmt::Format)]
-pub(crate) enum Exception {
+pub(crate) enum WriteException {
     /// The register address is outside the D000 ... D614 range the fan accepts
     RegisterOutOfRange,
-    /// Reading only: the answer would exceed the 80 byte maximum telegram length, which means
-    /// more than 37 or zero registers were asked for
-    ResponseTooLong,
-    /// The register could not be read or written, because the electronics are defective or,
-    /// for a write, because this password level has no write permission for it
-    AccessRefused,
-    /// A code the specification does not list for these functions
-    Unknown(u8),
+    /// The register could not be written, because the electronics are defective or because this
+    /// password level has no write permission for it
+    WriteRefused,
+    /// A code the specification does not list for this function. `0x03` lands here: it means the
+    /// answer would be too long, which only a read can ask for
+    Unexpected(u8),
 }
 
-impl From<u8> for Exception {
+impl From<u8> for WriteException {
+    fn from(code: u8) -> Self {
+        match code {
+            0x02 => Self::RegisterOutOfRange,
+            0x04 => Self::WriteRefused,
+            other => Self::Unexpected(other),
+        }
+    }
+}
+
+/// The exception codes the fan documents for read holding register.
+/// See MODBUS Parameter RadiCal im Spiralgehäuse V1.00, section 1.3.1
+#[derive(Debug, Clone, Copy, defmt::Format)]
+pub(crate) enum ReadException {
+    /// The register address is outside the D000 ... D614 range the fan accepts
+    RegisterOutOfRange,
+    /// The answer would exceed the 80 byte maximum telegram length, which means more than 37 or
+    /// zero registers were asked for
+    ResponseTooLong,
+    /// The register could not be read because the electronics are defective
+    ReadRefused,
+    /// A code the specification does not list for this function
+    Unexpected(u8),
+}
+
+impl From<u8> for ReadException {
     fn from(code: u8) -> Self {
         match code {
             0x02 => Self::RegisterOutOfRange,
             0x03 => Self::ResponseTooLong,
-            0x04 => Self::AccessRefused,
-            other => Self::Unknown(other),
+            0x04 => Self::ReadRefused,
+            other => Self::Unexpected(other),
         }
     }
+}
+
+/// What the fan is answering with, which its header is what decides
+enum Answer {
+    /// The answer to the function that was requested. Its body follows the header
+    Requested,
+    /// The fan refused. Holds the raw exception code, because the specification lists different
+    /// codes for each function, so only the caller can name it
+    Exception(u8),
 }
 
 /// A failure in the part of a transaction that is the same whatever function was used: sending the
@@ -89,8 +121,6 @@ pub(crate) enum ExchangeError {
     /// The checksum of the exception frame does not match its contents. Only the exception frame
     /// can fail a checksum here, because the header is two bytes and carries none of its own
     ExceptionChecksum,
-    /// The fan answered with a modbus exception instead of performing the request
-    Exception(Exception),
 }
 
 /// Writing a holding register failed. The echo is the part only this function reads, so it is the
@@ -99,6 +129,8 @@ pub(crate) enum ExchangeError {
 pub(crate) enum WriteError {
     /// Failed before the echo was reached
     Exchange(ExchangeError),
+    /// The fan refused the write with a modbus exception instead of performing it
+    Exception(WriteException),
     /// Receiving the echoed register, value and checksum failed
     Echo(ReceiveFailure),
     /// The checksum of the echo does not match its contents
@@ -120,6 +152,8 @@ impl From<ExchangeError> for WriteError {
 pub(crate) enum ReadError {
     /// Failed before the register contents were reached
     Exchange(ExchangeError),
+    /// The fan refused the read with a modbus exception instead of answering it
+    Exception(ReadException),
     /// Receiving the byte count, the register contents and the checksum failed
     Contents(ReceiveFailure),
     /// The checksum of the answer does not match its contents
@@ -263,8 +297,12 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
         // address and function code are read first to find out which one is arriving. Reading
         // exactly as many bytes as the frame holds leaves nothing behind for the next transaction.
         let mut response = [0u8; WRITE_RESPONSE_LENGTH];
-        self.read_header(&mut response, request, fan_identifier)
-            .await?;
+        if let Answer::Exception(code) = self
+            .read_header(&mut response, request, fan_identifier)
+            .await?
+        {
+            return Err(WriteError::Exception(code.into()));
+        }
 
         self.receive_exact(&mut response[HEADER_LENGTH..])
             .await
@@ -318,8 +356,12 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
         // the register contents. Only one register was asked for, so its length is known in
         // advance and the byte count is a check rather than something to act on.
         let mut response = [0u8; READ_RESPONSE_LENGTH];
-        self.read_header(&mut response, request, fan_identifier)
-            .await?;
+        if let Answer::Exception(code) = self
+            .read_header(&mut response, request, fan_identifier)
+            .await?
+        {
+            return Err(ReadError::Exception(code.into()));
+        }
 
         self.receive_exact(&mut response[HEADER_LENGTH..])
             .await
@@ -394,8 +436,11 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
     }
 
     /// Reads the device address and function code every response starts with, and the rest of the
-    /// exception frame when the fan answered with one. Returns once the header is the answer that
-    /// was asked for, so the caller can read the rest of its own frame into the same buffer.
+    /// exception frame when the fan answered with one. On [`Answer::Requested`] the caller can
+    /// read the rest of its own frame into the same buffer.
+    ///
+    /// A refusal comes back as the raw exception code rather than a named one, because the
+    /// specification lists different codes for each function and this is shared between them.
     ///
     /// The buffer has to hold at least [`EXCEPTION_RESPONSE_LENGTH`] bytes
     async fn read_header(
@@ -403,7 +448,7 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
         response: &mut [u8],
         request: &[u8],
         fan_identifier: &str,
-    ) -> Result<(), ExchangeError> {
+    ) -> Result<Answer, ExchangeError> {
         info!("{} Waiting for response from fan", fan_identifier);
         self.receive_exact(&mut response[..HEADER_LENGTH])
             .await
@@ -432,12 +477,11 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
                 return Err(ExchangeError::ExceptionChecksum);
             }
 
-            let exception = Exception::from(response[2]);
             error!(
-                "{} Fan rejected function code {:?} with modbus exception {:?}",
-                fan_identifier, function_code, exception
+                "{} Fan rejected function code {:?} with modbus exception code {:?}",
+                fan_identifier, function_code, response[2]
             );
-            return Err(ExchangeError::Exception(exception));
+            return Ok(Answer::Exception(response[2]));
         }
 
         if response[1] != function_code {
@@ -448,7 +492,7 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
             return Err(ExchangeError::FunctionCode(response[1]));
         }
 
-        Ok(())
+        Ok(Answer::Requested)
     }
 
     /// Fills the whole buffer or fails. Reading exactly the frame length avoids the short reads
