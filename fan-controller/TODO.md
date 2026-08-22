@@ -8,11 +8,12 @@ treat them as a starting point rather than an exact address.
 The first section is a suggested order of work with the reasoning; the sections after it are the
 full inventory grouped by area, so nothing gets lost.
 
-All four ranked items are done. They are kept here rather than deleted because each one records
-what was actually wrong, what was decided, and what has never run on hardware — the four write-ups
-are the closest thing this firmware has to a changelog with reasons. Nothing that follows is ranked;
-pick from the inventory. The one thing worth doing before anything else is flashing the device and
-watching the log, because every one of the four is untested on hardware.
+Everything in the priority section is done: the four ranked items and the cheap win. They are kept
+here rather than deleted because each one records what was actually wrong, what was decided, and
+what has never run on hardware — the write-ups are the closest thing this firmware has to a
+changelog with reasons. Nothing that follows is ranked; pick from the inventory. The one thing
+worth doing before anything else is flashing the device and watching the log, because all four of
+the ranked items are untested on hardware.
 
 ---
 
@@ -189,11 +190,20 @@ which means pulling the bus rather than anything Home Assistant can ask for.
 
 ### Cheap win worth slotting in anywhere
 
-**Make `SetPoint` host-testable** — `src/fan/set_point.rs:67`
+**Make `SetPoint` host-testable** — done, `set_point/`
 
-The `#[cfg(test)]` module never compiles, and `CLAUDE.md` records that it has already rotted once
-and is kept correct by hand. Extracting `SetPoint` into its own crate is a small, self-contained
-change that turns the only meaningful unit tests in the firmware back on.
+The `#[cfg(test)]` module in `src/fan/set_point.rs` never compiled, and it had already rotted once
+and was being kept correct by hand. `SetPoint` now lives in its own `no_std` crate at
+`set_point/`, with `defmt` behind a feature so the same type works on the device and on the host,
+and `fan/mod.rs` re-exports it so every `fan::set_point::…` path still reads the same.
+
+Its tests run: `cd set_point && cargo test`. The two that were rotting are back, and two more cover
+`FromStr`, which every speed Home Assistant asks for goes through and which nothing tested before —
+including the payloads that are not set points at all.
+
+This is the pattern for testing anything else in the firmware: move the logic into its own crate
+and re-export it. Recorded in `CLAUDE.md`, which also no longer claims `bacon test` works in
+`fan-controller`, because that job is from the stock template and the target has no test harness.
 
 ---
 
@@ -267,7 +277,6 @@ or persistent storage in the firmware at all today.
 
 | Where | Item |
 |---|---|
-| `src/fan/set_point.rs:67` | Move `SetPoint` into a host-testable crate so its tests actually run |
 | `documentation.md:53` | Write the Wiring section: Pico W, debug probe, MAX485, status LEDs, button |
 
 ### Remaining items from `README.md`

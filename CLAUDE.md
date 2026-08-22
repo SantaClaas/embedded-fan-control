@@ -35,8 +35,9 @@ cd home_assistant_discovery && cargo test -- serialize_custom_example
 ```
 
 `home_assistant_discovery` uses `insta` snapshots (`src/snapshots/`); accept changes with
-`cargo insta review`. `fan-controller` has a `bacon.toml`; `bacon` defaults to `cargo check`, `c`
-is bound to `clippy-all`, and `bacon test -- <name>` runs a single test.
+`cargo insta review`. `fan-controller` has a `bacon.toml`; `bacon` defaults to `cargo check` and `c`
+is bound to `clippy-all`. Its `test` job comes from the stock template and cannot work — see
+Testing reality below.
 
 ## Build-time configuration (fan-controller)
 
@@ -62,6 +63,7 @@ is bound to `clippy-all`, and `bacon test -- <name>` runs a single test.
 | `fan-controller` | `thumbv6m-none-eabi` | The firmware. Everything below supports it. |
 | `mqtt` | `no_std` | Protocol-level MQTT types shared between firmware and build script. Feature-gated `defmt` / `serde` so the same types work on device and on host. |
 | `topic` | `no_std` | The single source of truth for Home Assistant MQTT topic strings, composed at compile time with `const_format`. Used by both the firmware and `build.rs`. |
+| `set_point` | `no_std` | The `SetPoint` newtype and its bounds, parsing and formatting. Its own crate purely so it can be tested on the host; re-exported by the firmware as `crate::fan::set_point`. Feature-gated `defmt`. |
 | `home_assistant_discovery` | host | Serde model of the Home Assistant MQTT discovery payload. Build-dependency only. `components` is a `BTreeMap` so the generated payload is byte-stable across builds. |
 | `debug-listener` | host | Reads the RS-485/Modbus line off a USB serial adapter to inspect fan traffic. The port path is hardcoded in `src/main.rs`. |
 
@@ -105,7 +107,8 @@ be encoded straight into the TCP buffer without intermediate allocation — ther
 
 ## Domain constants
 
-- Set points are 0..=64_000 (`fan::set_point::MAX`), wrapped in the `SetPoint` newtype.
+- Set points are 0..=64_000 (`set_point::MAX`, re-exported as `fan::set_point::MAX`), wrapped in
+  the `SetPoint` newtype.
 - User-facing speeds are deliberately *not* the full range — `fan::user_setting::{LOW, MEDIUM,
   HIGH}` are tuned to the house and cap at 50 % to reduce wear. Home Assistant is told
   `speed_range_max: 32_000` to match.
@@ -114,15 +117,25 @@ be encoded straight into the TCP buffer without intermediate allocation — ther
 
 ## Testing reality
 
-`home_assistant_discovery` is the only crate whose tests actually run — `cd home_assistant_discovery
-&& cargo test`.
-
 `fan-controller` cannot be tested by any normal means, so don't waste time trying: `cargo test`
 targets `thumbv6m-none-eabi`, which has no test harness, and `cargo test --target
-aarch64-apple-darwin` fails because `cortex-m` uses ARM inline assembly. The `#[cfg(test)]` module
-in `src/fan/set_point.rs` is therefore never compiled. It is kept correct by hand (verified against
-a scratch copy of the module), but it will silently rot again — making `SetPoint` host-testable
-would require extracting it into its own crate.
+aarch64-apple-darwin` fails because `cortex-m` uses ARM inline assembly. A `#[cfg(test)]` module
+anywhere in `fan-controller/src/` is compiled by nothing and will rot unnoticed — `set_point` used
+to be one and did.
+
+Tests therefore only exist in the crates that build for the host:
+
+```bash
+cd set_point && cargo test
+```
+
+```bash
+cd home_assistant_discovery && cargo test
+```
+
+That is also the way to make firmware logic testable at all: move it into its own `no_std` crate
+and re-export it, the way `fan/mod.rs` re-exports `set_point`. Worth doing for anything with rules
+of its own; not worth it for code that only exists to drive a peripheral.
 
 ## Reference documents
 
