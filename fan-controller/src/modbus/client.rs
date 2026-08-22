@@ -209,7 +209,7 @@ fn is_checksum_valid(frame: &[u8]) -> bool {
     *checksum == super::CRC.checksum(data).to_le_bytes()
 }
 
-/// Modbus messages are sent through UART to MAX845 to control fans.
+/// Modbus messages are sent through UART to MAX485 to control fans.
 /// The pin is used to enable the DE pin to switch between reading and writing
 pub(crate) struct Client<'a, UART: uart::Instance, PIN: Pin> {
     uart: BufferedUart<'a, UART>,
@@ -388,7 +388,7 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
         fan_identifier: &str,
     ) -> Result<(), ExchangeError> {
         // Write then read
-        // Set pin setting DE (driver enable) to on (high) on the MAX845 to send data
+        // Set pin setting DE (driver enable) to on (high) on the MAX485 to send data
         self.driver_enable.set_high();
 
         info!("{} Sending message to fan: {:?}", fan_identifier, request);
