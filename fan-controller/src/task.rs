@@ -470,6 +470,12 @@ pub(super) trait Publish {
     /// For example, they can be defined as an enum and match internally to provide the appropriate string for the enum variant.
     fn topic(&self) -> &str;
     fn payload(&self) -> &[u8];
+    /// Whether the broker should keep this message and hand it to whoever subscribes next.
+    /// Almost nothing wants this: state that is published on every change is better re-read than
+    /// remembered. A message about an event nobody was watching for is the exception.
+    fn is_retained(&self) -> bool {
+        false
+    }
 }
 
 pub(super) async fn set_up_network_stack(

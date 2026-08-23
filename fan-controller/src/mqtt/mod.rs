@@ -51,8 +51,8 @@ impl<T: crate::task::Publish> TryEncode for T {
         }
 
         // Fixed header
-        //TODO set flags
-        buffer[*offset] = Self::TYPE << 4;
+        //TODO set the duplicate and QoS flags
+        buffer[*offset] = (Self::TYPE << 4) | u8::from(self.is_retained());
         *offset += 1;
 
         let topic_name = self.topic();

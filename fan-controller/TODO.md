@@ -383,7 +383,7 @@ urgent if subscriptions ever become dynamic.
 |---|---|
 | `src/mqtt/packet/publish.rs:158` | Validate there is enough space left in the buffer |
 | `src/mqtt/packet/publish.rs:146` | Validate the topic name contains no MQTT wildcard characters |
-| `src/mqtt/packet/publish.rs:66`, `src/mqtt/mod.rs:54` | Set flags |
+| `src/mqtt/packet/publish.rs:66`, `src/mqtt/mod.rs:54` | Set the duplicate and QoS flags. Retain is done — the reset cause is published with it |
 | `src/mqtt/packet/connect.rs:40` | Check the fixed header can even be written |
 | `src/mqtt/packet/subscribe.rs:127` | Support packet identifiers greater than `u8::MAX` |
 | `src/mqtt/packet/subscribe_acknowledgement.rs:18` | Convert to the decode trait |

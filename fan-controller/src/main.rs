@@ -40,6 +40,7 @@ mod debounce;
 mod fan;
 mod modbus;
 mod mqtt;
+mod reset_cause;
 mod task;
 
 bind_interrupts!(struct Irqs {
@@ -540,6 +541,9 @@ const _: () = core::assert!(
 
 enum OutgoingPublish {
     Discovery,
+    /// Why the controller last reset. Published once per boot, retained, because the resets worth
+    /// diagnosing happen when nobody is watching
+    ResetCause(reset_cause::ResetCause),
     UpdateSpeed {
         fan: Fan,
         payload: UpdateSpeedPayload,
@@ -561,6 +565,7 @@ impl Publish for OutgoingPublish {
     fn topic(&self) -> &str {
         match self {
             OutgoingPublish::Discovery => topic::fan_controller::DISCOVERY,
+            OutgoingPublish::ResetCause(_) => topic::fan_controller::RESET_CAUSE,
             OutgoingPublish::UpdateSpeed {
                 fan: Fan::One,
                 payload: _,
@@ -589,6 +594,7 @@ impl Publish for OutgoingPublish {
     fn payload(&self) -> &[u8] {
         match self {
             OutgoingPublish::Discovery => DISCOVERY_PAYLOAD,
+            OutgoingPublish::ResetCause(cause) => cause.as_str().as_bytes(),
             OutgoingPublish::UpdateSpeed { fan: _, payload } => {
                 // set_point.0.to_be_bytes()
                 payload.0.as_bytes()
@@ -599,6 +605,10 @@ impl Publish for OutgoingPublish {
             },
             OutgoingPublish::UpdateSensors { fan: _, payload } => payload.as_bytes(),
         }
+    }
+
+    fn is_retained(&self) -> bool {
+        matches!(self, OutgoingPublish::ResetCause(_))
     }
 }
 
@@ -1235,6 +1245,10 @@ const CHANNEL_SIZE: usize = 8;
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
+    // Read before anything else touches the chip, so nothing here can be mistaken for the reason
+    // the last boot ended
+    let boot_reset_cause = reset_cause::read();
+
     let Peripherals {
         PIN_23: pin_23,
         PIN_25: pin_25,
@@ -1329,6 +1343,11 @@ async fn main(spawner: Spawner) {
     info!("[Main] Seinding discovery");
     sender_out.send(OutgoingPublish::Discovery).await;
     info!("[Main] Sent out discocery");
+
+    info!("[Main] Reset cause: {}", boot_reset_cause);
+    sender_out
+        .send(OutgoingPublish::ResetCause(boot_reset_cause))
+        .await;
     unwrap!(spawner.spawn(display_routine(display_receivers, &LED_STATE, sender_out)));
 
     static FAN_ONE_STATE: SetPointSignal = Signal::new();

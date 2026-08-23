@@ -12,6 +12,11 @@ pub mod fan_controller {
 
     pub const DISCOVERY: &str = formatcp!("{DISCOVERY_PREFIX}/{COMPONENT}/{OBJECT_ID}/config");
 
+    /// Why the controller last reset, published retained on boot. Retained because the resets
+    /// worth diagnosing are rare and nobody is subscribed when they happen — the answer has to
+    /// still be there whenever someone next looks.
+    pub const RESET_CAUSE: &str = formatcp!("{OBJECT_ID}/reset-cause");
+
     /// The topic to publish the on/off state of the fan controller.
     pub const STATE: &str = formatcp!("{OBJECT_ID}/on/state");
     /// The topic to subscribe to for setting the on/off state of the fan controller.
