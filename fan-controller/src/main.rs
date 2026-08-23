@@ -108,15 +108,17 @@ async fn input_routine(
 ) {
     // The button just rotates through fan settings. This is because we currently only have one button
     // Will probably use something more advanced in the future
-    let mut button = Debouncer::new(Input::new(pin, Pull::Up), Duration::from_millis(250));
+    // 50 ms is longer than the line bounces and longer than anything interference couples into
+    // the wiring, and shorter than the shortest deliberate tap
+    let mut button = Debouncer::new(Input::new(pin, Pull::Up), Duration::from_millis(50));
 
     loop {
         // Falling edge for our button -> button down (pressing down
         // Rising edge for our button -> button up (letting go after press)
         // Act on press as there is delay between pressing and letting go and it feels snappier
-        info!("[Button] Waiting for falling edge");
+        info!("[Button] Waiting for press");
         button.debounce_falling_edge().await;
-        info!("[Button] Falling edge detected");
+        info!("[Button] Press detected");
 
         // As the button controls both fans it will force them to be synchronous
         // Take the lowest of both fan states to decide the next advancement
