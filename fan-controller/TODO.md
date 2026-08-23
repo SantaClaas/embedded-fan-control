@@ -11,9 +11,10 @@ full inventory grouped by area, so nothing gets lost.
 Everything in the priority section is done: the four ranked items, the cheap win, and the sensor
 polling that followed them. They are kept here rather than deleted because each one records what was
 actually wrong, what was decided, and what has never run on hardware — the write-ups are the closest
-thing this firmware has to a changelog with reasons. Nothing that follows is ranked; pick from the
-inventory. The one thing worth doing before anything else is flashing the device and watching the
-log, because none of them have run on hardware.
+thing this firmware has to a changelog with reasons. What follows them is what has been asked for
+but not started, and then the unranked inventory to pick from. The one thing worth doing before
+anything else is flashing the device and watching the log, because none of the finished items have
+run on hardware.
 
 ---
 
@@ -256,6 +257,90 @@ and re-export it. Recorded in `CLAUDE.md`, which also no longer claims `bacon te
 
 ---
 
+## Asked for, not yet started
+
+### Break up `main.rs`
+
+`src/main.rs` is 1,396 lines and holds nearly everything that is not a protocol: the button
+routine, the display debounce and its MQTT publishing, the LED state machine and its animations,
+the MQTT brain that interprets incoming publishes, the fan control routine with its retry and
+correction logic, the sensor polling routine, the shared type aliases and statics, and the pin
+destructuring in `main()` itself. Reading any one of those means scrolling past the other seven.
+
+The task boundaries are already the seams — the routines only talk through the statics declared in
+`main()`, so moving each into its own module costs nothing structurally. What needs deciding is
+where the shared vocabulary goes: `RequestedSetPoint`, `LedState`/`Blink`, the `DisplayState*`
+aliases, `ModbusMutex`/`ModbusOnceLock`, and `back_off`/`MAX_ATTEMPTS` are used across several
+routines. `main()` should end up as the wiring — peripherals, statics, spawns — and nothing else.
+
+`src/task.rs` (778 lines) is the second candidate and may be the bigger win: it is the MQTT
+session, the reconnect loop, the subscription acknowledgement machinery and the packet plumbing in
+one file, and the acknowledgement cluster listed under *MQTT client* below is a refactor waiting
+inside it. `src/modbus/client.rs` (607 lines) is long but coherent — one client, one transaction
+per function code — so it is likely fine as it is.
+
+Worth doing before the next feature rather than after, since the item below adds code to
+`main.rs` in several places. Nothing here changes behaviour, and nothing in `fan-controller` can be tested, so the
+only check is that it still compiles and still runs on hardware — which argues for moving code
+verbatim first and cleaning up in separate commits.
+
+### A Home Assistant toggle for running the fans out of sync
+
+Not in there today, in any form, but most of the pieces are. Home Assistant already exposes the two
+fans as separate entities, so the per-fan command path exists — it is just overridden.
+`is_synchronization_on` is a hardcoded `true` in `mqtt_brain_routine` (`src/main.rs:698`) that
+mirrors every speed command onto the other fan, and `fan_control_routine` pushes the other fan back
+to its last good speed when a write fails (`src/main.rs:930`), which is a second, independent way
+the two are kept equal. Both existing `//TODO` comments there are this item.
+
+The control is a switch in Home Assistant, not a second physical button. The physical button stays
+what it is — the thing that puts the fans back together — so pressing it turns synchronization back
+*on* in addition to cycling both fans to the same speed. It already signals the same set point to
+both (`src/main.rs:104`), so the speeds take care of themselves; what is new is that it has to set
+the mode and get the toggle in Home Assistant to follow.
+
+The work, in the order it has to happen:
+
+1. **A switch component in the discovery payload.** `home_assistant_discovery::Component` only has
+   `Fan` and `Sensor` variants; a `Switch` has to be added with its state and command topics. The
+   topics belong in `topic/src/lib.rs` next to the existing controller-wide `STATE`/`COMMAND`,
+   since synchronization is a property of the controller rather than of either fan, and the
+   component itself is added in `set_discovery_payload()` in `build.rs`. Watch the payload size:
+   `main.rs` asserts at compile time that it fits `mqtt::task::SEND_BUFFER_SIZE`, and that
+   assertion exists precisely because a payload that does not fit is refused and only logged.
+2. **A sixth subscription.** `SUBSCRIPTIONS` in `src/task.rs:441` is a fixed array of five with a
+   `SUBSCRIPTIONS_LENGTH` next to it; the command topic joins it. Decoding needs a new
+   `IncomingPublish` variant alongside `FanCommand` (`src/main.rs:427`) and an arm in the
+   `TryFrom<Publish>` match (`src/main.rs:450`) — the payload is `ON`/`OFF`, which
+   the existing arms match as raw `b"ON"`/`b"OFF"` bytes inline rather than through a shared
+   parser.
+3. **Somewhere for the mode to live.** It is read by `mqtt_brain_routine` and needs to be honoured
+   by both `fan_control_routine`s in the correction path, which are different tasks, and written by
+   both the MQTT brain and the button routine. A `Watch<bool>` with a receiver per reader fits the
+   existing vocabulary; an `AtomicBool` would do too but would not let anything wait on a change.
+4. **Publish the switch state back.** Home Assistant has to see the toggle flip when the button
+   turns synchronization back on, the same way `display_routine` publishes fan state after a
+   confirmed write. Whether that publish lives in `display_routine` or next to whatever owns the
+   mode is the one structural choice here.
+5. **Honour the mode in the correction path** (`src/main.rs:930`). Leaving this out would mean a
+   failed write silently re-synchronizes fans that were deliberately set apart.
+6. **Snap the fans together when synchronization is turned on.** Decided: turning the toggle on
+   takes the *minimum* of both confirmed set points and signals it to both fans, the same base
+   state the button picks (`src/main.rs:121`). Without this the toggle changes no set point at all,
+   so the fans would sit at whatever speeds they were left at until the next command — turning
+   synchronization on and watching nothing happen is the wrong answer. Taking the minimum rather
+   than the maximum keeps the house from being pushed harder than either fan was asked for. Worth
+   factoring out of `input_routine` so the button and the toggle share one function instead of two
+   copies of the same rule.
+
+One thing is still open. The LED protocol already has an out-of-sync pattern, but it means
+*unintentionally* out of sync — a failed write — and `documentation.md` describes it that way.
+Deliberately unequal fans would blink the error pattern forever unless the two are distinguished.
+`documentation.md` needs updating either way, both for the LEDs and for the new entity in the
+onboarding sequence.
+
+---
+
 ## Full inventory
 
 ### Fan state and control logic — `src/main.rs`
@@ -321,12 +406,6 @@ password, broker address, and broker port configurable at runtime instead of bak
 `build.rs`. This is the same underlying work as the aspirational web-configuration item in
 `README.md`, and it is the largest single change on this list — there is no runtime configuration
 or persistent storage in the firmware at all today.
-
-### Testing and documentation
-
-| Where | Item |
-|---|---|
-| `documentation.md:53` | Write the Wiring section: Pico W, debug probe, MAX485, status LEDs, button |
 
 ### Remaining items from `README.md`
 

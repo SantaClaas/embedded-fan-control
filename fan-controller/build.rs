@@ -130,7 +130,7 @@ struct SensorIdentifiers {
 /// names `fan_sensor::Reading` serializes, which is the one place they have to agree.
 ///
 /// Built per fan rather than written out twice, because only the identifiers and the name differ
-fn fan_sensor_components(
+fn create_fan_sensor_components(
     fan_name: &str,
     identifiers: SensorIdentifiers,
 ) -> [(String, Component); 5] {
@@ -203,7 +203,7 @@ fn fan_sensor_components(
 
 /// Everything the fan controller announces to Home Assistant: the two fans, and the five sensors
 /// each of them reports
-fn components() -> BTreeMap<String, Component> {
+fn create_components() -> BTreeMap<String, Component> {
     let mut components = BTreeMap::from([
             // Fan 1
             (
@@ -237,7 +237,7 @@ fn components() -> BTreeMap<String, Component> {
             ),
         ]);
 
-    components.extend(fan_sensor_components(
+    components.extend(create_fan_sensor_components(
         "Fan 1",
         SensorIdentifiers {
             state: topic::fan_controller::fan_1::sensor::STATE,
@@ -250,7 +250,7 @@ fn components() -> BTreeMap<String, Component> {
         },
     ));
 
-    components.extend(fan_sensor_components(
+    components.extend(create_fan_sensor_components(
         "Fan 2",
         SensorIdentifiers {
             state: topic::fan_controller::fan_2::sensor::STATE,
@@ -286,7 +286,7 @@ fn set_discovery_payload(git_hash: &str) {
             software_version: version,
             support_url: Some("https://github.com/SantaClaas/embedded-fan-control"),
         },
-        components: components(),
+        components: create_components(),
         quality_of_service: None,
         state_topic: Some(topic::fan_controller::STATE),
         command_topic: Some(topic::fan_controller::COMMAND),
