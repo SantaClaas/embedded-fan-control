@@ -64,6 +64,7 @@ Testing reality below.
 | `mqtt` | `no_std` | Protocol-level MQTT types shared between firmware and build script. Feature-gated `defmt` / `serde` so the same types work on device and on host. |
 | `topic` | `no_std` | The single source of truth for Home Assistant MQTT topic strings, composed at compile time with `const_format`. Used by both the firmware and `build.rs`. |
 | `set_point` | `no_std` | The `SetPoint` newtype and its bounds, parsing and formatting. Its own crate purely so it can be tested on the host; re-exported by the firmware as `crate::fan::set_point`. Feature-gated `defmt`. |
+| `fan_sensors` | `no_std` | Decoding what a fan reports about itself — actual speed, both temperatures, power, energy — from its input registers, plus the JSON payload Home Assistant reads. Owns the register addresses and the layout of the two runs that are read. Its own crate for the same reason as `set_point`; re-exported as `crate::fan::sensors`. Feature-gated `defmt`. |
 | `home_assistant_discovery` | host | Serde model of the Home Assistant MQTT discovery payload. Build-dependency only. `components` is a `BTreeMap` so the generated payload is byte-stable across builds. |
 | `debug-listener` | host | Reads the RS-485/Modbus line off a USB serial adapter to inspect fan traffic. The port path is hardcoded in `src/main.rs`. |
 
@@ -102,6 +103,15 @@ Flow of a speed change:
    drives `LED_STATE` and publishes state back to MQTT via `OUT`.
 5. `led_routine` renders `LedState`; an in-flight animation is cancelled when the state changes.
 
+Independently of that flow, `sensor_routine` (pool of 2, one per fan address) polls what the fans
+measure about themselves every `SENSOR_POLL_INTERVAL` and publishes it through `OUT`. It shares the
+Modbus mutex with `fan_control_routine` and yields to it: a failed poll is logged and dropped
+rather than retried, because the next poll carries fresher values than a retry would and a silent
+fan would otherwise hold the mutex through a run of timeouts. The fan's maximum speed
+(`D119`, a holding register) is read once and cached, because every speed the fan reports is a
+fraction of it; until it is known the reading reports the speed as `null` rather than withholding
+the other four values.
+
 The `Publish` trait (`task.rs`) plus `TryEncode`/`TryDecode` (`mqtt/mod.rs`) let outgoing messages
 be encoded straight into the TCP buffer without intermediate allocation — there is no allocator.
 
@@ -114,6 +124,14 @@ be encoded straight into the TCP buffer without intermediate allocation — ther
   `speed_range_max: 32_000` to match.
 - Fan Modbus addresses start at `0x02`/`0x03`; `0x01` is avoided as a likely factory default.
 - UART is 19_200 baud, 8 data bits, **even** parity, 1 stop bit.
+- Sensor values live in *input* registers (function code `0x04`), which are read only, unlike the
+  holding registers (`0x03` / `0x06`) the set point lives in. `ReadInputRegisters<COUNT>` asks for a
+  range rather than one register, because a range costs the same round trip; the fan refuses more
+  than 37 registers or an answer over 80 bytes.
+- The Home Assistant discovery payload is encoded into a fixed `mqtt::task::SEND_BUFFER_SIZE`
+  buffer. `main.rs` asserts at compile time that it still fits, because the encoder refuses an
+  oversized packet and only logs it — which would leave a device that runs fine and is never
+  discovered.
 
 ## Testing reality
 
@@ -131,6 +149,10 @@ cd set_point && cargo test
 
 ```bash
 cd home_assistant_discovery && cargo test
+```
+
+```bash
+cd fan_sensors && cargo test
 ```
 
 That is also the way to make firmware logic testable at all: move it into its own `no_std` crate

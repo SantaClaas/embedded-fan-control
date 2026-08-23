@@ -8,12 +8,12 @@ treat them as a starting point rather than an exact address.
 The first section is a suggested order of work with the reasoning; the sections after it are the
 full inventory grouped by area, so nothing gets lost.
 
-Everything in the priority section is done: the four ranked items and the cheap win. They are kept
-here rather than deleted because each one records what was actually wrong, what was decided, and
-what has never run on hardware — the write-ups are the closest thing this firmware has to a
-changelog with reasons. Nothing that follows is ranked; pick from the inventory. The one thing
-worth doing before anything else is flashing the device and watching the log, because all four of
-the ranked items are untested on hardware.
+Everything in the priority section is done: the four ranked items, the cheap win, and the sensor
+polling that followed them. They are kept here rather than deleted because each one records what was
+actually wrong, what was decided, and what has never run on hardware — the write-ups are the closest
+thing this firmware has to a changelog with reasons. Nothing that follows is ranked; pick from the
+inventory. The one thing worth doing before anything else is flashing the device and watching the
+log, because none of them have run on hardware.
 
 ---
 
@@ -186,6 +186,57 @@ situation later and without saying why it happened.
 Untested on hardware, and hard to reach on purpose: it needs both fans to fail after the retries,
 which means pulling the bus rather than anything Home Assistant can ask for.
 
+### Done since — sensor polling
+
+**Poll what the fans measure about themselves** — done, `fan_sensors/`, `src/modbus/`, `src/main.rs`
+
+This is the "Read temperature sensors" item from `README.md`, done wider than it was written: the
+fans report an actual speed, a motor temperature, an electronics temperature, a current power draw
+and an energy counter, and all five now reach Home Assistant.
+
+They live in *input* registers rather than holding registers, so function code `0x04` had to be
+implemented. `ReadInputRegisters<COUNT>` asks for a range rather than a single register — the values
+worth polling sit next to each other and a range costs the same round trip — and carries the count
+in the type so the request and the array it is answered with cannot disagree. `COUNT` is checked at
+compile time against the fan's limit of 37 registers, which it otherwise reports as exception `0x03`
+saying only that the answer would be the wrong length.
+
+`sensor_routine` polls each fan every 30 s, after a 10 s startup delay that leaves the bus to the
+set point both `fan_control_routine`s read on boot. Two reads under one lock, so the five values
+describe the same moment. Nothing on the device acts on them, so a failed poll is logged and
+dropped rather than retried: the next poll carries fresher values than a retry would, and a fan
+that has stopped answering does not hold the Modbus mutex through a run of timeouts while a speed
+change waits behind it.
+
+Decoding lives in the `fan_sensors` crate, following the `set_point` pattern, so the rules it has —
+a speed that is a fraction of the fan's configured maximum, temperatures that are signed, an energy
+counter spanning two registers — are tested on the host. The fan's maximum speed (`D119`) is read
+once and cached; until it is known the reading reports the speed as `null`, which Home Assistant
+shows as unknown, rather than holding back the four values that do not depend on it.
+
+Two things had to be fixed to make it work at all, both of which were already wrong:
+
+- The discovery payload went from 2 components to 12 and from roughly 1.3 kB to 3.8 kB, and `send`
+  encoded every packet into a 1024 byte buffer. An oversized packet is refused by the encoder and
+  only logged, so the device would have run perfectly and never been discovered. The buffer is now
+  `mqtt::task::SEND_BUFFER_SIZE`, and `main.rs` asserts at compile time that the payload still fits,
+  because it grows every time a component is added.
+- `send` used `write`, whose return value says how many bytes were actually taken and was discarded.
+  Anything past the room left in the socket's send buffer was dropped without a word. It now uses
+  `write_all`. This was survivable while every packet was short and is not for the discovery
+  payload, which is several times that buffer.
+
+Untested on hardware. Worth watching on the first flash: whether the fans answer `0x04` at all,
+what they report for a fan that is off, whether `D119` reads back the maximum speed these fans are
+actually configured for, and whether the energy counter is non-zero — it counts from the factory, so
+a zero would suggest the wrong register.
+
+Still open in the same area: the temperature/humidity sensor inputs (`D02E`-`D031`) and the PT1000
+inputs (`D038`/`D039`) are not read, because they only report anything if sensors are physically
+wired to the fans. The motor status (`D011`) and warning (`D012`) bitfields are read as part of the
+status run and thrown away; decoding them would give Home Assistant a real diagnostic instead of
+inference from a temperature.
+
 ### Cheap win worth slotting in anywhere
 
 **Make `SetPoint` host-testable** — done, `set_point/`
@@ -260,8 +311,8 @@ the rest are protocol conformance polish against a broker you control.
 |---|---|
 | `src/modbus/client.rs:329` | Understand why the flush must be blocking to avoid `WouldBlock` |
 
-Response validation and the short-read hazard are done; see P0 item 1, and reading holding
-registers is done; see P1 item 3.
+Response validation and the short-read hazard are done; see P0 item 1, reading holding registers is
+done; see P1 item 3, and reading input registers is done; see the sensor polling item.
 
 ### Configuration — `src/configuration.rs`
 
@@ -285,7 +336,6 @@ Not already covered above:
 - When retrying fails after a while, reset the other fan to avoid under- or overpressure in the house
 - Confirm the fan speed is set in Home Assistant and retry otherwise; MQTT QoS can implement this
 - Make the button press pick up state changed through Home Assistant instead of keeping its own state
-- Read temperature sensors
 - Switch to only using the refactored `send` for Modbus
 - Try bundling all channels into an event-bus / actor-model shape
 - Aspirational: a web interface for configuring the fan when Wi-Fi is not set up yet

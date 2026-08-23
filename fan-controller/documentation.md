@@ -48,6 +48,21 @@ After successfully joining the network it tries to look up Homeassistant under t
 Homeassistant needs to have the MQTT broker installed as the controller uses MQTT to connect to homeassitant and send data between them.
 After successful connection to the MQTT broker, the controller sends a discovery packet as defined by Homeassistant and the device should appear in Homeassistant on the dashboard when using the default Homeassistant configuration.
 
+### 3. Sensors
+
+Alongside the two fans the device announces five sensors per fan: speed in rpm, motor temperature,
+electronics temperature, power draw in watts, and an energy counter in kWh. The fans are polled
+every 30 seconds, starting 10 seconds after boot so the initial fan speed read has the bus to
+itself.
+
+The energy counter counts from when the fan left the factory and never resets, which is what lets
+Homeassistant put it in the energy dashboard rather than only in a graph.
+
+Speed shows as unknown until the controller has read the fan's configured maximum speed, which
+every speed the fan reports is a fraction of. It retries that read on each poll, so a fan that was
+unreachable at boot fills in on its own. The other four values do not depend on it and appear
+right away.
+
 ### Wiring
 
 (TODO) This section is planned to describe how the fan controller is wired up and how all the parts are connected to each other.

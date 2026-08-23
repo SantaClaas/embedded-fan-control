@@ -77,6 +77,21 @@ pub struct Origin {
 pub enum DeviceClass {
     Temperature,
     Humidity,
+    Power,
+    Energy,
+}
+
+/// What kind of quantity a sensor reports over time, which is what decides whether Home Assistant
+/// keeps long term statistics for it and whether it can go into the energy dashboard.
+/// See https://developers.home-assistant.io/docs/core/entity/sensor/#available-state-classes
+#[derive(Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StateClass {
+    /// The current value of something that moves in both directions, like a temperature
+    Measurement,
+    /// A counter that only ever goes up, short of a reset. Home Assistant handles the reset by
+    /// treating a drop as the start of a new cycle rather than as negative consumption
+    TotalIncreasing,
 }
 
 /// Internally tagged by the required `platform` (`p`) field
@@ -110,13 +125,31 @@ pub enum Component {
         speed_range_max: Option<u16>,
     },
     Sensor {
+        /// The name of the sensor. Owned rather than borrowed, unlike the name of a fan, because
+        /// both fans report the same five values and each name is composed from the fan it
+        /// belongs to
+        #[serde(skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+        /// The MQTT topic the value arrives on. Several sensors can share one topic and pick their
+        /// own value out of it with a `value_template`, which is how one publish per fan feeds all
+        /// of its sensors
+        #[serde(rename = "stat_t")]
+        #[serde(skip_serializing_if = "Option::is_none")]
+        state_topic: Option<&'static str>,
         #[serde(rename = "dev_cla")]
+        #[serde(skip_serializing_if = "Option::is_none")]
         device_class: Option<DeviceClass>,
+        #[serde(rename = "stat_cla")]
+        #[serde(skip_serializing_if = "Option::is_none")]
+        state_class: Option<StateClass>,
         #[serde(rename = "unit_of_meas")]
+        #[serde(skip_serializing_if = "Option::is_none")]
         unit_of_measurement: Option<&'static str>,
         #[serde(rename = "val_tpl")]
+        #[serde(skip_serializing_if = "Option::is_none")]
         value_template: Option<&'static str>,
         #[serde(rename = "uniq_id")]
+        #[serde(skip_serializing_if = "Option::is_none")]
         unique_id: Option<&'static str>,
     },
 }
@@ -175,7 +208,10 @@ mod tests {
                 (
                     "some_unique_component_id1".to_string(),
                     Component::Sensor {
+                        name: None,
+                        state_topic: None,
                         device_class: Some(DeviceClass::Temperature),
+                        state_class: None,
                         unit_of_measurement: Some("°C"),
                         value_template: Some("{{ value_json.temperature}}"),
                         unique_id: Some("temp01ae_t"),
@@ -184,7 +220,10 @@ mod tests {
                 (
                     "some_unique_id2".to_string(),
                     Component::Sensor {
+                        name: None,
+                        state_topic: None,
                         device_class: Some(DeviceClass::Humidity),
+                        state_class: None,
                         unit_of_measurement: Some("%"),
                         value_template: Some("{{ value_json.humidity}}"),
                         unique_id: Some("temp01ae_h"),
