@@ -2,7 +2,7 @@
 members = [
     "debug-listener",
     "fan-controller",
-    "fan_sensors",
+    "fan_sensor",
     "home_assistant_discovery",
     "mqtt",
     "set_point",

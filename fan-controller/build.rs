@@ -127,7 +127,7 @@ struct SensorIdentifiers {
 ///
 /// Every one of them reads the same topic and picks its value out of the JSON object published
 /// there, so a poll costs one publish rather than five. The keys the templates use are the field
-/// names `fan_sensors::Reading` serializes, which is the one place they have to agree.
+/// names `fan_sensor::Reading` serializes, which is the one place they have to agree.
 ///
 /// Built per fan rather than written out twice, because only the identifiers and the name differ
 fn fan_sensor_components(
@@ -240,26 +240,26 @@ fn components() -> BTreeMap<String, Component> {
     components.extend(fan_sensor_components(
         "Fan 1",
         SensorIdentifiers {
-            state: topic::fan_controller::fan_1::sensors::STATE,
-            speed: topic::fan_controller::fan_1::sensors::SPEED,
-            motor_temperature: topic::fan_controller::fan_1::sensors::MOTOR_TEMPERATURE,
+            state: topic::fan_controller::fan_1::sensor::STATE,
+            speed: topic::fan_controller::fan_1::sensor::SPEED,
+            motor_temperature: topic::fan_controller::fan_1::sensor::MOTOR_TEMPERATURE,
             electronics_temperature:
-                topic::fan_controller::fan_1::sensors::ELECTRONICS_TEMPERATURE,
-            power: topic::fan_controller::fan_1::sensors::POWER,
-            energy: topic::fan_controller::fan_1::sensors::ENERGY,
+                topic::fan_controller::fan_1::sensor::ELECTRONICS_TEMPERATURE,
+            power: topic::fan_controller::fan_1::sensor::POWER,
+            energy: topic::fan_controller::fan_1::sensor::ENERGY,
         },
     ));
 
     components.extend(fan_sensor_components(
         "Fan 2",
         SensorIdentifiers {
-            state: topic::fan_controller::fan_2::sensors::STATE,
-            speed: topic::fan_controller::fan_2::sensors::SPEED,
-            motor_temperature: topic::fan_controller::fan_2::sensors::MOTOR_TEMPERATURE,
+            state: topic::fan_controller::fan_2::sensor::STATE,
+            speed: topic::fan_controller::fan_2::sensor::SPEED,
+            motor_temperature: topic::fan_controller::fan_2::sensor::MOTOR_TEMPERATURE,
             electronics_temperature:
-                topic::fan_controller::fan_2::sensors::ELECTRONICS_TEMPERATURE,
-            power: topic::fan_controller::fan_2::sensors::POWER,
-            energy: topic::fan_controller::fan_2::sensors::ENERGY,
+                topic::fan_controller::fan_2::sensor::ELECTRONICS_TEMPERATURE,
+            power: topic::fan_controller::fan_2::sensor::POWER,
+            energy: topic::fan_controller::fan_2::sensor::ENERGY,
         },
     ));
 

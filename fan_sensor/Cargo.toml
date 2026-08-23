@@ -1,5 +1,5 @@
 [package]
-name = "fan_sensors"
+name = "fan_sensor"
 version = "0.1.0"
 edition = "2024"
 

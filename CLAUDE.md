@@ -64,7 +64,7 @@ Testing reality below.
 | `mqtt` | `no_std` | Protocol-level MQTT types shared between firmware and build script. Feature-gated `defmt` / `serde` so the same types work on device and on host. |
 | `topic` | `no_std` | The single source of truth for Home Assistant MQTT topic strings, composed at compile time with `const_format`. Used by both the firmware and `build.rs`. |
 | `set_point` | `no_std` | The `SetPoint` newtype and its bounds, parsing and formatting. Its own crate purely so it can be tested on the host; re-exported by the firmware as `crate::fan::set_point`. Feature-gated `defmt`. |
-| `fan_sensors` | `no_std` | Decoding what a fan reports about itself — actual speed, both temperatures, power, energy — from its input registers, plus the JSON payload Home Assistant reads. Owns the register addresses and the layout of the two runs that are read. Its own crate for the same reason as `set_point`; re-exported as `crate::fan::sensors`. Feature-gated `defmt`. |
+| `fan_sensor` | `no_std` | Decoding what a fan reports about itself — actual speed, both temperatures, power, energy — from its input registers, plus the JSON payload Home Assistant reads. Owns the register addresses and the layout of the two runs that are read. Its own crate for the same reason as `set_point`; re-exported as `crate::fan::sensor`. Feature-gated `defmt`. |
 | `home_assistant_discovery` | host | Serde model of the Home Assistant MQTT discovery payload. Build-dependency only. `components` is a `BTreeMap` so the generated payload is byte-stable across builds. |
 | `debug-listener` | host | Reads the RS-485/Modbus line off a USB serial adapter to inspect fan traffic. The port path is hardcoded in `src/main.rs`. |
 
@@ -152,7 +152,7 @@ cd home_assistant_discovery && cargo test
 ```
 
 ```bash
-cd fan_sensors && cargo test
+cd fan_sensor && cargo test
 ```
 
 That is also the way to make firmware logic testable at all: move it into its own `no_std` crate

@@ -188,7 +188,7 @@ which means pulling the bus rather than anything Home Assistant can ask for.
 
 ### Done since — sensor polling
 
-**Poll what the fans measure about themselves** — done, `fan_sensors/`, `src/modbus/`, `src/main.rs`
+**Poll what the fans measure about themselves** — done, `fan_sensor/`, `src/modbus/`, `src/main.rs`
 
 This is the "Read temperature sensors" item from `README.md`, done wider than it was written: the
 fans report an actual speed, a motor temperature, an electronics temperature, a current power draw
@@ -208,7 +208,7 @@ dropped rather than retried: the next poll carries fresher values than a retry w
 that has stopped answering does not hold the Modbus mutex through a run of timeouts while a speed
 change waits behind it.
 
-Decoding lives in the `fan_sensors` crate, following the `set_point` pattern, so the rules it has —
+Decoding lives in the `fan_sensor` crate, following the `set_point` pattern, so the rules it has —
 a speed that is a fraction of the fan's configured maximum, temperatures that are signed, an energy
 counter spanning two registers — are tested on the host. The fan's maximum speed (`D119`) is read
 once and cached; until it is known the reading reports the speed as `null`, which Home Assistant

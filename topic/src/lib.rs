@@ -45,7 +45,7 @@ pub mod fan_controller {
 
         /// All five sensor values a fan reports arrive as one JSON object on this topic, so a poll
         /// costs a single publish and Home Assistant picks each value out with a value template
-        pub mod sensors {
+        pub mod sensor {
             use super::UNIQUE_ID;
             use const_format::formatcp;
 
@@ -91,7 +91,7 @@ pub mod fan_controller {
 
         /// All five sensor values a fan reports arrive as one JSON object on this topic, so a poll
         /// costs a single publish and Home Assistant picks each value out with a value template
-        pub mod sensors {
+        pub mod sensor {
             use super::UNIQUE_ID;
             use const_format::formatcp;
 

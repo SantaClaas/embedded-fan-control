@@ -551,7 +551,7 @@ enum OutgoingPublish {
     /// channel
     UpdateSensors {
         fan: Fan,
-        payload: heapless::String<{ fan::sensors::JSON_CAPACITY }>,
+        payload: heapless::String<{ fan::sensor::JSON_CAPACITY }>,
     },
 }
 
@@ -576,10 +576,10 @@ impl Publish for OutgoingPublish {
                 payload: _,
             } => topic::fan_controller::fan_2::state::STATE,
             OutgoingPublish::UpdateSensors { fan: Fan::One, .. } => {
-                topic::fan_controller::fan_1::sensors::STATE
+                topic::fan_controller::fan_1::sensor::STATE
             }
             OutgoingPublish::UpdateSensors { fan: Fan::Two, .. } => {
-                topic::fan_controller::fan_2::sensors::STATE
+                topic::fan_controller::fan_2::sensor::STATE
             }
         }
     }
@@ -764,7 +764,7 @@ async fn read_set_point(
 ) -> Option<SetPoint> {
     let function = modbus::function::ReadHoldingRegister::new(
         fan_address,
-        fan::holding_registers::REFERENCE_SET_POINT,
+        fan::holding_register::REFERENCE_SET_POINT,
     );
 
     for attempt in 1..=MAX_ATTEMPTS {
@@ -883,7 +883,7 @@ async fn fan_control_routine(
 
         let function = modbus::function::WriteHoldingRegister::new(
             fan_address,
-            fan::holding_registers::REFERENCE_SET_POINT,
+            fan::holding_register::REFERENCE_SET_POINT,
             *set_point,
         );
 
@@ -996,7 +996,7 @@ async fn sensor_routine(
         if maximum_speed.is_none() {
             let function = modbus::function::ReadHoldingRegister::new(
                 fan_address,
-                fan::holding_registers::MAXIMUM_SPEED,
+                fan::holding_register::MAXIMUM_SPEED,
             );
 
             match modbus_mutex
@@ -1019,11 +1019,11 @@ async fn sensor_routine(
         }
 
         let status_request = modbus::function::ReadInputRegisters::<
-            { fan::sensors::STATUS_LENGTH },
-        >::new(fan_address, fan::input_registers::STATUS);
+            { fan::sensor::STATUS_LENGTH },
+        >::new(fan_address, fan::input_register::STATUS);
         let energy_request = modbus::function::ReadInputRegisters::<
-            { fan::sensors::ENERGY_LENGTH },
-        >::new(fan_address, fan::input_registers::ENERGY);
+            { fan::sensor::ENERGY_LENGTH },
+        >::new(fan_address, fan::input_register::ENERGY);
 
         // Both runs are read under one lock so the five values describe the same moment. It costs
         // a speed change at most the two transactions rather than one, which is still well under a
@@ -1031,7 +1031,7 @@ async fn sensor_routine(
         let mut client = modbus_mutex.lock().await;
         let reading = match client.read_input_registers(&status_request).await {
             Ok(status) => match client.read_input_registers(&energy_request).await {
-                Ok(energy) => Some(fan::sensors::decode(&status, &energy, maximum_speed)),
+                Ok(energy) => Some(fan::sensor::decode(&status, &energy, maximum_speed)),
                 Err(error) => {
                     warn!(
                         "{} Failed to read the energy registers: {:?}",
