@@ -120,8 +120,10 @@ be encoded straight into the TCP buffer without intermediate allocation — ther
 - Set points are 0..=64_000 (`set_point::MAX`, re-exported as `fan::set_point::MAX`), wrapped in
   the `SetPoint` newtype.
 - User-facing speeds are deliberately *not* the full range — `fan::user_setting::{LOW, MEDIUM,
-  HIGH}` are tuned to the house and cap at 50 % to reduce wear. Home Assistant is told
-  `speed_range_max: 32_000` to match.
+  HIGH}` cap at 50 % to reduce wear. Home Assistant is told `speed_range_max: 32_000` to match, so
+  the range it shows is that capped one. `LOW` and `MEDIUM` are the thirds of it (`MAX / 6` and
+  `MAX / 3`), which makes the button cycle through the same steps the Home Assistant slider shows
+  rather than through arbitrary points on it.
 - Fan Modbus addresses start at `0x02`/`0x03`; `0x01` is avoided as a likely factory default.
 - UART is 19_200 baud, 8 data bits, **even** parity, 1 stop bit.
 - Sensor values live in *input* registers (function code `0x04`), which are read only, unlike the

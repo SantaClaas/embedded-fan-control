@@ -28,19 +28,20 @@ pub(crate) fn get_configuration() -> uart::Config {
 pub(crate) mod user_setting {
     use crate::fan::set_point::{self, SetPoint};
 
-    /// Max speed 64000 / 3.3
-    pub(crate) const LOW: SetPoint = match SetPoint::new(19_393) {
+    /// A third of [`HIGH`], which is the bottom third of the range Home Assistant knows about
+    pub(crate) const LOW: SetPoint = match SetPoint::new(set_point::MAX / 6) {
         Ok(setting) => setting,
         Err(_error) => panic!("Invalid value"),
     };
-    /// Max speed 64000 / 2.4
-    pub(crate) const MEDIUM: SetPoint = match SetPoint::new(26_666) {
+    /// Two thirds of [`HIGH`], see [`LOW`]
+    pub(crate) const MEDIUM: SetPoint = match SetPoint::new(set_point::MAX / 3) {
         Ok(setting) => setting,
         Err(_error) => panic!("Invalid value"),
     };
 
     /// Max speed 50%
-    /// Not set to full speed to not wear out the fans
+    /// Not set to full speed to not wear out the fans. Home Assistant is told this is the top of
+    /// its range, so the three settings the button cycles through are the thirds of that range
     pub(crate) const HIGH: SetPoint = match SetPoint::new(set_point::MAX / 2) {
         Ok(setting) => setting,
         Err(_error) => panic!("Invalid value"),
