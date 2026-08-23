@@ -2,8 +2,8 @@
 //! it is, and what it is costing to run.
 //!
 //! The fan keeps these in input registers, which are read only. Their raw contents are not the
-//! quantities they describe — a speed is relative to the maximum the fan is configured for, and
-//! energy spans two registers — so decoding them has rules of its own. That is why this is its own
+//! quantities they describe — a speed is relative to the maximum the fan is configured for, and a
+//! temperature is signed — so decoding them has rules of its own. That is why this is its own
 //! crate: `fan-controller` only builds for `thumbv6m-none-eabi`, which has no test harness, so
 //! anything left in there is compiled by nothing and rots unnoticed. See the `set_point` crate,
 //! which is here for the same reason.
@@ -26,11 +26,11 @@ pub const MAXIMUM_SPEED_REGISTER: u16 = 0xD119;
 pub const STATUS_START: u16 = 0xD010;
 pub const STATUS_LENGTH: usize = 8;
 
-/// Where the run holding the current power and the energy counter starts, and how many registers
-/// it spans. A second request rather than one larger one, because everything between `D017` and
-/// `D027` is either reserved or of no interest here
-pub const ENERGY_START: u16 = 0xD027;
-pub const ENERGY_LENGTH: usize = 4;
+/// Where the run holding the current power starts, and how many registers it spans. A second
+/// request rather than one larger one, because everything between `D017` and `D027` is either
+/// reserved or of no interest here
+pub const POWER_START: u16 = 0xD027;
+pub const POWER_LENGTH: usize = 1;
 
 /// Offsets into the block starting at [`STATUS_START`]
 mod status {
@@ -42,14 +42,10 @@ mod status {
     pub(super) const ELECTRONICS_TEMPERATURE: usize = 0x7;
 }
 
-/// Offsets into the block starting at [`ENERGY_START`]
-mod energy {
+/// Offsets into the block starting at [`POWER_START`]
+mod power {
     /// `D027`, section 3.20.2
     pub(super) const CURRENT_POWER: usize = 0x0;
-    /// `D029`, the high half of the counter in section 3.22
-    pub(super) const CONSUMPTION_HIGH: usize = 0x2;
-    /// `D02A`, the low half of the counter in section 3.22
-    pub(super) const CONSUMPTION_LOW: usize = 0x3;
 }
 
 /// One poll of a fan, decoded into the units the values actually describe
@@ -66,8 +62,6 @@ pub struct Reading {
     pub electronics_temperature: i16,
     /// Watts the fan is drawing right now
     pub power: u16,
-    /// Kilowatt hours since the fan left the factory. Only ever counts up, short of a reset
-    pub energy: u32,
 }
 
 /// Turns the two blocks of input registers into the quantities they describe.
@@ -77,16 +71,14 @@ pub struct Reading {
 /// so it is read once rather than on every poll
 pub fn decode(
     status: &[u16; STATUS_LENGTH],
-    energy_block: &[u16; ENERGY_LENGTH],
+    power_block: &[u16; POWER_LENGTH],
     maximum_speed: Option<u16>,
 ) -> Reading {
     Reading {
         speed: maximum_speed.map(|maximum| speed(status[status::ACTUAL_SPEED], maximum)),
         motor_temperature: status[status::MOTOR_TEMPERATURE] as i16,
         electronics_temperature: status[status::ELECTRONICS_TEMPERATURE] as i16,
-        power: energy_block[energy::CURRENT_POWER],
-        energy: u32::from(energy_block[energy::CONSUMPTION_HIGH]) << 16
-            | u32::from(energy_block[energy::CONSUMPTION_LOW]),
+        power: power_block[power::CURRENT_POWER],
     }
 }
 
@@ -109,11 +101,11 @@ fn speed(reported: u16, maximum: u16) -> u16 {
 pub const JSON_CAPACITY: usize = 128;
 
 impl Reading {
-    /// The payload Home Assistant reads, as one JSON object per fan so that all five values arrive
+    /// The payload Home Assistant reads, as one JSON object per fan so that all four values arrive
     /// in a single publish and each sensor picks its own out with a value template.
     ///
     /// An unknown speed is written as `null`, which Home Assistant renders as unknown. That is
-    /// the honest answer while the maximum speed has not been read, and it keeps the four values
+    /// the honest answer while the maximum speed has not been read, and it keeps the three values
     /// that are known from being held back with it
     pub fn to_json(&self) -> heapless::String<JSON_CAPACITY> {
         let mut json = heapless::String::new();
@@ -128,8 +120,8 @@ impl Reading {
         .and_then(|()| {
             write!(
                 json,
-                ",\"motor_temperature\":{},\"electronics_temperature\":{},\"power\":{},\"energy\":{}}}",
-                self.motor_temperature, self.electronics_temperature, self.power, self.energy
+                ",\"motor_temperature\":{},\"electronics_temperature\":{},\"power\":{}}}",
+                self.motor_temperature, self.electronics_temperature, self.power
             )
         });
 
@@ -169,29 +161,20 @@ mod tests {
     #[test]
     fn temperatures_below_zero_stay_below_zero() {
         let status = [0, 0, 0, 0, 0, 0, 0xFFFB, 0x0015];
-        let reading = decode(&status, &[0; ENERGY_LENGTH], None);
+        let reading = decode(&status, &[0; POWER_LENGTH], None);
 
         assert_eq!(reading.motor_temperature, -5);
         assert_eq!(reading.electronics_temperature, 21);
-    }
-
-    /// The counter spans two registers, high half first
-    #[test]
-    fn energy_spans_both_registers() {
-        let energy_block = [0, 0, 0x0001, 0x0002];
-        let reading = decode(&[0; STATUS_LENGTH], &energy_block, None);
-
-        assert_eq!(reading.energy, 65_538);
     }
 
     #[test]
     fn decodes_a_whole_poll() {
         // Speed at half of the range, motor at 42 °C, electronics at 38 °C
         let status = [set_point::MAX / 2, 0, 0, 0, 0, 0, 0x002A, 0x0026];
-        // 25 W, and 1234 kWh since the factory
-        let energy_block = [25, 0, 0, 1_234];
+        // 25 W
+        let power_block = [25];
 
-        let reading = decode(&status, &energy_block, Some(3_000));
+        let reading = decode(&status, &power_block, Some(3_000));
 
         assert_eq!(
             reading,
@@ -200,7 +183,6 @@ mod tests {
                 motor_temperature: 42,
                 electronics_temperature: 38,
                 power: 25,
-                energy: 1_234,
             }
         );
     }
@@ -212,16 +194,15 @@ mod tests {
             motor_temperature: 42,
             electronics_temperature: 38,
             power: 25,
-            energy: 1_234,
         };
 
         assert_eq!(
             reading.to_json().as_str(),
-            r#"{"speed":1500,"motor_temperature":42,"electronics_temperature":38,"power":25,"energy":1234}"#
+            r#"{"speed":1500,"motor_temperature":42,"electronics_temperature":38,"power":25}"#
         );
     }
 
-    /// A speed that is not known yet must not hold back the four values that are
+    /// A speed that is not known yet must not hold back the three values that are
     #[test]
     fn serializes_an_unknown_speed_as_null() {
         let reading = Reading {
@@ -229,12 +210,11 @@ mod tests {
             motor_temperature: -5,
             electronics_temperature: 38,
             power: 25,
-            energy: 1_234,
         };
 
         assert_eq!(
             reading.to_json().as_str(),
-            r#"{"speed":null,"motor_temperature":-5,"electronics_temperature":38,"power":25,"energy":1234}"#
+            r#"{"speed":null,"motor_temperature":-5,"electronics_temperature":38,"power":25}"#
         );
     }
 
@@ -247,7 +227,6 @@ mod tests {
             motor_temperature: i16::MIN,
             electronics_temperature: i16::MIN,
             power: u16::MAX,
-            energy: u32::MAX,
         };
 
         let json = reading.to_json();

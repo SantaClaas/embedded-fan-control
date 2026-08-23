@@ -79,9 +79,9 @@ pub(super) mod input_register {
     pub(crate) const STATUS: modbus::register::Address =
         modbus::register::Address::new(super::sensor::STATUS_START);
 
-    /// The run holding the current power draw and the energy counter
-    pub(crate) const ENERGY: modbus::register::Address =
-        modbus::register::Address::new(super::sensor::ENERGY_START);
+    /// The run holding the current power draw
+    pub(crate) const POWER: modbus::register::Address =
+        modbus::register::Address::new(super::sensor::POWER_START);
 }
 
 #[derive(Clone, Copy)]

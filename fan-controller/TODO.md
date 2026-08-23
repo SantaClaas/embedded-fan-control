@@ -192,8 +192,9 @@ which means pulling the bus rather than anything Home Assistant can ask for.
 **Poll what the fans measure about themselves** — done, `fan_sensor/`, `src/modbus/`, `src/main.rs`
 
 This is the "Read temperature sensors" item from `README.md`, done wider than it was written: the
-fans report an actual speed, a motor temperature, an electronics temperature, a current power draw
-and an energy counter, and all five now reach Home Assistant.
+fans report an actual speed, a motor temperature, an electronics temperature and a current power
+draw, and all four now reach Home Assistant. A fifth, the energy counter, was announced at first and
+has since been removed — see below.
 
 They live in *input* registers rather than holding registers, so function code `0x04` had to be
 implemented. `ReadInputRegisters<COUNT>` asks for a range rather than a single register — the values
@@ -203,17 +204,17 @@ compile time against the fan's limit of 37 registers, which it otherwise reports
 saying only that the answer would be the wrong length.
 
 `sensor_routine` polls each fan every 30 s, after a 10 s startup delay that leaves the bus to the
-set point both `fan_control_routine`s read on boot. Two reads under one lock, so the five values
+set point both `fan_control_routine`s read on boot. Two reads under one lock, so the four values
 describe the same moment. Nothing on the device acts on them, so a failed poll is logged and
 dropped rather than retried: the next poll carries fresher values than a retry would, and a fan
 that has stopped answering does not hold the Modbus mutex through a run of timeouts while a speed
 change waits behind it.
 
 Decoding lives in the `fan_sensor` crate, following the `set_point` pattern, so the rules it has —
-a speed that is a fraction of the fan's configured maximum, temperatures that are signed, an energy
-counter spanning two registers — are tested on the host. The fan's maximum speed (`D119`) is read
-once and cached; until it is known the reading reports the speed as `null`, which Home Assistant
-shows as unknown, rather than holding back the four values that do not depend on it.
+a speed that is a fraction of the fan's configured maximum, temperatures that are signed — are
+tested on the host. The fan's maximum speed (`D119`) is read once and cached; until it is known the
+reading reports the speed as `null`, which Home Assistant shows as unknown, rather than holding back
+the three values that do not depend on it.
 
 Two things had to be fixed to make it work at all, both of which were already wrong:
 
@@ -227,10 +228,14 @@ Two things had to be fixed to make it work at all, both of which were already wr
   `write_all`. This was survivable while every packet was short and is not for the discovery
   payload, which is several times that buffer.
 
-Untested on hardware. Worth watching on the first flash: whether the fans answer `0x04` at all,
-what they report for a fan that is off, whether `D119` reads back the maximum speed these fans are
-actually configured for, and whether the energy counter is non-zero — it counts from the factory, so
-a zero would suggest the wrong register.
+The one thing that came back wrong was the energy counter, which this section had flagged as worth
+watching. Both fans answer `0xFFFF` for both of its registers (`D029`/`D02A`), i.e. `4294967295`
+kWh in Home Assistant, which is what an ebm-papst fan reports for a register its hardware variant
+does not implement — there is no parameter to switch the counter on, and the specification's
+foreword warns that the documented feature set depends on the variant. The sensor is gone from the
+discovery payload and from `fan_sensor::Reading`; the run at `D027` is now a single register and is
+named after the power draw it actually carries. That leaves 10 components in the payload rather
+than the 12 described above.
 
 Still open in the same area: the temperature/humidity sensor inputs (`D02E`-`D031`) and the PT1000
 inputs (`D038`/`D039`) are not read, because they only report anything if sensors are physically

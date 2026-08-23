@@ -1021,20 +1021,20 @@ async fn sensor_routine(
         let status_request = modbus::function::ReadInputRegisters::<
             { fan::sensor::STATUS_LENGTH },
         >::new(fan_address, fan::input_register::STATUS);
-        let energy_request = modbus::function::ReadInputRegisters::<
-            { fan::sensor::ENERGY_LENGTH },
-        >::new(fan_address, fan::input_register::ENERGY);
+        let power_request = modbus::function::ReadInputRegisters::<
+            { fan::sensor::POWER_LENGTH },
+        >::new(fan_address, fan::input_register::POWER);
 
-        // Both runs are read under one lock so the five values describe the same moment. It costs
+        // Both runs are read under one lock so the four values describe the same moment. It costs
         // a speed change at most the two transactions rather than one, which is still well under a
         // tenth of a second
         let mut client = modbus_mutex.lock().await;
         let reading = match client.read_input_registers(&status_request).await {
-            Ok(status) => match client.read_input_registers(&energy_request).await {
-                Ok(energy) => Some(fan::sensor::decode(&status, &energy, maximum_speed)),
+            Ok(status) => match client.read_input_registers(&power_request).await {
+                Ok(power) => Some(fan::sensor::decode(&status, &power, maximum_speed)),
                 Err(error) => {
                     warn!(
-                        "{} Failed to read the energy registers: {:?}",
+                        "{} Failed to read the power register: {:?}",
                         fan_identifier, error
                     );
                     None

@@ -43,7 +43,7 @@ pub mod fan_controller {
             pub const COMMAND: &str = formatcp!("{UNIQUE_ID}/speed/percentage");
         }
 
-        /// All five sensor values a fan reports arrive as one JSON object on this topic, so a poll
+        /// All four sensor values a fan reports arrive as one JSON object on this topic, so a poll
         /// costs a single publish and Home Assistant picks each value out with a value template
         pub mod sensor {
             use super::UNIQUE_ID;
@@ -51,7 +51,7 @@ pub mod fan_controller {
 
             pub const STATE: &str = formatcp!("{UNIQUE_ID}/sensors/state");
 
-            /// The identifiers Home Assistant tells the five sensors apart by. They are not
+            /// The identifiers Home Assistant tells the four sensors apart by. They are not
             /// topics, but they are composed from the same fan identifier and have to stay unique
             /// alongside it, so they belong next to it rather than in the build script
             pub const SPEED: &str = formatcp!("{UNIQUE_ID}/sensors/speed");
@@ -59,7 +59,6 @@ pub mod fan_controller {
             pub const ELECTRONICS_TEMPERATURE: &str =
                 formatcp!("{UNIQUE_ID}/sensors/electronics-temperature");
             pub const POWER: &str = formatcp!("{UNIQUE_ID}/sensors/power");
-            pub const ENERGY: &str = formatcp!("{UNIQUE_ID}/sensors/energy");
         }
     }
 
@@ -89,7 +88,7 @@ pub mod fan_controller {
             pub const COMMAND: &str = formatcp!("{UNIQUE_ID}/speed/percentage");
         }
 
-        /// All five sensor values a fan reports arrive as one JSON object on this topic, so a poll
+        /// All four sensor values a fan reports arrive as one JSON object on this topic, so a poll
         /// costs a single publish and Home Assistant picks each value out with a value template
         pub mod sensor {
             use super::UNIQUE_ID;
@@ -97,7 +96,7 @@ pub mod fan_controller {
 
             pub const STATE: &str = formatcp!("{UNIQUE_ID}/sensors/state");
 
-            /// The identifiers Home Assistant tells the five sensors apart by. They are not
+            /// The identifiers Home Assistant tells the four sensors apart by. They are not
             /// topics, but they are composed from the same fan identifier and have to stay unique
             /// alongside it, so they belong next to it rather than in the build script
             pub const SPEED: &str = formatcp!("{UNIQUE_ID}/sensors/speed");
@@ -105,7 +104,6 @@ pub mod fan_controller {
             pub const ELECTRONICS_TEMPERATURE: &str =
                 formatcp!("{UNIQUE_ID}/sensors/electronics-temperature");
             pub const POWER: &str = formatcp!("{UNIQUE_ID}/sensors/power");
-            pub const ENERGY: &str = formatcp!("{UNIQUE_ID}/sensors/energy");
         }
     }
 }

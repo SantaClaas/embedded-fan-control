@@ -111,7 +111,7 @@ fn get_git_hash() -> Result<Rc<str>, GitHashError> {
     Ok(Rc::from(str::from_utf8(&output.stdout)?.trim()))
 }
 
-/// Which identifiers one fan's five sensors are announced under. All of them are composed from
+/// Which identifiers one fan's four sensors are announced under. All of them are composed from
 /// that fan's identifier in the `topic` crate, so the two fans differ only in what is passed here
 struct SensorIdentifiers {
     /// The topic all five values arrive on, as one JSON object
@@ -120,20 +120,19 @@ struct SensorIdentifiers {
     motor_temperature: &'static str,
     electronics_temperature: &'static str,
     power: &'static str,
-    energy: &'static str,
 }
 
-/// The five values a fan reports about itself.
+/// The four values a fan reports about itself.
 ///
 /// Every one of them reads the same topic and picks its value out of the JSON object published
-/// there, so a poll costs one publish rather than five. The keys the templates use are the field
+/// there, so a poll costs one publish rather than four. The keys the templates use are the field
 /// names `fan_sensor::Reading` serializes, which is the one place they have to agree.
 ///
 /// Built per fan rather than written out twice, because only the identifiers and the name differ
 fn create_fan_sensor_components(
     fan_name: &str,
     identifiers: SensorIdentifiers,
-) -> [(String, Component); 5] {
+) -> [(String, Component); 4] {
     [
         (
             identifiers.speed.to_string(),
@@ -184,24 +183,10 @@ fn create_fan_sensor_components(
                 unique_id: Some(identifiers.power),
             },
         ),
-        (
-            identifiers.energy.to_string(),
-            Component::Sensor {
-                name: Some(format!("{fan_name} energy")),
-                state_topic: Some(identifiers.state),
-                device_class: Some(DeviceClass::Energy),
-                // Counts up since the fan left the factory, which is what puts it in the energy
-                // dashboard instead of only in a graph
-                state_class: Some(StateClass::TotalIncreasing),
-                unit_of_measurement: Some("kWh"),
-                value_template: Some("{{ value_json.energy }}"),
-                unique_id: Some(identifiers.energy),
-            },
-        ),
     ]
 }
 
-/// Everything the fan controller announces to Home Assistant: the two fans, and the five sensors
+/// Everything the fan controller announces to Home Assistant: the two fans, and the four sensors
 /// each of them reports
 fn create_components() -> BTreeMap<String, Component> {
     let mut components = BTreeMap::from([
@@ -246,7 +231,6 @@ fn create_components() -> BTreeMap<String, Component> {
             electronics_temperature:
                 topic::fan_controller::fan_1::sensor::ELECTRONICS_TEMPERATURE,
             power: topic::fan_controller::fan_1::sensor::POWER,
-            energy: topic::fan_controller::fan_1::sensor::ENERGY,
         },
     ));
 
@@ -259,7 +243,6 @@ fn create_components() -> BTreeMap<String, Component> {
             electronics_temperature:
                 topic::fan_controller::fan_2::sensor::ELECTRONICS_TEMPERATURE,
             power: topic::fan_controller::fan_2::sensor::POWER,
-            energy: topic::fan_controller::fan_2::sensor::ENERGY,
         },
     ));
 

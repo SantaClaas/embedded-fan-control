@@ -50,17 +50,19 @@ After successful connection to the MQTT broker, the controller sends a discovery
 
 ### 3. Sensors
 
-Alongside the two fans the device announces five sensors per fan: speed in rpm, motor temperature,
-electronics temperature, power draw in watts, and an energy counter in kWh. The fans are polled
-every 30 seconds, starting 10 seconds after boot so the initial fan speed read has the bus to
-itself.
+Alongside the two fans the device announces four sensors per fan: speed in rpm, motor temperature,
+electronics temperature, and power draw in watts. The fans are polled every 30 seconds, starting
+10 seconds after boot so the initial fan speed read has the bus to itself.
 
-The energy counter counts from when the fan left the factory and never resets, which is what lets
-Homeassistant put it in the energy dashboard rather than only in a graph.
+There is deliberately no energy sensor. The Modbus specification documents a consumption counter in
+kWh at `D029`/`D02A`, but both fans return `0xFFFF` for both registers, which is what an ebm-papst
+fan reports for a register its hardware variant does not implement. Announcing it put a permanent
+4 294 967 295 kWh in Homeassistant's energy dashboard, so the sensor was dropped rather than
+published as a value that never becomes real.
 
 Speed shows as unknown until the controller has read the fan's configured maximum speed, which
 every speed the fan reports is a fraction of. It retries that read on each poll, so a fan that was
-unreachable at boot fills in on its own. The other four values do not depend on it and appear
+unreachable at boot fills in on its own. The other three values do not depend on it and appear
 right away.
 
 ## Wiring
