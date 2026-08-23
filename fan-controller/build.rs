@@ -16,7 +16,9 @@ use std::process::Command;
 use std::rc::Rc;
 use std::str::Utf8Error;
 
-use home_assistant_discovery::{Component, Device, DiscoveryPayload, ListOrString, Origin};
+use home_assistant_discovery::{
+    Component, Device, DeviceClass, DiscoveryPayload, ListOrString, Origin, StateClass,
+};
 
 #[derive(Debug, thiserror::Error)]
 enum GitHashError {
@@ -109,27 +111,100 @@ fn get_git_hash() -> Result<Rc<str>, GitHashError> {
     Ok(Rc::from(str::from_utf8(&output.stdout)?.trim()))
 }
 
-fn set_discovery_payload(git_hash: &str) {
-    let package_version = env!("CARGO_PKG_VERSION");
-    // Following semantic versioning build metadata
-    let version: Option<Rc<str>> = Option::from(Rc::from(format!("{package_version}+{git_hash}")));
-    println!("Setting version to {version:?}");
-    let payload = DiscoveryPayload {
-        device: Device {
-            identifiers: Some(ListOrString::String(topic::fan_controller::OBJECT_ID)),
-            name: Some("New Fan Controller"),
-            model: Some("Raspberry Pi Pico W 1"),
-            manufacturer: Some("claas.dev"),
-            hardware_version: Some("1.0"),
-            software_version: version.clone(),
-            ..Default::default()
-        },
-        origin: Origin {
-            name: "fan-controller",
-            software_version: version,
-            support_url: Some("https://github.com/SantaClaas/embedded-fan-control"),
-        },
-        components: BTreeMap::from([
+/// Which identifiers one fan's five sensors are announced under. All of them are composed from
+/// that fan's identifier in the `topic` crate, so the two fans differ only in what is passed here
+struct SensorIdentifiers {
+    /// The topic all five values arrive on, as one JSON object
+    state: &'static str,
+    speed: &'static str,
+    motor_temperature: &'static str,
+    electronics_temperature: &'static str,
+    power: &'static str,
+    energy: &'static str,
+}
+
+/// The five values a fan reports about itself.
+///
+/// Every one of them reads the same topic and picks its value out of the JSON object published
+/// there, so a poll costs one publish rather than five. The keys the templates use are the field
+/// names `fan_sensors::Reading` serializes, which is the one place they have to agree.
+///
+/// Built per fan rather than written out twice, because only the identifiers and the name differ
+fn fan_sensor_components(
+    fan_name: &str,
+    identifiers: SensorIdentifiers,
+) -> [(String, Component); 5] {
+    [
+        (
+            identifiers.speed.to_string(),
+            Component::Sensor {
+                name: Some(format!("{fan_name} speed")),
+                state_topic: Some(identifiers.state),
+                // Home Assistant has no device class for a rotation rate, so the unit carries it
+                device_class: None,
+                state_class: Some(StateClass::Measurement),
+                unit_of_measurement: Some("rpm"),
+                value_template: Some("{{ value_json.speed }}"),
+                unique_id: Some(identifiers.speed),
+            },
+        ),
+        (
+            identifiers.motor_temperature.to_string(),
+            Component::Sensor {
+                name: Some(format!("{fan_name} motor temperature")),
+                state_topic: Some(identifiers.state),
+                device_class: Some(DeviceClass::Temperature),
+                state_class: Some(StateClass::Measurement),
+                unit_of_measurement: Some("°C"),
+                value_template: Some("{{ value_json.motor_temperature }}"),
+                unique_id: Some(identifiers.motor_temperature),
+            },
+        ),
+        (
+            identifiers.electronics_temperature.to_string(),
+            Component::Sensor {
+                name: Some(format!("{fan_name} electronics temperature")),
+                state_topic: Some(identifiers.state),
+                device_class: Some(DeviceClass::Temperature),
+                state_class: Some(StateClass::Measurement),
+                unit_of_measurement: Some("°C"),
+                value_template: Some("{{ value_json.electronics_temperature }}"),
+                unique_id: Some(identifiers.electronics_temperature),
+            },
+        ),
+        (
+            identifiers.power.to_string(),
+            Component::Sensor {
+                name: Some(format!("{fan_name} power")),
+                state_topic: Some(identifiers.state),
+                device_class: Some(DeviceClass::Power),
+                state_class: Some(StateClass::Measurement),
+                unit_of_measurement: Some("W"),
+                value_template: Some("{{ value_json.power }}"),
+                unique_id: Some(identifiers.power),
+            },
+        ),
+        (
+            identifiers.energy.to_string(),
+            Component::Sensor {
+                name: Some(format!("{fan_name} energy")),
+                state_topic: Some(identifiers.state),
+                device_class: Some(DeviceClass::Energy),
+                // Counts up since the fan left the factory, which is what puts it in the energy
+                // dashboard instead of only in a graph
+                state_class: Some(StateClass::TotalIncreasing),
+                unit_of_measurement: Some("kWh"),
+                value_template: Some("{{ value_json.energy }}"),
+                unique_id: Some(identifiers.energy),
+            },
+        ),
+    ]
+}
+
+/// Everything the fan controller announces to Home Assistant: the two fans, and the five sensors
+/// each of them reports
+fn components() -> BTreeMap<String, Component> {
+    let mut components = BTreeMap::from([
             // Fan 1
             (
                 topic::fan_controller::fan_1::UNIQUE_ID.to_string(),
@@ -160,7 +235,58 @@ fn set_discovery_payload(git_hash: &str) {
                     speed_range_max: Some(32_000),
                 },
             ),
-        ]),
+        ]);
+
+    components.extend(fan_sensor_components(
+        "Fan 1",
+        SensorIdentifiers {
+            state: topic::fan_controller::fan_1::sensors::STATE,
+            speed: topic::fan_controller::fan_1::sensors::SPEED,
+            motor_temperature: topic::fan_controller::fan_1::sensors::MOTOR_TEMPERATURE,
+            electronics_temperature:
+                topic::fan_controller::fan_1::sensors::ELECTRONICS_TEMPERATURE,
+            power: topic::fan_controller::fan_1::sensors::POWER,
+            energy: topic::fan_controller::fan_1::sensors::ENERGY,
+        },
+    ));
+
+    components.extend(fan_sensor_components(
+        "Fan 2",
+        SensorIdentifiers {
+            state: topic::fan_controller::fan_2::sensors::STATE,
+            speed: topic::fan_controller::fan_2::sensors::SPEED,
+            motor_temperature: topic::fan_controller::fan_2::sensors::MOTOR_TEMPERATURE,
+            electronics_temperature:
+                topic::fan_controller::fan_2::sensors::ELECTRONICS_TEMPERATURE,
+            power: topic::fan_controller::fan_2::sensors::POWER,
+            energy: topic::fan_controller::fan_2::sensors::ENERGY,
+        },
+    ));
+
+    components
+}
+
+fn set_discovery_payload(git_hash: &str) {
+    let package_version = env!("CARGO_PKG_VERSION");
+    // Following semantic versioning build metadata
+    let version: Option<Rc<str>> = Option::from(Rc::from(format!("{package_version}+{git_hash}")));
+    println!("Setting version to {version:?}");
+    let payload = DiscoveryPayload {
+        device: Device {
+            identifiers: Some(ListOrString::String(topic::fan_controller::OBJECT_ID)),
+            name: Some("New Fan Controller"),
+            model: Some("Raspberry Pi Pico W 1"),
+            manufacturer: Some("claas.dev"),
+            hardware_version: Some("1.0"),
+            software_version: version.clone(),
+            ..Default::default()
+        },
+        origin: Origin {
+            name: "fan-controller",
+            software_version: version,
+            support_url: Some("https://github.com/SantaClaas/embedded-fan-control"),
+        },
+        components: components(),
         quality_of_service: None,
         state_topic: Some(topic::fan_controller::STATE),
         command_topic: Some(topic::fan_controller::COMMAND),

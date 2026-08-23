@@ -5,6 +5,10 @@
 /// fan is. See the crate documentation for why it cannot live in this one
 pub(crate) use ::set_point;
 
+/// Decoding what the fan reports about itself, in its own crate for the same reason as
+/// [`set_point`] and re-exported here for the same one
+pub(crate) use ::fan_sensors as sensors;
+
 use embassy_rp::uart::{self, DataBits, Parity, StopBits};
 
 pub(crate) const BAUD_RATE: u32 = 19_200;
@@ -56,8 +60,30 @@ pub(super) mod holding_registers {
 
     pub(crate) const REFERENCE_SET_POINT: modbus::register::Address =
         modbus::register::Address::new(0xd001_u16);
+
+    /// The speed the fan is configured for, which every speed it reports and accepts is a fraction
+    /// of. Only changes when the fan is reconfigured, so it is read once rather than on every poll
+    pub(crate) const MAXIMUM_SPEED: modbus::register::Address =
+        modbus::register::Address::new(super::sensors::MAXIMUM_SPEED_REGISTER);
 }
 
+/// Where the fan reports what it measures about itself. Read only, and read as two runs rather
+/// than register by register because a range costs the same round trip as one register.
+/// The addresses and the layout of each run belong to the [`sensors`] crate, which is what decodes
+/// them; these only wrap them in the address type the modbus client asks for
+pub(super) mod input_registers {
+    use crate::modbus;
+
+    /// The run holding the actual speed and both temperatures
+    pub(crate) const STATUS: modbus::register::Address =
+        modbus::register::Address::new(super::sensors::STATUS_START);
+
+    /// The run holding the current power draw and the energy counter
+    pub(crate) const ENERGY: modbus::register::Address =
+        modbus::register::Address::new(super::sensors::ENERGY_START);
+}
+
+#[derive(Clone, Copy)]
 pub(crate) enum Fan {
     One,
     Two,

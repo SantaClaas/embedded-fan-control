@@ -1018,6 +1018,7 @@ dependencies = [
  "embassy-time",
  "embedded-io-async",
  "embedded-nal-async",
+ "fan_sensors",
  "heapless 0.8.0",
  "home_assistant_discovery",
  "mqtt",
@@ -1031,6 +1032,15 @@ dependencies = [
  "static_cell",
  "thiserror 2.0.12",
  "topic",
+]
+
+[[package]]
+name = "fan_sensors"
+version = "0.1.0"
+dependencies = [
+ "defmt 1.0.1",
+ "heapless 0.8.0",
+ "set_point",
 ]
 
 [[package]]

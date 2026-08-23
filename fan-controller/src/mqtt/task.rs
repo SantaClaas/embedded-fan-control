@@ -18,6 +18,11 @@ pub(crate) enum SendError<T: Debug + Format, E> {
     Flush(E),
 }
 
+/// How much room a packet is encoded into before it goes out. Sized for the largest one the
+/// controller sends by far, the Home Assistant discovery payload, which `main` asserts against at
+/// compile time so this cannot fall behind it unnoticed
+pub(crate) const SEND_BUFFER_SIZE: usize = 4096;
+
 pub(crate) async fn send<T, TWrite: Write<Error = TWriteError>, TWriteError>(
     socket: &mut TWrite,
     packet: T,
@@ -27,13 +32,16 @@ where
 {
     info!("Sending packet");
     let mut offset = 0;
-    let mut send_buffer = [0; 1024];
+    let mut send_buffer = [0; SEND_BUFFER_SIZE];
     packet
         .try_encode(&mut send_buffer, &mut offset)
         .map_err(SendError::Encode)?;
 
+    // `write` returns how many bytes it took, which is capped by the room left in the socket's own
+    // send buffer, and the rest would be dropped without a word. That is survivable for a short
+    // state update and not for the discovery payload, which is several times that buffer
     socket
-        .write(&send_buffer[..offset])
+        .write_all(&send_buffer[..offset])
         .await
         .map_err(SendError::Write)?;
     socket.flush().await.map_err(SendError::Flush)?;

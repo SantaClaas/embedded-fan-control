@@ -1,0 +1,12 @@
+[package]
+name = "fan_sensors"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+defmt = { workspace = true, optional = true }
+heapless = "0.8.0"
+set_point = { version = "0.1.0", path = "../set_point" }
+
+[features]
+defmt = ["dep:defmt"]

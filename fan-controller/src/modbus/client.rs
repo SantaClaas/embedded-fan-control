@@ -10,7 +10,9 @@ use embedded_io_async::{Read, ReadExactError, Write};
 
 use crate::{
     configuration,
-    modbus::function::{ReadHoldingRegister, WriteHoldingRegister, code},
+    modbus::function::{
+        ReadHoldingRegister, ReadInputRegisters, WriteHoldingRegister, code, read_input_registers,
+    },
 };
 
 /// How sending a request to the fan failed
@@ -158,8 +160,8 @@ pub(crate) enum ReadError {
     Contents(ReceiveFailure),
     /// The checksum of the answer does not match its contents
     ContentsChecksum,
-    /// The answer announced a different number of data bytes than the one register that was asked
-    /// for. Holds the byte count it announced
+    /// The answer announced a different number of data bytes than the registers that were asked
+    /// for take up. Holds the byte count it announced
     ByteCount(u8),
 }
 
@@ -186,6 +188,16 @@ const READ_RESPONSE_LENGTH: usize = 7;
 
 /// How many data bytes a read of the single register asked for has to announce
 const READ_BYTE_COUNT: u8 = 2;
+
+/// What a read response carries around its data bytes: the header, the byte count, and the
+/// checksum
+const READ_OVERHEAD_LENGTH: usize = HEADER_LENGTH + 1 + 2;
+
+/// The longest response a read of input registers can produce, which is the buffer every one of
+/// them is read into. An array cannot be sized from a const generic on stable, so the buffer is
+/// sized for the longest run the fan will answer and only the part that was asked for is used
+const MAX_INPUT_REGISTERS_RESPONSE_LENGTH: usize =
+    READ_OVERHEAD_LENGTH + 2 * read_input_registers::MAX_COUNT;
 
 /// An exception response replaces the register and value of the echo with a single exception code
 const EXCEPTION_RESPONSE_LENGTH: usize = 5;
@@ -244,6 +256,22 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
         let fan_identifier = fan_identifier(*message.device_address());
 
         let result = self.transact_write(message, fan_identifier).await;
+        self.clear_line_after(&result, fan_identifier).await;
+
+        result
+    }
+
+    /// Reads a run of the fan's input registers, which is where it reports what it measures
+    /// about itself. Read only, unlike the holding registers the set point lives in
+    pub(crate) async fn read_input_registers<const COUNT: usize>(
+        &mut self,
+        message: &ReadInputRegisters<COUNT>,
+    ) -> Result<[u16; COUNT], ReadError> {
+        let fan_identifier = fan_identifier(*message.device_address());
+
+        let result = self
+            .transact_read_input_registers(message, fan_identifier)
+            .await;
         self.clear_line_after(&result, fan_identifier).await;
 
         result
@@ -379,6 +407,66 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
         );
 
         Ok(value)
+    }
+
+    async fn transact_read_input_registers<const COUNT: usize>(
+        &mut self,
+        message: &ReadInputRegisters<COUNT>,
+        fan_identifier: &str,
+    ) -> Result<[u16; COUNT], ReadError> {
+        let request = message.as_ref();
+        self.send_request(request, fan_identifier).await?;
+
+        // Like the holding register read the answer carries a byte count and the contents rather
+        // than repeating the request, so its length is known from the count that was asked for.
+        // Only the part of the buffer this request can fill is read into, so the rest of a frame
+        // is never left on the line for the next transaction to pick up
+        let mut buffer = [0u8; MAX_INPUT_REGISTERS_RESPONSE_LENGTH];
+        let response = &mut buffer[..READ_OVERHEAD_LENGTH + 2 * COUNT];
+
+        if let Answer::Exception(code) = self.read_header(response, request, fan_identifier).await?
+        {
+            return Err(ReadError::Exception(code.into()));
+        }
+
+        self.receive_exact(&mut response[HEADER_LENGTH..])
+            .await
+            .map_err(ReadError::Contents)?;
+
+        // Checked before the checksum for the same reason as in the single register read: a
+        // different byte count means a different frame length was just read, so a failing checksum
+        // would report something other than what actually went wrong.
+        // The cast cannot truncate because `MAX_COUNT` registers are 74 data bytes
+        let expected_byte_count = (2 * COUNT) as u8;
+        if response[2] != expected_byte_count {
+            warn!(
+                "{} Response announced {:?} data bytes instead of {:?}: {:?}",
+                fan_identifier, response[2], expected_byte_count, response
+            );
+            return Err(ReadError::ByteCount(response[2]));
+        }
+
+        if !is_checksum_valid(response) {
+            warn!(
+                "{} Response failed checksum: {:?}",
+                fan_identifier, response
+            );
+            return Err(ReadError::ContentsChecksum);
+        }
+
+        let mut registers = [0u16; COUNT];
+        for (index, register) in registers.iter_mut().enumerate() {
+            // The data bytes start after the header and the byte count
+            let offset = HEADER_LENGTH + 1 + 2 * index;
+            *register = u16::from_be_bytes([response[offset], response[offset + 1]]);
+        }
+
+        info!(
+            "{} Fan answered the read with {:?}: {:?}",
+            fan_identifier, registers, response
+        );
+
+        Ok(registers)
     }
 
     /// Drives the line, writes the request, and hands the line back to the fan
