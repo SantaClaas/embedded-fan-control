@@ -39,7 +39,7 @@ embassy-sync = { git = "https://github.com/embassy-rs/embassy.git", package = "e
 embassy-time = { version = "0.3.1", features = ["defmt"] }
 embedded-io-async = "0.6.1"
 embedded-nal-async = "0.7.1"
-fan_sensors = { version = "0.1.0", path = "../fan_sensors", features = ["defmt"] }
+fan_sensor = { version = "0.1.0", path = "../fan_sensor", features = ["defmt"] }
 heapless = "0.8.0"
 mqtt = { version = "0.1.0", path = "../mqtt", features = ["defmt"] }
 nb = "1.1.0"

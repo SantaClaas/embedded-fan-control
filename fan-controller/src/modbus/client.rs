@@ -11,7 +11,7 @@ use embedded_io_async::{Read, ReadExactError, Write};
 use crate::{
     configuration,
     modbus::function::{
-        ReadHoldingRegister, ReadInputRegisters, WriteHoldingRegister, code, read_input_registers,
+        ReadHoldingRegister, ReadInputRegisters, WriteHoldingRegister, code, read_input_register,
     },
 };
 
@@ -197,7 +197,7 @@ const READ_OVERHEAD_LENGTH: usize = HEADER_LENGTH + 1 + 2;
 /// them is read into. An array cannot be sized from a const generic on stable, so the buffer is
 /// sized for the longest run the fan will answer and only the part that was asked for is used
 const MAX_INPUT_REGISTERS_RESPONSE_LENGTH: usize =
-    READ_OVERHEAD_LENGTH + 2 * read_input_registers::MAX_COUNT;
+    READ_OVERHEAD_LENGTH + 2 * read_input_register::MAX_COUNT;
 
 /// An exception response replaces the register and value of the echo with a single exception code
 const EXCEPTION_RESPONSE_LENGTH: usize = 5;

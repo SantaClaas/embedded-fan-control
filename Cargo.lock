@@ -1018,7 +1018,7 @@ dependencies = [
  "embassy-time",
  "embedded-io-async",
  "embedded-nal-async",
- "fan_sensors",
+ "fan_sensor",
  "heapless 0.8.0",
  "home_assistant_discovery",
  "mqtt",
@@ -1035,7 +1035,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "fan_sensors"
+name = "fan_sensor"
 version = "0.1.0"
 dependencies = [
  "defmt 1.0.1",
