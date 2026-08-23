@@ -17,7 +17,7 @@ use cyw43::{Control, NetDriver};
 use defmt::{Format, error, info, unwrap, warn};
 use embassy_executor::Spawner;
 use embassy_futures::join::join3;
-use embassy_futures::select::{Either3, select3};
+use embassy_futures::select::{Either, Either3, select, select3};
 use embassy_net::dns::{DnsQueryType, DnsSocket};
 use embassy_net::driver::Driver;
 use embassy_net::tcp::{TcpSocket, TcpWriter};
@@ -155,6 +155,7 @@ async fn listen<
     acknowledgements: &Mutex<CriticalSectionRawMutex, [bool; SUBSCRIPTIONS]>,
     acknowledgement_waker: &AtomicWaker,
     ping_response_signal: &Signal<CriticalSectionRawMutex, PingResponse>,
+    last_received: &Signal<CriticalSectionRawMutex, Instant>,
 ) -> SessionEnd {
     let mut buffer = [0; 1024];
     loop {
@@ -174,6 +175,9 @@ async fn listen<
         };
 
         info!("Packet received");
+        // Anything at all from the broker proves the connection is still there, whatever kind of
+        // packet it turned out to be
+        last_received.signal(Instant::now());
 
         let parts = match mqtt::packet::get_parts(&buffer[..bytes_read]) {
             Ok(parts) => parts,
@@ -371,23 +375,29 @@ async fn set_up_subscriptions<T: Publish, const SUBSCRIPTIONS: usize>(
 /// Keep alive task
 async fn keep_alive(
     writer: &Mutex<CriticalSectionRawMutex, TcpWriter<'_>>,
-    last_packet: &Signal<CriticalSectionRawMutex, Instant>,
+    last_sent: &Signal<CriticalSectionRawMutex, Instant>,
+    last_received: &Signal<CriticalSectionRawMutex, Instant>,
     ping_response: &Signal<CriticalSectionRawMutex, PingResponse>,
 ) -> SessionEnd {
-    // Send keep alive packets after connection with connect packet is established.
-    // Wait for a packet to be sent or the keep alive interval to time the wait out.
-    // If the keep alive timed the wait out, send a ping request packet.
-    // Else if a packet was sent, wait for the next packet to be sent with the keep alive
-    // interval as timeout.
+    // Two different things have to happen within the keep alive interval, and sending is only one
+    // of them. The broker drops a client it has not heard from, which sending covers. A broker
+    // that has silently gone away is only noticed by asking it something and getting an answer,
+    // which only receiving covers. Watching what was sent alone is what let a dead connection go
+    // unnoticed: the fans publish every SENSOR_POLL_INTERVAL, which is shorter than the keep
+    // alive, so the deadline was reset forever and the ping that would have exposed the broker's
+    // absence was never sent.
+    //
+    // So the next deadline belongs to whichever direction has been quiet longer.
 
-    let start = last_packet.try_take().unwrap_or(Instant::now());
-    let mut last_send = start;
+    let now = Instant::now();
+    let mut last_sent_at = last_sent.try_take().unwrap_or(now);
+    let mut last_received_at = last_received.try_take().unwrap_or(now);
     loop {
         // The server waits for 1.5 times the keep alive interval, so being off by a bit due to
         // network, async overhead or the clock not being exactly precise is fine
-        let deadline = last_send + configuration::KEEP_ALIVE;
-        info!("[Keep Alive] Waiting for next packet or keep alive timeout");
-        let result = with_deadline(deadline, last_packet.wait()).await;
+        let deadline = last_sent_at.min(last_received_at) + configuration::KEEP_ALIVE;
+        info!("[Keep Alive] Waiting for traffic in either direction or keep alive timeout");
+        let result = with_deadline(deadline, select(last_sent.wait(), last_received.wait())).await;
         match result {
             Err(TimeoutError {}) => {
                 info!("[Keep Alive] Sending keep alive ping request");
@@ -403,7 +413,7 @@ async fn keep_alive(
 
                 // Keep alive is time from when the last packet was sent and not when the ping response
                 // was received. Therefore, we need to reset it here
-                last_send = Instant::now();
+                last_sent_at = Instant::now();
 
                 // Wait for ping response
                 info!("[Keep Alive] Waiting for ping response");
@@ -415,16 +425,23 @@ async fn keep_alive(
                     return SessionEnd::PingResponseTimeout;
                 }
 
-                let response_duration = Instant::now() - last_send;
+                // The answer is the proof the connection is alive that sending alone never gives
+                last_received_at = Instant::now();
+
+                let response_duration = last_received_at - last_sent_at;
                 info!(
                     "[Keep Alive] Received and processed ping response in {:?} ({}μs) after sending ping request",
                     response_duration,
                     response_duration.as_micros()
                 );
             }
-            Ok(last_packet) => {
+            Ok(Either::First(sent_at)) => {
                 info!("[Keep Alive] Sent packet. Resetting timer to send keep alive");
-                last_send = last_packet;
+                last_sent_at = sent_at;
+            }
+            Ok(Either::Second(received_at)) => {
+                info!("[Keep Alive] Heard from the broker. Resetting timer to send keep alive");
+                last_received_at = received_at;
             }
         }
     }
@@ -716,8 +733,10 @@ pub(super) async fn mqtt_with_connect<
                 let ping_response: Signal<CriticalSectionRawMutex, PingResponse> = Signal::new();
 
                 let outgoing: Channel<CriticalSectionRawMutex, Message<Send>, 8> = Channel::new();
-                // The instant when the last packet was sent to determine when the next keep alive has to be sent
-                let last_packet: Signal<CriticalSectionRawMutex, Instant> = Signal::new();
+                // The instants when a packet was last sent and last received, which together
+                // decide when the next keep alive has to be sent
+                let last_sent: Signal<CriticalSectionRawMutex, Instant> = Signal::new();
+                let last_received: Signal<CriticalSectionRawMutex, Instant> = Signal::new();
 
                 // Using a mutex for the writer, so it can be shared between the task that sends messages (for
                 // subscribing and publishing fan speed updates) and the task that sends the keep alive ping
@@ -730,10 +749,11 @@ pub(super) async fn mqtt_with_connect<
                     &acknowledgements,
                     &waker,
                     &ping_response,
+                    &last_received,
                 );
 
                 // Future 2
-                let talk = talk(&writer, &outgoing, &last_packet);
+                let talk = talk(&writer, &outgoing, &last_sent);
 
                 // Future 3
                 let set_up = set_up_subscriptions(
@@ -745,7 +765,7 @@ pub(super) async fn mqtt_with_connect<
                 );
 
                 // Future 4
-                let keep_alive = keep_alive(&writer, &last_packet, &ping_response);
+                let keep_alive = keep_alive(&writer, &last_sent, &last_received, &ping_response);
 
                 // Future 5
                 let handle_publish_send = handle_publish_send(receiver, &outgoing);
