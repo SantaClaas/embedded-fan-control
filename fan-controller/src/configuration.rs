@@ -49,6 +49,14 @@ const _: () = {
     core::assert!(seconds == 60);
 };
 
+/// How often the Wi-Fi link is checked once it is up, to notice the access point going away.
+pub(crate) const WIFI_LINK_CHECK_INTERVAL: Duration = Duration::from_secs(5);
+
+/// How long to wait between attempts to join the Wi-Fi network. Without it a network that is not
+/// there is retried as fast as the chip can answer, which is a busy loop for as long as the
+/// access point stays off.
+pub(crate) const WIFI_JOIN_RETRY_DELAY: Duration = Duration::from_secs(5);
+
 /// The timeout not to be confused with the keep alive interval is used for packets that require a
 /// response packet from the broker. If the client does not receive a response within the timeout
 /// the client will stop waiting for a response which can lead to a disconnect or retry in some cases.

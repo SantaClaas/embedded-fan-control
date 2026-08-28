@@ -529,6 +529,7 @@ pub(super) async fn set_up_network_stack(
     join_wifi_network(&mut control).await;
     info!("[Network] Joined wifi network");
 
+
     // Wait for DHCP
     info!("[Network] Waiting for DHCP");
     while !stack.is_config_up() {
@@ -548,7 +549,42 @@ pub(super) async fn set_up_network_stack(
     stack.wait_config_up().await;
     info!("[Network] Stack is up");
 
+    // Hand the control handle on rather than dropping it, so the link can be rebuilt later
+    unwrap!(spawner.spawn(rejoin_wifi_routine(control, stack)));
+
     stack
+}
+
+/// Joins the Wi-Fi network again whenever the link goes down.
+///
+/// Joining once at start up is enough right up until the access point goes away. The mesh access
+/// point this controller reached the network through is switched off overnight, and nothing ever
+/// brought the link back: the fans, the button and the LEDs carried on working perfectly while
+/// the controller sat unreachable for days, transmitting to an access point that was not there.
+///
+/// The MQTT session already reconnects when the broker goes away. This is the same idea one layer
+/// down, and without it that reconnect loop retries forever over a radio link that can never work
+/// again.
+#[embassy_executor::task]
+async fn rejoin_wifi_routine(
+    mut control: Control<'static>,
+    stack: &'static Stack<NetDriver<'static>>,
+) {
+    loop {
+        // Nothing to do for as long as the link holds
+        while stack.is_link_up() {
+            Timer::after(configuration::WIFI_LINK_CHECK_INTERVAL).await;
+        }
+
+        warn!("[Network] Wi-Fi link is down. Joining again");
+        join_wifi_network(&mut control).await;
+        info!("[Network] Joined wifi network again");
+
+        // An address has to be picked up again before anything can use the stack
+        info!("[Network] Waiting for the stack to come back up");
+        stack.wait_config_up().await;
+        info!("[Network] Stack is up again");
+    }
 }
 
 async fn join_wifi_network(control: &mut Control<'_>) {
@@ -559,10 +595,15 @@ async fn join_wifi_network(control: &mut Control<'_>) {
             .await
         {
             Ok(_) => break,
-            Err(error) => info!(
-                "[Join Wifi] Error joining Wi-Fi network with status: {}",
-                error.status
-            ),
+            Err(error) => {
+                info!(
+                    "[Join Wifi] Error joining Wi-Fi network with status: {}",
+                    error.status
+                );
+                // An access point that is switched off for the night is not going to answer any
+                // sooner for being asked continuously
+                Timer::after(configuration::WIFI_JOIN_RETRY_DELAY).await;
+            }
         }
     }
 }
