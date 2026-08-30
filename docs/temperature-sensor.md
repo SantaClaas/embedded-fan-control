@@ -76,15 +76,26 @@ Temperature value = 0x131, converted to decimal 305, actual temperature value = 
 
 #### The host reads the humidity command frame (0x04):
 
+> [!WARNING]
+> **Both frames in this humidity section had wrong check bytes in the source we transcribed from,
+> and both have been corrected below.** The request was printed as `0xC1 0xCA` but `01 04 00 02 00
+> 01` checksums to `0x90 0x0A`; the response was printed as `0xD1 0xBA` but `01 04 02 02 22`
+> checksums to `0x38 0x49`.
+>
+> Every other frame in this file is correct, as is every frame in the relay manual. They were all
+> checked against the CRC implementation in
+> [serial/src/modbus/crc.ts](../serial/src/modbus/crc.ts) by `serial/src/modbus/crc.test.ts`, which
+> is where the mistake surfaced. Do not "fix" these back without recomputing them.
+
 | Slave address | function code | Register address High byte | Register address Low byte | Number of registers High byte | Number of registers Low byte | CRC High byte | CRC Low byte |
 | ------------- | ------------- | -------------------------- | ------------------------- | ----------------------------- | ---------------------------- | ------------- | ------------ |
-| 0x01          | 0x04          | 0x00                       | 0x02                      | 0x00                          | 0x01                         | 0xC1          | 0xCA         |
+| 0x01          | 0x04          | 0x00                       | 0x02                      | 0x00                          | 0x01                         | 0x90          | 0x0A         |
 
 #### The slave responds to the data frame:
 
 | Slave address | function code | Number of bytes | humidity High byte | humidity Low byte | CRC High byte | CRC Low byte |
 | ------------- | ------------- | --------------- | ------------------ | ----------------- | ------------- | ------------ |
-| 0x01          | 0x04          | 0x02            | 0x02               | 0x22              | 0xD1          | 0xBA         |
+| 0x01          | 0x04          | 0x02            | 0x02               | 0x22              | 0x38          | 0x49         |
 
 Humidity value=0x222, converted to decimal 546, actual humidity value=546 / 10 = 54.6%;
 
