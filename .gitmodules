@@ -1,0 +1,3 @@
+[submodule "docs/manufacturer"]
+	path = docs/manufacturer
+	url = https://github.com/SantaClaas/fan-documentation.git
