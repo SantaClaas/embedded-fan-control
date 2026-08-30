@@ -260,6 +260,39 @@ This is the pattern for testing anything else in the firmware: move the logic in
 and re-export it. Recorded in `CLAUDE.md`, which also no longer claims `bacon test` works in
 `fan-controller`, because that job is from the stock template and the target has no test harness.
 
+### Done since — the bypass damper
+
+A relay on the modbus bus opens and closes the summer bypass, and Home Assistant drives it as a
+switch. It went in as three layers: a `Switch` variant in `home_assistant_discovery` with the
+topics in `topic/src/lib.rs`, then `WriteSingleCoil`/`ReadCoil` and their client methods in
+`src/modbus/`, then `bypass_routine` and `src/bypass.rs`.
+
+Worth recording, because each was a decision rather than an obvious step:
+
+- **Coil addresses are their own type.** On this relay coil `0x0000` is the relay and holding
+  register `0x0000` is the module's own device address, so confusing the two would renumber the
+  module instead of moving the damper.
+- **`transact_write` is shared with the register write.** The frames and the echo are identical;
+  only how much of the echoed value has to match differed, so the fan's ignored low bits became an
+  argument instead of a constant in the function body.
+- **A failed write is not corrected, only logged.** Unlike two fans drifting apart, a damper that
+  stayed where it was does not put the house under pressure, so there is nothing to push back.
+- **The position is read back on boot.** The relay has its own supply and holds its position
+  through a controller reset, so what it reports is the truth rather than a guess. It waits
+  `BYPASS_STARTUP_DELAY` first so the fans' set point reads get the bus.
+- **The state publish is awaited, not dropped on a full channel.** It is the only message that
+  will ever describe that position, unlike a sensor reading that repeats on a timer.
+- **No LEDs.** Both are fully spoken for by the fan speed protocol.
+- **No automation on the device.** When to open the bypass is a temperature question Home
+  Assistant already has the sensors for.
+
+Two things are unverified and both need hardware. **The relay's parity is undocumented** — the bus
+is 19 200 8E1 and modules of this kind are usually 8N1, which cannot share the line. If it stays
+silent, the fallback is its own UART and transceiver at 9600 8N1 rather than changing the fans.
+And the relay has to be **commissioned off the bus first**: address `0xFF` → `0x04`, baud 9600 →
+19 200. Both are written up in the bypass relay section of `documentation.md`, along with which
+contact to hang the damper off so a relay that loses power leaves the house recovering heat.
+
 ---
 
 ## Asked for, not yet started
@@ -306,15 +339,17 @@ the mode and get the toggle in Home Assistant to follow.
 
 The work, in the order it has to happen:
 
-1. **A switch component in the discovery payload.** `home_assistant_discovery::Component` only has
-   `Fan` and `Sensor` variants; a `Switch` has to be added with its state and command topics. The
-   topics belong in `topic/src/lib.rs` next to the existing controller-wide `STATE`/`COMMAND`,
-   since synchronization is a property of the controller rather than of either fan, and the
-   component itself is added in `set_discovery_payload()` in `build.rs`. Watch the payload size:
-   `main.rs` asserts at compile time that it fits `mqtt::task::SEND_BUFFER_SIZE`, and that
-   assertion exists precisely because a payload that does not fit is refused and only logged.
-2. **A sixth subscription.** `SUBSCRIPTIONS` in `src/task.rs:441` is a fixed array of five with a
-   `SUBSCRIPTIONS_LENGTH` next to it; the command topic joins it. Decoding needs a new
+1. **A switch component in the discovery payload.** — done by the bypass work.
+   `home_assistant_discovery::Component` now has a `Switch` variant, and the bypass shows how one
+   is announced: topics in `topic/src/lib.rs` next to the controller-wide `STATE`/`COMMAND`, the
+   component added in `set_discovery_payload()` in `build.rs`. Synchronization is a property of the
+   controller rather than of either fan, so its topics belong in the same place. Watch the payload
+   size: `main.rs` asserts at compile time that it fits `mqtt::task::SEND_BUFFER_SIZE`, and the
+   bypass switch left about 625 bytes of that. The assertion exists precisely because a payload
+   that does not fit is refused and only logged.
+2. **A seventh subscription.** `SUBSCRIPTIONS` in `src/task.rs` is a fixed array with a
+   `SUBSCRIPTIONS_LENGTH` next to it — six since the bypass — and the command topic joins it. The
+   bypass command is the worked example of the rest of this step. Decoding needs a new
    `IncomingPublish` variant alongside `FanCommand` (`src/main.rs:427`) and an arm in the
    `TryFrom<Publish>` match (`src/main.rs:450`) — the payload is `ON`/`OFF`, which
    the existing arms match as raw `b"ON"`/`b"OFF"` bytes inline rather than through a shared

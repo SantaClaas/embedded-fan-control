@@ -1,5 +1,3 @@
-#![allow(dead_code, reason = "called by the bypass routine, added next")]
-
 use crate::modbus;
 
 /// Reads a single coil. Modbus answers a coil read with a run of bits packed into bytes, so asking

@@ -140,7 +140,8 @@ PIN_18 button, PIN_20/PIN_21 status LEDs, PIN_23/25/24/29 + PIO0 + DMA_CH0 for t
 The primitive type encodes the intent, so pick deliberately when adding one:
 
 - `Channel` (`IN` / `OUT`, size 8) — MQTT publishes in and out; every message must be delivered.
-- `Signal` (`FAN_ONE_STATE` / `FAN_TWO_STATE`) — the *requested* set point; only the latest matters.
+- `Signal` (`FAN_ONE_STATE` / `FAN_TWO_STATE` / `BYPASS_STATE`) — the *requested* set point or
+  bypass position; only the latest matters.
 - `Watch` (`FAN_ONE_DISPLAY_STATE` / `FAN_TWO_DISPLAY_STATE`, 2 receivers each) — the *confirmed*
   set point, published only after the fan acknowledged the Modbus write, and fanned out to both the
   display routine and the button routine.
@@ -171,6 +172,17 @@ the other three values. The documented energy counter (`D029`/`D02A`) is *not* r
 answer `0xFFFF` for it, so the sensor was removed rather than announced as a value that is never
 real.
 
+Also independent of that flow, `bypass_routine` drives the relay that opens the summer bypass
+damper (`bypass.rs` holds its addresses, the way `fan/mod.rs` holds a fan's). It is a coil device
+rather than a register one, so it uses `WriteSingleCoil`/`ReadCoil`. It shares the modbus mutex and
+takes it for one transaction at a time. Two things differ from `fan_control_routine`: there is no
+second device to keep in step, so a write that will not go through is logged and left alone rather
+than corrected; and the relay is powered separately, so it holds its position across a controller
+reset and the position is read back on boot rather than assumed. Its state publish is awaited
+rather than dropped on a full channel, unlike the sensor and display publishes — it is the only
+message that will ever describe that position, and a stale toggle in Home Assistant is worse than
+waiting. Nothing on the device displays the bypass; both LEDs belong to the fan speeds.
+
 The `Publish` trait (`task.rs`) plus `TryEncode`/`TryDecode` (`mqtt/mod.rs`) let outgoing messages
 be encoded straight into the TCP buffer without intermediate allocation — there is no allocator.
 
@@ -183,7 +195,10 @@ be encoded straight into the TCP buffer without intermediate allocation — ther
   the range it shows is that capped one. `LOW` and `MEDIUM` are the thirds of it (`MAX / 6` and
   `MAX / 3`), which makes the button cycle through the same steps the Home Assistant slider shows
   rather than through arbitrary points on it.
-- Fan Modbus addresses start at `0x02`/`0x03`; `0x01` is avoided as a likely factory default.
+- Fan Modbus addresses start at `0x02`/`0x03`; `0x01` is avoided as a likely factory default. The
+  bypass relay is `0x04`, set on the module before it goes on the bus — it ships as `0xFF`, which
+  Modbus reserves. Its parity is undocumented and unverified against the bus's 8E1; see the bypass
+  relay section of `fan-controller/documentation.md`.
 - UART is 19_200 baud, 8 data bits, **even** parity, 1 stop bit.
 - Sensor values live in *input* registers (function code `0x04`), which are read only, unlike the
   holding registers (`0x03` / `0x06`) the set point lives in. `ReadInputRegisters<COUNT>` asks for a
