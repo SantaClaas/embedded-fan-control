@@ -14,3 +14,10 @@ https://github.com/raspberrypi/debugprobe/releases/tag/debugprobe-v2.2.3
 
 # Debugging MQTT discovery payload in Home Assistant
 If the MQTT discovery payload contains invalid values, it will usually be logged at under [Settings > System Log](http://homeassistant:8123/config/logs)
+
+# Manufacturer documentation submodule
+[docs/manufacturer](docs/manufacturer) is a submodule pointing at the private
+[fan-documentation](https://github.com/SantaClaas/fan-documentation) repo, which holds the
+ebm-papst fan manuals and other possibly copyrighted manufacturer material kept out of this
+public repo. Run `git submodule update --init` after cloning to fetch it (requires access to
+that private repo).
