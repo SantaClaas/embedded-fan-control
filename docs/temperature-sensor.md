@@ -1,5 +1,9 @@
 > [!NOTE]
-> This is an attempt at formatting what we found as documentation for the temparature sensor
+> This is an attempt at formatting what we found as documentation for the temparature sensor.
+> The raw text it was formatted from is kept alongside it in
+> [temperature-sensor-unformatted.txt](temperature-sensor-unformatted.txt). Unlike the RadiCal fan
+> and the relay module, no manufacturer PDF exists for this device, so this file is the only
+> documentation there is.
 
 ## Product parameters:
 

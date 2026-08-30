@@ -1,47 +1,59 @@
-# Svelte + TS + Vite
+# serial
 
-This template should help get you started developing with Svelte and TypeScript in Vite.
+A browser tool for talking to the RS-485/Modbus RTU devices on this project's bus, using the
+[Web Serial API](https://developer.mozilla.org/en-US/docs/Web/API/Web_Serial_API). It opens a USB
+serial adapter straight from the page, reads input registers and reads *and writes* holding
+registers — which is how a device gets configured before it is wired into the fan controller.
 
-## Recommended IDE Setup
+It was folded in from [SantaClaas/serial](https://github.com/SantaClaas/serial), where it lived as
+its own repository.
 
-[VS Code](https://code.visualstudio.com/) + [Svelte](https://marketplace.visualstudio.com/items?itemName=svelte.svelte-vscode).
+## Running it
 
-## Need an official Svelte framework?
-
-Check out [SvelteKit](https://github.com/sveltejs/kit#readme), which is also powered by Vite. Deploy anywhere with its serverless-first approach and adapt to various platforms, with out of the box support for TypeScript, SCSS, and Less, and easily-added support for mdsvex, GraphQL, PostCSS, Tailwind CSS, and more.
-
-## Technical considerations
-
-**Why use this over SvelteKit?**
-
-- It brings its own routing solution which might not be preferable for some users.
-- It is first and foremost a framework that just happens to use Vite under the hood, not a Vite app.
-
-This template contains as little as possible to get started with Vite + TypeScript + Svelte, while taking into account the developer experience with regards to HMR and intellisense. It demonstrates capabilities on par with the other `create-vite` templates and is a good starting point for beginners dipping their toes into a Vite + Svelte project.
-
-Should you later need the extended capabilities and extensibility provided by SvelteKit, the template has been structured similarly to SvelteKit so that it is easy to migrate.
-
-**Why `global.d.ts` instead of `compilerOptions.types` inside `jsconfig.json` or `tsconfig.json`?**
-
-Setting `compilerOptions.types` shuts out all other types not explicitly listed in the configuration. Using triple-slash references keeps the default TypeScript setting of accepting type information from the entire workspace, while also adding `svelte` and `vite/client` type information.
-
-**Why include `.vscode/extensions.json`?**
-
-Other templates indirectly recommend extensions via the README, but this file allows VS Code to prompt the user to install the recommended extension upon opening the project.
-
-**Why enable `allowJs` in the TS template?**
-
-While `allowJs: false` would indeed prevent the use of `.js` files in the project, it does not prevent the use of JavaScript syntax in `.svelte` files. In addition, it would force `checkJs: false`, bringing the worst of both worlds: not being able to guarantee the entire codebase is TypeScript, and also having worse typechecking for the existing JavaScript. In addition, there are valid use cases in which a mixed codebase may be relevant.
-
-**Why is HMR not preserving my local component state?**
-
-HMR state preservation comes with a number of gotchas! It has been disabled by default in both `svelte-hmr` and `@sveltejs/vite-plugin-svelte` due to its often surprising behavior. You can read the details [here](https://github.com/rixo/svelte-hmr#svelte-hmr).
-
-If you have state that's important to retain within a component, consider creating an external store which would not be replaced by HMR.
-
-```ts
-// store.ts
-// An extremely simple external store
-import { writable } from 'svelte/store'
-export default writable(0)
+```bash
+cd serial && npm install && npm run dev
 ```
+
+The Web Serial API is Chromium-only (Chrome, Edge, Opera) and needs a secure context, so `localhost`
+or HTTPS. The app says so itself when the API is missing rather than failing silently.
+
+`npm run check` type-checks the Svelte components.
+
+## What it does today
+
+- **Add Port** calls `navigator.serial.requestPort()` filtered to USB vendor `0x1A86` / product
+  `0x7523` — the CH340 adapter. That filter is hardcoded in `src/lib/SerialPortsList.svelte`, so a
+  different adapter will not show up in the picker.
+- Baud rate and parity are chosen per port before opening it. The RadiCal fans want 19 200 baud with
+  **even** parity; the temperature sensor defaults to 9600 with **no** parity. A port can only speak
+  one of those at a time.
+- Devices are added to an open port by Modbus address. Each device type declares its registers
+  once — address, length, how to decode the bytes, and for holding registers how to encode and
+  validate them — and the UI is generated from that declaration
+  (`src/lib/modbus.ts`, `src/lib/devices/`).
+- Two device types are implemented: the ebm-papst RadiCal fan (`devices/fan.ts`) and the temperature
+  sensor (`devices/temperatureSensor.ts`).
+
+## Where the device documentation lives
+
+- **RadiCal fans** — `docs/manufacturer/radical/`, in the private submodule. The authority on
+  register addresses, units and naming.
+- **Relay module** — `docs/manufacturer/relay/`, same submodule.
+- **Temperature sensor** — [docs/temperature-sensor.md](../docs/temperature-sensor.md). No
+  manufacturer PDF exists for it; that file is all there is.
+
+The register names in `devices/fan.ts` are working translations of the German manual made before
+that manual was checked in, and several are flagged as guesses in the source (`PhaseControlFactor`
+for *Aussteuergrad*, `CurrentDesiredEffect` for *Aktueller Wirksinn*). Prefer the terminology in the
+RadiCal documentation over these.
+
+## Status
+
+This is Svelte 4 on Vite 4 and is slated to be rewritten from scratch on SolidJS, adding passive
+listening of bus traffic in the manner of [debug-listener](../debug-listener). Treat the current
+code as reference for what the devices do, not as the shape the rewrite should take.
+
+The GitHub Pages deployment workflow that shipped with the standalone repository was dropped during
+the fold-in: GitHub only reads workflows from the repository root, so it would never have run from
+`serial/.github/`. It needs to be re-created at the repository root, scoped to this directory, when
+the rewrite is ready to deploy.
