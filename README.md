@@ -15,6 +15,20 @@ https://github.com/raspberrypi/debugprobe/releases/tag/debugprobe-v2.2.3
 # Debugging MQTT discovery payload in Home Assistant
 If the MQTT discovery payload contains invalid values, it will usually be logged at under [Settings > System Log](http://homeassistant:8123/config/logs)
 
+# Wi-Fi firmware
+[fan-controller/cyw43-firmware](fan-controller/cyw43-firmware) holds the CYW43439 blobs the Pico W's
+Wi-Fi chip needs, taken from Infineon's
+[wifi-host-driver](https://github.com/Infineon/wifi-host-driver/tree/master/WiFi_Host_Driver/resources/firmware/COMPONENT_43439).
+They are committed rather than fetched or submoduled, because `include_bytes!` in
+[main.rs](fan-controller/src/main.rs) bakes them into the binary at compile time — a checkout
+without them does not build at all.
+
+Redistributing them is permitted. They are covered by the
+[Infineon Permissive Binary License](fan-controller/cyw43-firmware/LICENSE-permissive-binary-license-1.0.txt),
+which allows redistribution in binary form as long as the copyright notice and disclaimer are
+provided with them. That is what the license file and the directory's own README are for, so keep
+both next to the blobs.
+
 # Manufacturer documentation submodule
 [docs/manufacturer](docs/manufacturer) is a submodule pointing at the private
 [fan-documentation](https://github.com/SantaClaas/fan-documentation) repo, which holds the
