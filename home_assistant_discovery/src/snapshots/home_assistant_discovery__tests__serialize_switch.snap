@@ -1,0 +1,11 @@
+---
+source: home_assistant_discovery/src/lib.rs
+expression: component
+---
+{
+  "p": "switch",
+  "name": "Bypass",
+  "uniq_id": "fan-controller/bypass",
+  "stat_t": "fan-controller/bypass/on/state",
+  "cmd_t": "fan-controller/bypass/on/set"
+}

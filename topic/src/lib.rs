@@ -23,6 +23,23 @@ pub mod fan_controller {
     /// This topic is used by Home Assistant to notify the fan controller to turn on or off.
     pub const COMMAND: &str = formatcp!("{OBJECT_ID}/on/set");
 
+    /// The bypass damper, opened and closed by a relay rather than by either fan. It belongs to
+    /// the controller rather than to a fan, so its topics sit next to the controller wide ones
+    /// instead of under [`fan_1`] or [`fan_2`]
+    pub mod bypass {
+        use super::OBJECT_ID;
+        use const_format::formatcp;
+
+        pub const UNIQUE_ID: &str = formatcp!("{OBJECT_ID}/bypass");
+
+        /// The topic to publish whether the bypass is open, after the relay acknowledged the
+        /// write. Only what the relay confirmed is published here, the same way a fan's speed is
+        pub const STATE: &str = formatcp!("{UNIQUE_ID}/on/state");
+        /// The topic to subscribe to for opening and closing the bypass.
+        /// This topic is used by Home Assistant to notify the fan controller to drive the relay
+        pub const COMMAND: &str = formatcp!("{UNIQUE_ID}/on/set");
+    }
+
     pub mod fan_1 {
         use super::OBJECT_ID;
         use const_format::formatcp;
