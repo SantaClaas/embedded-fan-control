@@ -1,3 +1,9 @@
+# Layout
+Most of this repository is one Cargo workspace: the [fan-controller](fan-controller) firmware and
+the crates that support it. Next to it sits [serial](serial), a browser tool for the same
+RS-485/Modbus bus, which is a plain npm project and not a workspace member. It was folded in from
+[SantaClaas/serial](https://github.com/SantaClaas/serial) and keeps its history here.
+
 # Caveats
 **Packages can not be run from the workspace root.** You need run them from their respective directory.
 This is due to the [fan-controller](fan-controller) package only compiling with the `thumbv6m-none-eabi` target which is
@@ -35,3 +41,30 @@ both next to the blobs.
 ebm-papst fan manuals and other possibly copyrighted manufacturer material kept out of this
 public repo. Run `git submodule update --init` after cloning to fetch it (requires access to
 that private repo).
+
+# Device documentation
+Three kinds of device sit on the Modbus bus, and their documentation lives in three places:
+
+| Device | Documentation |
+|---|---|
+| ebm-papst RadiCal fans | `docs/manufacturer/radical/` (submodule) |
+| Modbus relay module | `docs/manufacturer/relay/` (submodule) |
+| RS-485 temperature/humidity sensor | [docs/temperature-sensor.md](docs/temperature-sensor.md) |
+
+The temperature sensor has no manufacturer PDF — that markdown file, and the
+[raw text](docs/temperature-sensor-unformatted.txt) it was formatted from, are the only
+documentation for it, which is why they live in this public repo rather than the submodule.
+
+# The serial tool
+[serial](serial) opens a USB serial adapter straight from the browser with the
+[Web Serial API](https://developer.mozilla.org/en-US/docs/Web/API/Web_Serial_API) and reads and
+writes device registers over Modbus RTU. It is how a device gets configured — its address, baud
+rate, correction values — before it is wired into the controller.
+
+```bash
+cd serial && npm install && npm run dev
+```
+
+It needs a Chromium-based browser; the Web Serial API is not available elsewhere. It is slated for
+a rewrite on SolidJS that also listens passively to bus traffic, the way
+[debug-listener](debug-listener) does from the desktop. See [serial/README.md](serial/README.md).
