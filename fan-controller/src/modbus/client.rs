@@ -11,11 +11,12 @@ use embedded_io_async::{Read, ReadExactError, Write};
 use crate::{
     configuration,
     modbus::function::{
-        ReadHoldingRegister, ReadInputRegisters, WriteHoldingRegister, code, read_input_register,
+        ReadCoil, ReadHoldingRegister, ReadInputRegisters, WriteHoldingRegister, WriteSingleCoil,
+        code, read_input_register,
     },
 };
 
-/// How sending a request to the fan failed
+/// How sending a request to a device failed
 #[derive(Debug, Clone, Copy, defmt::Format)]
 pub(crate) enum SendFailure {
     /// Writing the request timed out
@@ -28,7 +29,7 @@ pub(crate) enum SendFailure {
 /// caller, because it is the one that knows which read this was
 #[derive(Debug, Clone, Copy, defmt::Format)]
 pub(crate) enum ReceiveFailure {
-    /// Waiting for the bytes timed out. This is what a silent fan looks like
+    /// Waiting for the bytes timed out. This is what a silent device looks like
     Timeout,
     /// The UART failed while reading
     Uart,
@@ -38,7 +39,7 @@ pub(crate) enum ReceiveFailure {
 
 /// The parts of a response that every function reads the same way. The header comes first because
 /// it decides how long the rest of the frame is, and an exception frame is what arrives in place
-/// of an answer when the fan refuses
+/// of an answer when the device refuses
 #[derive(Debug, Clone, Copy, defmt::Format)]
 pub(crate) enum Part {
     /// The device address and the function code
@@ -47,11 +48,14 @@ pub(crate) enum Part {
     Exception,
 }
 
-/// The exception codes the fan documents for write single register.
+/// The exception codes a device can refuse a write with, whether it was to a register or to a
+/// coil. They are the standard modbus ones, described the way the fan specification describes
+/// them — the relay documents no exception codes at all.
 /// See MODBUS Parameter RadiCal im Spiralgehäuse V1.00, section 1.3.3
 #[derive(Debug, Clone, Copy, defmt::Format)]
 pub(crate) enum WriteException {
-    /// The register address is outside the D000 ... D614 range the fan accepts
+    /// The address is one the device does not have. On the fan that is anything outside the
+    /// D000 ... D614 range it accepts
     RegisterOutOfRange,
     /// The register could not be written, because the electronics are defective or because this
     /// password level has no write permission for it
@@ -71,11 +75,14 @@ impl From<u8> for WriteException {
     }
 }
 
-/// The exception codes the fan documents for read holding register.
+/// The exception codes a device can refuse a read with, whether it was of registers or of coils.
+/// They are the standard modbus ones, described the way the fan specification describes them —
+/// the relay documents no exception codes at all.
 /// See MODBUS Parameter RadiCal im Spiralgehäuse V1.00, section 1.3.1
 #[derive(Debug, Clone, Copy, defmt::Format)]
 pub(crate) enum ReadException {
-    /// The register address is outside the D000 ... D614 range the fan accepts
+    /// The address is one the device does not have. On the fan that is anything outside the
+    /// D000 ... D614 range it accepts
     RegisterOutOfRange,
     /// The answer would exceed the 80 byte maximum telegram length, which means more than 37 or
     /// zero registers were asked for
@@ -97,7 +104,7 @@ impl From<u8> for ReadException {
     }
 }
 
-/// What the fan is answering with, which its header is what decides
+/// What the device is answering with, which its header is what decides
 enum Answer {
     /// The answer to the function that was requested. Its body follows the header
     Requested,
@@ -179,8 +186,21 @@ const HEADER_LENGTH: usize = 2;
 /// zero. See MODBUS Parameter RadiCal im Spiralgehäuse V1.00, section 2.3
 const IGNORED_SET_POINT_BITS: u16 = 0x000F;
 
-/// A successful response to a write holding register request echoes the request back
+/// A successful response to a write holding register or write single coil request echoes the
+/// request back
 const WRITE_RESPONSE_LENGTH: usize = 8;
+
+/// A successful response to a read coil request: the header, the byte count, the one byte the
+/// single coil that was asked for is packed into, and the checksum
+// Allowed until the routine that drives the bypass is the caller
+#[allow(dead_code)]
+const READ_COIL_RESPONSE_LENGTH: usize = 6;
+
+/// How many data bytes a read of the single coil asked for has to announce. Modbus packs eight
+/// coils into a byte, so asking for one still comes back as a whole byte
+// Allowed until the routine that drives the bypass is the caller
+#[allow(dead_code)]
+const READ_COIL_BYTE_COUNT: u8 = 1;
 
 /// A successful response to a read holding register request: the header, the byte count, the
 /// contents of the one register that was asked for, and the checksum
@@ -206,12 +226,14 @@ const EXCEPTION_RESPONSE_LENGTH: usize = 5;
 /// Modbus separates frames by 3.5 characters of silence which is about 2 ms at 19200 baud 8E1
 const DISCARD_TIMEOUT: Duration = Duration::from_millis(5);
 
-/// Which of the two fans a device address belongs to, for the log
-fn fan_identifier(device_address: u8) -> &'static str {
+/// Which device on the bus an address belongs to, for the log. The fans are not the only thing on
+/// it any more, so an address that is not one of them is a device this function has not been told
+/// about rather than a mistake
+fn device_identifier(device_address: u8) -> &'static str {
     match device_address {
         2 => "[Fan 1]",
         3 => "[Fan 2]",
-        _other => "Unknown (oops)",
+        _other => "[Unknown device]",
     }
 }
 
@@ -253,10 +275,47 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
         &mut self,
         message: &WriteHoldingRegister,
     ) -> Result<(), WriteError> {
-        let fan_identifier = fan_identifier(*message.device_address());
+        let device_identifier = device_identifier(*message.device_address());
 
-        let result = self.transact_write(message, fan_identifier).await;
-        self.clear_line_after(&result, fan_identifier).await;
+        let result = self
+            .transact_write(message.as_ref(), IGNORED_SET_POINT_BITS, device_identifier)
+            .await;
+        self.clear_line_after(&result, device_identifier).await;
+
+        result
+    }
+
+    /// Drives a single coil and waits for the device to acknowledge it, which is how the bypass
+    /// relay is opened and closed
+    // Allowed until the routine that drives the bypass is the caller
+    #[allow(dead_code)]
+    pub(crate) async fn write_single_coil(
+        &mut self,
+        message: &WriteSingleCoil,
+    ) -> Result<(), WriteError> {
+        let device_identifier = device_identifier(*message.device_address());
+
+        // Every bit of the echo has to match here, unlike a set point: a coil has two positions
+        // and nothing about the value that carries them is ignored
+        const IGNORED_VALUE_BITS: u16 = 0x0000;
+        let result = self
+            .transact_write(message.as_ref(), IGNORED_VALUE_BITS, device_identifier)
+            .await;
+        self.clear_line_after(&result, device_identifier).await;
+
+        result
+    }
+
+    /// Reads back which position a coil is in, which is how the bypass relay is asked where it
+    /// stands. It keeps its position while the controller resets, so this is worth asking on boot
+    /// rather than assuming
+    // Allowed until the routine that drives the bypass is the caller
+    #[allow(dead_code)]
+    pub(crate) async fn read_coil(&mut self, message: &ReadCoil) -> Result<bool, ReadError> {
+        let device_identifier = device_identifier(*message.device_address());
+
+        let result = self.transact_read_coil(message, device_identifier).await;
+        self.clear_line_after(&result, device_identifier).await;
 
         result
     }
@@ -267,12 +326,12 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
         &mut self,
         message: &ReadInputRegisters<COUNT>,
     ) -> Result<[u16; COUNT], ReadError> {
-        let fan_identifier = fan_identifier(*message.device_address());
+        let device_identifier = device_identifier(*message.device_address());
 
         let result = self
-            .transact_read_input_registers(message, fan_identifier)
+            .transact_read_input_registers(message, device_identifier)
             .await;
-        self.clear_line_after(&result, fan_identifier).await;
+        self.clear_line_after(&result, device_identifier).await;
 
         result
     }
@@ -282,10 +341,10 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
         &mut self,
         message: &ReadHoldingRegister,
     ) -> Result<u16, ReadError> {
-        let fan_identifier = fan_identifier(*message.device_address());
+        let device_identifier = device_identifier(*message.device_address());
 
-        let result = self.transact_read(message, fan_identifier).await;
-        self.clear_line_after(&result, fan_identifier).await;
+        let result = self.transact_read(message, device_identifier).await;
+        self.clear_line_after(&result, device_identifier).await;
 
         result
     }
@@ -293,26 +352,30 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
     /// A failed transaction can leave part of a frame in the receive buffer. Dropping it keeps the
     /// next transaction from reading those leftovers as its own response. Both fans share this
     /// UART, so leftovers from one would otherwise be read as an answer from the other.
-    async fn clear_line_after<T, E>(&mut self, result: &Result<T, E>, fan_identifier: &str) {
+    async fn clear_line_after<T, E>(&mut self, result: &Result<T, E>, device_identifier: &str) {
         if result.is_err() {
-            self.discard_incoming(fan_identifier).await;
+            self.discard_incoming(device_identifier).await;
         }
     }
 
+    /// Writing a register and driving a coil are the same exchange: an eight byte request, and an
+    /// echo of it back. They differ only in how much of the echoed value has to match, which is
+    /// what `ignored_value_bits` names — a fan quietly drops the low bits of a set point, a coil
+    /// has nothing to drop
     async fn transact_write(
         &mut self,
-        message: &WriteHoldingRegister,
-        fan_identifier: &str,
+        request: &[u8],
+        ignored_value_bits: u16,
+        device_identifier: &str,
     ) -> Result<(), WriteError> {
-        let request = message.as_ref();
-        self.send_request(request, fan_identifier).await?;
+        self.send_request(request, device_identifier).await?;
 
         // The response is either an echo of the request or a shorter exception frame, so the
         // address and function code are read first to find out which one is arriving. Reading
         // exactly as many bytes as the frame holds leaves nothing behind for the next transaction.
         let mut response = [0u8; WRITE_RESPONSE_LENGTH];
         if let Answer::Exception(code) = self
-            .read_header(&mut response, request, fan_identifier)
+            .read_header(&mut response, request, device_identifier)
             .await?
         {
             return Err(WriteError::Exception(code.into()));
@@ -325,53 +388,109 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
         if !is_checksum_valid(&response) {
             warn!(
                 "{} Response failed checksum: {:?}",
-                fan_identifier, response
+                device_identifier, response
             );
             return Err(WriteError::EchoChecksum);
         }
 
-        // The echo repeats the register and the value that were written. The register has to match
+        // The echo repeats the address and the value that were written. The address has to match
         // exactly, but the fan ignores the four least significant bits of a set point, and the
         // specification does not say whether it echoes back the bits it received or the value it
         // stored. Masking those bits on both sides accepts either without accepting a real
         // mismatch, and the checksum above still catches a corrupted frame
-        let echoed_register = u16::from_be_bytes([response[2], response[3]]);
-        let requested_register = u16::from_be_bytes([request[2], request[3]]);
+        let echoed_address = u16::from_be_bytes([response[2], response[3]]);
+        let requested_address = u16::from_be_bytes([request[2], request[3]]);
         let echoed_value = u16::from_be_bytes([response[4], response[5]]);
         let requested_value = u16::from_be_bytes([request[4], request[5]]);
 
-        if echoed_register != requested_register
-            || echoed_value & !IGNORED_SET_POINT_BITS != requested_value & !IGNORED_SET_POINT_BITS
+        if echoed_address != requested_address
+            || echoed_value & !ignored_value_bits != requested_value & !ignored_value_bits
         {
             warn!(
                 "{} Response {:?} does not echo the request {:?}",
-                fan_identifier, response, request
+                device_identifier, response, request
             );
             return Err(WriteError::EchoMismatch(response));
         }
 
         info!(
-            "{} Fan acknowledged the write: {:?}",
-            fan_identifier, response
+            "{} Device acknowledged the write: {:?}",
+            device_identifier, response
         );
 
         Ok(())
     }
 
+    /// Unlike the register reads, one coil comes back as one bit in one byte rather than as a
+    /// value, so there is nothing to assemble out of the data bytes — only the lowest bit of the
+    /// only byte to look at
+    // Allowed until the routine that drives the bypass is the caller
+    #[allow(dead_code)]
+    async fn transact_read_coil(
+        &mut self,
+        message: &ReadCoil,
+        device_identifier: &str,
+    ) -> Result<bool, ReadError> {
+        let request = message.as_ref();
+        self.send_request(request, device_identifier).await?;
+
+        let mut response = [0u8; READ_COIL_RESPONSE_LENGTH];
+        if let Answer::Exception(code) = self
+            .read_header(&mut response, request, device_identifier)
+            .await?
+        {
+            return Err(ReadError::Exception(code.into()));
+        }
+
+        self.receive_exact(&mut response[HEADER_LENGTH..])
+            .await
+            .map_err(ReadError::Contents)?;
+
+        // Checked before the checksum for the same reason as in the register reads: a different
+        // byte count means a frame of a different length was just read, so a failing checksum
+        // would report something other than what actually went wrong
+        if response[2] != READ_COIL_BYTE_COUNT {
+            warn!(
+                "{} Response announced {:?} data bytes instead of {:?}: {:?}",
+                device_identifier, response[2], READ_COIL_BYTE_COUNT, response
+            );
+            return Err(ReadError::ByteCount(response[2]));
+        }
+
+        if !is_checksum_valid(&response) {
+            warn!(
+                "{} Response failed checksum: {:?}",
+                device_identifier, response
+            );
+            return Err(ReadError::ContentsChecksum);
+        }
+
+        // Coils are packed into the byte from the lowest bit up and exactly one was asked for, so
+        // it is the only bit that carries anything. The rest are padding and are ignored rather
+        // than checked, because the specification does not say what a device puts there
+        let is_on = response[3] & 0b0000_0001 != 0;
+        info!(
+            "{} Device answered the read with {:?}: {:?}",
+            device_identifier, is_on, response
+        );
+
+        Ok(is_on)
+    }
+
     async fn transact_read(
         &mut self,
         message: &ReadHoldingRegister,
-        fan_identifier: &str,
+        device_identifier: &str,
     ) -> Result<u16, ReadError> {
         let request = message.as_ref();
-        self.send_request(request, fan_identifier).await?;
+        self.send_request(request, device_identifier).await?;
 
         // Unlike the write, the answer does not repeat the request: it carries a byte count and
         // the register contents. Only one register was asked for, so its length is known in
         // advance and the byte count is a check rather than something to act on.
         let mut response = [0u8; READ_RESPONSE_LENGTH];
         if let Answer::Exception(code) = self
-            .read_header(&mut response, request, fan_identifier)
+            .read_header(&mut response, request, device_identifier)
             .await?
         {
             return Err(ReadError::Exception(code.into()));
@@ -387,7 +506,7 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
         if response[2] != READ_BYTE_COUNT {
             warn!(
                 "{} Response announced {:?} data bytes instead of {:?}: {:?}",
-                fan_identifier, response[2], READ_BYTE_COUNT, response
+                device_identifier, response[2], READ_BYTE_COUNT, response
             );
             return Err(ReadError::ByteCount(response[2]));
         }
@@ -395,7 +514,7 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
         if !is_checksum_valid(&response) {
             warn!(
                 "{} Response failed checksum: {:?}",
-                fan_identifier, response
+                device_identifier, response
             );
             return Err(ReadError::ContentsChecksum);
         }
@@ -403,7 +522,7 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
         let value = u16::from_be_bytes([response[3], response[4]]);
         info!(
             "{} Fan answered the read with {:?}: {:?}",
-            fan_identifier, value, response
+            device_identifier, value, response
         );
 
         Ok(value)
@@ -412,10 +531,10 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
     async fn transact_read_input_registers<const COUNT: usize>(
         &mut self,
         message: &ReadInputRegisters<COUNT>,
-        fan_identifier: &str,
+        device_identifier: &str,
     ) -> Result<[u16; COUNT], ReadError> {
         let request = message.as_ref();
-        self.send_request(request, fan_identifier).await?;
+        self.send_request(request, device_identifier).await?;
 
         // Like the holding register read the answer carries a byte count and the contents rather
         // than repeating the request, so its length is known from the count that was asked for.
@@ -424,7 +543,7 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
         let mut buffer = [0u8; MAX_INPUT_REGISTERS_RESPONSE_LENGTH];
         let response = &mut buffer[..READ_OVERHEAD_LENGTH + 2 * COUNT];
 
-        if let Answer::Exception(code) = self.read_header(response, request, fan_identifier).await?
+        if let Answer::Exception(code) = self.read_header(response, request, device_identifier).await?
         {
             return Err(ReadError::Exception(code.into()));
         }
@@ -441,7 +560,7 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
         if response[2] != expected_byte_count {
             warn!(
                 "{} Response announced {:?} data bytes instead of {:?}: {:?}",
-                fan_identifier, response[2], expected_byte_count, response
+                device_identifier, response[2], expected_byte_count, response
             );
             return Err(ReadError::ByteCount(response[2]));
         }
@@ -449,7 +568,7 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
         if !is_checksum_valid(response) {
             warn!(
                 "{} Response failed checksum: {:?}",
-                fan_identifier, response
+                device_identifier, response
             );
             return Err(ReadError::ContentsChecksum);
         }
@@ -463,7 +582,7 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
 
         info!(
             "{} Fan answered the read with {:?}: {:?}",
-            fan_identifier, registers, response
+            device_identifier, registers, response
         );
 
         Ok(registers)
@@ -473,26 +592,29 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
     async fn send_request(
         &mut self,
         request: &[u8],
-        fan_identifier: &str,
+        device_identifier: &str,
     ) -> Result<(), ExchangeError> {
         // Write then read
         // Set pin setting DE (driver enable) to on (high) on the MAX485 to send data
         self.driver_enable.set_high();
 
-        info!("{} Sending message to fan: {:?}", fan_identifier, request);
+        info!(
+            "{} Sending message to device: {:?}",
+            device_identifier, request
+        );
         // As ref because &[u8; 8] is not the same as &[u8]
         with_timeout(configuration::FAN_TIMEOUT, self.uart.write_all(request))
             .await
             .map_err(|_timeout| ExchangeError::Request(SendFailure::Timeout))?
             .map_err(|_error| ExchangeError::Request(SendFailure::Uart))?;
 
-        info!("{} Request written", fan_identifier);
+        info!("{} Request written", device_identifier);
 
         // Flushing only drains the software buffer, which empties as soon as the interrupt handler
         // has moved the frame into the hardware FIFO. At that point none of it has reached the wire
         let result = self.uart.blocking_flush();
         if let Err(_error) = result {
-            error!("{} UART flush error", fan_identifier);
+            error!("{} UART flush error", device_identifier);
         }
 
         // So wait for the transmitter itself to go idle. BUSY stays asserted until the FIFO has
@@ -524,9 +646,9 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
         &mut self,
         response: &mut [u8],
         request: &[u8],
-        fan_identifier: &str,
+        device_identifier: &str,
     ) -> Result<Answer, ExchangeError> {
-        info!("{} Waiting for response from fan", fan_identifier);
+        info!("{} Waiting for response from device", device_identifier);
         self.receive_exact(&mut response[..HEADER_LENGTH])
             .await
             .map_err(|failure| ExchangeError::Response(Part::Header, failure))?;
@@ -534,7 +656,7 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
         if response[0] != request[0] {
             warn!(
                 "{} Response came from device address {:?} instead of {:?}",
-                fan_identifier, response[0], request[0]
+                device_identifier, response[0], request[0]
             );
             return Err(ExchangeError::DeviceAddress(response[0]));
         }
@@ -549,14 +671,14 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
             if !is_checksum_valid(frame) {
                 warn!(
                     "{} Exception response failed checksum: {:?}",
-                    fan_identifier, frame
+                    device_identifier, frame
                 );
                 return Err(ExchangeError::ExceptionChecksum);
             }
 
             error!(
-                "{} Fan rejected function code {:?} with modbus exception code {:?}",
-                fan_identifier, function_code, response[2]
+                "{} Device rejected function code {:?} with modbus exception code {:?}",
+                device_identifier, function_code, response[2]
             );
             return Ok(Answer::Exception(response[2]));
         }
@@ -564,7 +686,7 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
         if response[1] != function_code {
             warn!(
                 "{} Response used function code {:?} instead of {:?}",
-                fan_identifier, response[1], function_code
+                device_identifier, response[1], function_code
             );
             return Err(ExchangeError::FunctionCode(response[1]));
         }
@@ -586,19 +708,19 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
 
     /// Reads until the line has been silent for [`DISCARD_TIMEOUT`] to drop a partial or
     /// unexpected frame before the next transaction starts
-    async fn discard_incoming(&mut self, fan_identifier: &str) {
+    async fn discard_incoming(&mut self, device_identifier: &str) {
         let mut discarded = [0u8; WRITE_RESPONSE_LENGTH];
         while let Ok(result) = with_timeout(DISCARD_TIMEOUT, self.uart.read(&mut discarded)).await {
             match result {
                 Ok(0) => break,
                 Ok(count) => info!(
                     "{} Discarded {:?} unexpected bytes: {:?}",
-                    fan_identifier,
+                    device_identifier,
                     count,
                     &discarded[..count]
                 ),
                 Err(_error) => {
-                    error!("{} UART error while clearing the line", fan_identifier);
+                    error!("{} UART error while clearing the line", device_identifier);
                     break;
                 }
             }

@@ -1,6 +1,18 @@
+/// Reads what a coil is currently set to. Coils are the single bit equivalent of the holding
+/// registers, which is how the bypass relay reports and takes its position
+// Allowed until the routine that drives the bypass is the caller
+#[allow(dead_code)]
+pub const READ_COILS: u8 = 0x01;
+
 pub const READ_HOLDING_REGISTERS: u8 = 0x03;
 
 pub const READ_INPUT_REGISTERS: u8 = 0x04;
+
+/// Drives a single coil. The value is not a zero or a one: modbus spells the two positions
+/// `0xFF00` and `0x0000`, and nothing else is allowed
+// Allowed until the routine that drives the bypass is the caller
+#[allow(dead_code)]
+pub const WRITE_SINGLE_COIL: u8 = 0x05;
 
 pub const WRITE_SINGLE_REGISTER: u8 = 0x06;
 
