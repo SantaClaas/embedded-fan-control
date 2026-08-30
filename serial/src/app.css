@@ -1,0 +1,75 @@
+/*
+ * Both schemes are defined as tokens on :root and swapped under prefers-color-scheme, so the page
+ * follows the operating system without any script and without a flash on load.
+ */
+:root {
+  --surface: #ffffff;
+  --surface-sunken: #f4f5f7;
+  --surface-raised: #ffffff;
+  --border: #d8dbe0;
+  --text: #16181d;
+  --text-dim: #5c6270;
+  --accent: #1c5fd6;
+  --danger: #b3261e;
+
+  color-scheme: light dark;
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  line-height: 1.5;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --surface: #16181d;
+    --surface-sunken: #101216;
+    --surface-raised: #1e2128;
+    --border: #333944;
+    --text: #e8eaee;
+    --text-dim: #9aa2b1;
+    --accent: #79a9ff;
+    --danger: #f2837c;
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--surface-sunken);
+  color: var(--text);
+}
+
+main {
+  max-width: 70rem;
+  margin-inline: auto;
+  padding: 1.5rem 1rem 4rem;
+}
+
+h1 {
+  font-size: 1.5rem;
+  margin-block: 0 1.5rem;
+}
+
+a {
+  color: var(--accent);
+}
+
+code {
+  font-family: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, monospace;
+  font-size: 0.9em;
+}
+
+.notice {
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 1rem 1.25rem;
+}
+
+.notice h2 {
+  font-size: 1.1rem;
+  margin-block-start: 0;
+}

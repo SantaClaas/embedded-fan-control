@@ -1,7 +1,16 @@
-import { defineConfig } from 'vite'
-import { svelte } from '@sveltejs/vite-plugin-svelte'
+import { defineConfig } from "vitest/config";
+import solid from "@solidjs/vite-plugin";
 
-// https://vitejs.dev/config/
 export default defineConfig({
-  plugins: [svelte()],
-})
+  // Relative, so the built app works both at a domain root and under the
+  // /<repo>/ path GitHub Pages serves a project site from
+  base: "./",
+  plugins: [solid()],
+  test: {
+    // Everything under src/modbus and src/devices is plain TypeScript over
+    // bytes, with no DOM in sight. The components are verified by `tsc` and by
+    // running the thing against a real fan
+    environment: "node",
+    include: ["src/**/*.test.ts"],
+  },
+});
