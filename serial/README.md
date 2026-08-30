@@ -22,6 +22,18 @@ cd serial && pnpm install && pnpm dev
 `pnpm test` runs the protocol tests, `pnpm check` type-checks, `pnpm build` does both and produces
 `dist/`.
 
+## Deploying it
+
+[`.github/workflows/serial-pages.yml`](../.github/workflows/serial-pages.yml) builds this directory
+and publishes it to GitHub Pages on every push to `main` that touches `serial/`. It runs the tests
+and the type-check first, and it runs on pull requests too without deploying.
+
+Pages has to be switched on for the repository once before the first deploy:
+**Settings → Pages → Build and deployment → Source: GitHub Actions**.
+
+The build sets Vite's `base` to `./`, so the same `dist/` works at a domain root and under the
+`/<repo>/` path a project site is served from.
+
 The Web Serial API is Chromium-only (Chrome, Edge, Opera) and needs a secure context, so `localhost`
 or HTTPS. The app says so itself rather than failing silently.
 

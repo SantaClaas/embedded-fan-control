@@ -65,6 +65,13 @@ rate, correction values — before it is wired into the controller.
 cd serial && npm install && npm run dev
 ```
 
-It needs a Chromium-based browser; the Web Serial API is not available elsewhere. It is slated for
-a rewrite on SolidJS that also listens passively to bus traffic, the way
-[debug-listener](debug-listener) does from the desktop. See [serial/README.md](serial/README.md).
+It also listens passively to bus traffic, the way [debug-listener](debug-listener) does from the
+desktop, but framed and decoded rather than printed as bytes.
+
+It needs a Chromium-based browser; the Web Serial API is not available elsewhere. See
+[serial/README.md](serial/README.md).
+
+[`.github/workflows/serial-pages.yml`](.github/workflows/serial-pages.yml) publishes it to GitHub
+Pages on pushes to `main` that touch `serial/`. This needs Pages switched on for the repository
+once — **Settings → Pages → Build and deployment → Source: GitHub Actions** — and it replaces the
+deployment that used to run from the standalone `SantaClaas/serial` repository.

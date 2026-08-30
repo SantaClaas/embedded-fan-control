@@ -10,7 +10,7 @@ The firmware is `no_std` and built on Embassy. The other crates are supporting l
 desktop-side helper binaries.
 
 Most of the repository is one Cargo workspace, rooted at [Cargo.toml](Cargo.toml). Alongside it
-sits [serial](serial), a browser tool for the same Modbus bus that is a separate npm project and
+sits [serial](serial), a browser tool for the same Modbus bus that is a separate pnpm project and
 not a workspace member — see [The serial tool](#the-serial-tool) below.
 
 ## Commands
@@ -28,8 +28,8 @@ RP2040` (the configured runner) — it requires a debug probe. To flash without 
 runner in `.cargo/config.toml` to `elf2uf2-rs -d`. `DEFMT_LOG=debug` is set there too, so RTT logs
 come out at debug level.
 
-The same holds for [serial](serial), for a different reason — it is an npm project rather than a
-workspace member, so it is only buildable from its own directory (`cd serial && npm run dev`).
+The same holds for [serial](serial), for a different reason — it is a pnpm project rather than a
+workspace member, so it is only buildable from its own directory (`cd serial && pnpm dev`).
 
 Tests, checks, and lints run per crate from that crate's directory:
 
@@ -80,33 +80,53 @@ while `fan-controller/src/mqtt/` (`crate::mqtt`) holds the packet encode/decode 
 
 ## The serial tool
 
-[serial](serial) is not a crate and not a workspace member — it is a Vite + TypeScript app that
+[serial](serial) is not a crate and not a workspace member — it is a SolidJS 2.0 app on Vite that
 talks to the RS-485/Modbus bus from the browser over the
-[Web Serial API](https://developer.mozilla.org/en-US/docs/Web/API/Web_Serial_API). Run it with npm
-from its own directory, the same rule the Rust packages follow:
+[Web Serial API](https://developer.mozilla.org/en-US/docs/Web/API/Web_Serial_API). It uses **pnpm**,
+and like the Rust packages it only builds from its own directory:
 
 ```bash
-cd serial && npm install && npm run dev
+cd serial && pnpm install && pnpm dev
 ```
 
-It exists to configure devices before they are wired into the controller: it reads input registers
-and reads *and writes* holding registers, which the firmware never does for anything but the set
-point. Each device type declares its registers once — address, length, decode, and for holding
-registers encode and validate — and the UI is generated from that declaration
-(`serial/src/lib/modbus.ts`, `serial/src/lib/devices/`).
+`pnpm test` runs the protocol tests, `pnpm build` type-checks and builds.
 
-It overlaps with `debug-listener`, which reads the same bus from the desktop, and is currently the
-only place the temperature sensor and (eventually) the relay module are modelled at all.
+It does two things:
 
-Two things to know before changing it:
+- **Watches the bus** without joining in, decoding the traffic between the fan controller and the
+  fans. `debug-listener` reads the same line from the desktop but prints bytes; this frames and
+  decodes them.
+- **Talks to a device** directly, reading input registers and reading *and writing* holding
+  registers — which is how a device is given its address, baud rate and correction values before
+  it is wired in. The firmware never writes anything but the set point.
 
-- **It is slated to be rewritten from scratch on SolidJS**, adding passive listening of bus traffic
-  in the manner of `debug-listener`. Treat the current Svelte 4 code as reference for device
-  behaviour, not as the shape to build on.
-- **Its RadiCal register names are working translations, not the manual's terminology.** They were
-  written before the manufacturer documentation was checked in, and several are flagged as guesses
-  in the source (`PhaseControlFactor` for *Aussteuergrad*, `CurrentDesiredEffect` for *Aktueller
-  Wirksinn*). The RadiCal documentation in `docs/manufacturer/radical/` wins over them.
+Those two are mutually exclusive on one port: a half-duplex RS-485 line has room for one master,
+so the active side must not be used while the controller is polling.
+
+| Path | What it is |
+|---|---|
+| `serial/src/modbus/` | CRC, frame lengths and decoding, and recovering frames from a bus the app is not driving. Plain TypeScript over bytes, and where the tests are. |
+| `serial/src/devices/` | Each device as a list of registers that know their address, their manual's name for them, and how to decode them. The UI is generated from these. |
+| `serial/src/serial/` | One open port: a single read loop serving both the monitor and outstanding requests. |
+| `serial/src/ui/` | The components. |
+
+Four things to know before changing it:
+
+- **Register names are the manual's own headings, in the manual's own language**, with an English
+  gloss beside them and a section number. For the RadiCal that means German — *Aussteuergrad*,
+  *Wirksinn*, *Sollwert*. Do not replace them with translations: the old Svelte tool had
+  `PhaseControlFactor` for *Aussteuergrad* and `CurrentDesiredEffect` for *Aktueller Wirksinn*,
+  both invented, and neither can be looked up in `docs/manufacturer/radical/`.
+- **The tests are built on frames copied out of the manufacturers' manuals, check bytes included.**
+  They agree only if the code agrees with the devices rather than with itself, which is how two
+  wrong CRCs in `docs/temperature-sensor.md` were found. Keep new device work anchored the same
+  way.
+- **Solid 2.0 is not Solid 1.x.** `createEffect` takes a compute *and* an effect function; there
+  is no `onMount`, because a component body already runs once during setup; DOM rendering is in
+  `@solidjs/web`, which is also the `jsxImportSource`.
+- **Register write fields rely on the browser's own validation.** The bounds are real
+  `min`/`max`/`step` attributes taken from the register definition, and `:user-invalid` styles them
+  only after the field is left. Do not add a parallel bounds check in a signal.
 
 ## Firmware architecture
 
@@ -199,6 +219,13 @@ cd fan_sensor && cargo test
 That is also the way to make firmware logic testable at all: move it into its own `no_std` crate
 and re-export it, the way `fan/mod.rs` re-exports `set_point`. Worth doing for anything with rules
 of its own; not worth it for code that only exists to drive a peripheral.
+
+`serial` has its own suite, which runs on the host without a browser because everything under
+`src/modbus` and `src/devices` is plain TypeScript over bytes:
+
+```bash
+cd serial && pnpm test
+```
 
 ## Reference documents
 
