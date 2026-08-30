@@ -1,0 +1,93 @@
+# Builds the serial tool and publishes it to GitHub Pages.
+#
+# This replaces the workflow that came with the standalone SantaClaas/serial repository. That one
+# could never have run from `serial/.github/`, because GitHub only reads workflows from the
+# repository root, and every action it used was three or four majors out of date.
+#
+# Before the first run, Pages has to be switched on for this repository:
+# Settings → Pages → Build and deployment → Source: **GitHub Actions**. Until then the deploy job
+# fails with "Resource not accessible by integration".
+name: Deploy the serial tool to Pages
+
+on:
+  push:
+    branches: [main]
+    # Scoped, because the firmware and the crates share this repository and have nothing to do
+    # with this build. A change to fan-controller should not redeploy a web page
+    paths:
+      - "serial/**"
+      - ".github/workflows/serial-pages.yml"
+  pull_request:
+    paths:
+      - "serial/**"
+      - ".github/workflows/serial-pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deployment at a time, and never cancel one in flight — a half-finished deploy would leave
+# the published site inconsistent
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+defaults:
+  run:
+    working-directory: serial
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+        # Deliberately without submodules: docs/manufacturer is a private repository holding the
+        # manufacturer manuals, and the build does not read it. Asking for it here would fail for
+        # anyone without access and gain nothing
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          # Takes the version from the packageManager field, so the lockfile, the workflow and a
+          # developer's machine cannot drift apart
+          package_json_file: serial/package.json
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: serial/pnpm-lock.yaml
+
+      - name: Install
+        # Fails rather than rewriting the lockfile, which is what makes the build reproducible
+        run: pnpm install --frozen-lockfile
+
+      - name: Test
+        run: pnpm test
+
+      # Type-checks and builds. A deploy that ships code failing either is worse than no deploy,
+      # which is why this runs on pull requests too and only the deploy below is gated on main
+      - name: Build
+        run: pnpm build
+
+      - name: Upload the artifact
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: serial/dist
+
+  deploy:
+    needs: build
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v5
