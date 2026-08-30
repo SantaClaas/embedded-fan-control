@@ -4,10 +4,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A Cargo workspace for a Raspberry Pi Pico W (RP2040) fan controller that drives two ebm-papst
+A monorepo for a Raspberry Pi Pico W (RP2040) fan controller that drives two ebm-papst
 RadiCal centrifugal fans over Modbus RTU and integrates with Home Assistant over MQTT.
 The firmware is `no_std` and built on Embassy. The other crates are supporting libraries and
 desktop-side helper binaries.
+
+Most of the repository is one Cargo workspace, rooted at [Cargo.toml](Cargo.toml). Alongside it
+sits [serial](serial), a browser tool for the same Modbus bus that is a separate npm project and
+not a workspace member — see [The serial tool](#the-serial-tool) below.
 
 ## Commands
 
@@ -23,6 +27,9 @@ cd fan-controller && cargo run
 RP2040` (the configured runner) — it requires a debug probe. To flash without a probe, swap the
 runner in `.cargo/config.toml` to `elf2uf2-rs -d`. `DEFMT_LOG=debug` is set there too, so RTT logs
 come out at debug level.
+
+The same holds for [serial](serial), for a different reason — it is an npm project rather than a
+workspace member, so it is only buildable from its own directory (`cd serial && npm run dev`).
 
 Tests, checks, and lints run per crate from that crate's directory:
 
@@ -70,6 +77,36 @@ Testing reality below.
 
 Note `mqtt` appears twice in the firmware: the workspace crate (`::mqtt`) holds protocol constants,
 while `fan-controller/src/mqtt/` (`crate::mqtt`) holds the packet encode/decode and client task.
+
+## The serial tool
+
+[serial](serial) is not a crate and not a workspace member — it is a Vite + TypeScript app that
+talks to the RS-485/Modbus bus from the browser over the
+[Web Serial API](https://developer.mozilla.org/en-US/docs/Web/API/Web_Serial_API). Run it with npm
+from its own directory, the same rule the Rust packages follow:
+
+```bash
+cd serial && npm install && npm run dev
+```
+
+It exists to configure devices before they are wired into the controller: it reads input registers
+and reads *and writes* holding registers, which the firmware never does for anything but the set
+point. Each device type declares its registers once — address, length, decode, and for holding
+registers encode and validate — and the UI is generated from that declaration
+(`serial/src/lib/modbus.ts`, `serial/src/lib/devices/`).
+
+It overlaps with `debug-listener`, which reads the same bus from the desktop, and is currently the
+only place the temperature sensor and (eventually) the relay module are modelled at all.
+
+Two things to know before changing it:
+
+- **It is slated to be rewritten from scratch on SolidJS**, adding passive listening of bus traffic
+  in the manner of `debug-listener`. Treat the current Svelte 4 code as reference for device
+  behaviour, not as the shape to build on.
+- **Its RadiCal register names are working translations, not the manual's terminology.** They were
+  written before the manufacturer documentation was checked in, and several are flagged as guesses
+  in the source (`PhaseControlFactor` for *Aussteuergrad*, `CurrentDesiredEffect` for *Aktueller
+  Wirksinn*). The RadiCal documentation in `docs/manufacturer/radical/` wins over them.
 
 ## Firmware architecture
 
@@ -173,3 +210,12 @@ of its own; not worth it for code that only exists to drive a peripheral.
   sync when adding or resolving a `//TODO` in `fan-controller/src/`.
 - [README.md](README.md) — probe firmware updates and where Home Assistant logs rejected discovery
   payloads.
+- `docs/manufacturer/` — a submodule pointing at the private
+  [fan-documentation](https://github.com/SantaClaas/fan-documentation) repo, holding the
+  manufacturer material kept out of this public repo: the ebm-papst RadiCal MODBUS specification
+  (`radical/`) and the Modbus relay module manual (`relay/`). `git submodule update --init` after
+  cloning; it needs access to that private repo. This is the authority on RadiCal register
+  addresses, units and naming.
+- [docs/temperature-sensor.md](docs/temperature-sensor.md) — the Modbus registers and protocol of
+  the RS-485 temperature/humidity sensor. No manufacturer PDF exists for that device, so this
+  file, and the raw text it was formatted from next to it, is the only documentation there is.
