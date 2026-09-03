@@ -192,14 +192,12 @@ const WRITE_RESPONSE_LENGTH: usize = 8;
 
 /// A successful response to a read coil request: the header, the byte count, the one byte the
 /// single coil that was asked for is packed into, and the checksum
-// Allowed until the routine that drives the bypass is the caller
-#[allow(dead_code)]
+#[allow(dead_code, reason = "called by the bypass routine, added next")]
 const READ_COIL_RESPONSE_LENGTH: usize = 6;
 
 /// How many data bytes a read of the single coil asked for has to announce. Modbus packs eight
 /// coils into a byte, so asking for one still comes back as a whole byte
-// Allowed until the routine that drives the bypass is the caller
-#[allow(dead_code)]
+#[allow(dead_code, reason = "called by the bypass routine, added next")]
 const READ_COIL_BYTE_COUNT: u8 = 1;
 
 /// A successful response to a read holding register request: the header, the byte count, the
@@ -287,8 +285,7 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
 
     /// Drives a single coil and waits for the device to acknowledge it, which is how the bypass
     /// relay is opened and closed
-    // Allowed until the routine that drives the bypass is the caller
-    #[allow(dead_code)]
+    #[allow(dead_code, reason = "called by the bypass routine, added next")]
     pub(crate) async fn write_single_coil(
         &mut self,
         message: &WriteSingleCoil,
@@ -309,8 +306,7 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
     /// Reads back which position a coil is in, which is how the bypass relay is asked where it
     /// stands. It keeps its position while the controller resets, so this is worth asking on boot
     /// rather than assuming
-    // Allowed until the routine that drives the bypass is the caller
-    #[allow(dead_code)]
+    #[allow(dead_code, reason = "called by the bypass routine, added next")]
     pub(crate) async fn read_coil(&mut self, message: &ReadCoil) -> Result<bool, ReadError> {
         let device_identifier = device_identifier(*message.device_address());
 
@@ -424,8 +420,7 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
     /// Unlike the register reads, one coil comes back as one bit in one byte rather than as a
     /// value, so there is nothing to assemble out of the data bytes — only the lowest bit of the
     /// only byte to look at
-    // Allowed until the routine that drives the bypass is the caller
-    #[allow(dead_code)]
+    #[allow(dead_code, reason = "called by the bypass routine, added next")]
     async fn transact_read_coil(
         &mut self,
         message: &ReadCoil,
@@ -543,7 +538,9 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
         let mut buffer = [0u8; MAX_INPUT_REGISTERS_RESPONSE_LENGTH];
         let response = &mut buffer[..READ_OVERHEAD_LENGTH + 2 * COUNT];
 
-        if let Answer::Exception(code) = self.read_header(response, request, device_identifier).await?
+        if let Answer::Exception(code) = self
+            .read_header(response, request, device_identifier)
+            .await?
         {
             return Err(ReadError::Exception(code.into()));
         }

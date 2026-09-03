@@ -2,8 +2,7 @@
 //! two overlap in a way worth keeping apart at the type level: coil `0x0000` is the relay itself,
 //! while holding register `0x0000` is the device address of the whole module
 
-// Allowed until the routine that drives the bypass is the caller
-#![allow(dead_code)]
+#![allow(dead_code, reason = "called by the bypass routine, added next")]
 
 mod address {
     use core::ops::Deref;

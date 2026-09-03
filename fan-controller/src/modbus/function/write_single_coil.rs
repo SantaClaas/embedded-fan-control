@@ -1,5 +1,4 @@
-// Allowed until the routine that drives the bypass is the caller
-#![allow(dead_code)]
+#![allow(dead_code, reason = "called by the bypass routine, added next")]
 
 use crate::modbus;
 
