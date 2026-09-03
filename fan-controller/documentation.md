@@ -65,6 +65,25 @@ every speed the fan reports is a fraction of. It retries that read on each poll,
 unreachable at boot fills in on its own. The other three values do not depend on it and appear
 right away.
 
+### 4. Bypass
+
+The device also announces a switch called Bypass, which opens and closes the summer bypass damper
+through a relay on the same Modbus bus as the fans. `ON` is open.
+
+The relay is powered separately from the controller, so it keeps its position while the controller
+resets. The controller reads that position back about ten seconds after boot rather than assuming
+one, which is why the switch can sit unavailable for a few seconds and then appear already on. The
+fans get the bus first: their set point reads are what the house needs and the damper can wait.
+
+The switch only moves once the relay has acknowledged the write. If the relay cannot be reached the
+firmware retries three times with a growing pause, then gives up and leaves the switch showing the
+last position the relay confirmed — it does not show a position the damper is not in. Nothing else
+on the device displays the bypass; the two status LEDs are fully spoken for by the fan speeds.
+
+There is deliberately no automation here. When the bypass should open is a question about outdoor
+and indoor temperature that Home Assistant already has the sensors for, so the controller exposes
+the damper and leaves the decision there.
+
 ## Wiring
 
 Every pin the firmware uses is baked into the binary. There is no runtime configuration, so moving
@@ -78,6 +97,7 @@ flowchart LR
     PICO[Raspberry Pi Pico W] -- "GP4 to DE/RE<br/>GP12 to DI, GP13 to RO<br/>3V3 and GND" --> TRANSCEIVER[RS-485 transceiver]
     TRANSCEIVER -- "A and B, twisted pair" --> FAN1[Fan 1, address 0x02]
     FAN1 -- "the same pair, daisy chained" --> FAN2[Fan 2, address 0x03]
+    FAN2 -- "and on again" --> RELAY[Bypass relay, address 0x04]
     PROBE[Debug probe, optional] -. "SWCLK, GND, SWDIO" .-> PICO
 ```
 
@@ -110,15 +130,16 @@ for the few hundred microseconds a request takes.
 > part and its RO output would then swing to 5 V into GP13, which is not 5 V tolerant. Many of the
 > cheap blue breakout boards sold as "MAX485 modules" are 5 V only.
 
-- Wire it as a bus, not a star: one pair from the transceiver to fan 1, and on from fan 1 to fan 2.
-- Terminate both ends with 120 Ω across A and B, one at the transceiver and one at the last fan,
-  and nothing in between.
+- Wire it as a bus, not a star: one pair from the transceiver to fan 1, on from fan 1 to fan 2, and
+  on again to the bypass relay.
+- Terminate both ends with 120 Ω across A and B, one at the transceiver and one at the last device
+  on the chain, and nothing in between.
 - A and B are a twisted pair, with a third conductor tying the fans' RS-485 common back to
   controller ground. A differential pair still needs both ends to agree where zero is.
 - The fans have to be set to 19_200 baud, 8 data bits, even parity, 1 stop bit. Even parity in
   particular is easy to leave on the wrong setting.
 - Addresses are set on the fans themselves: `0x02` for fan 1 and `0x03` for fan 2. `0x01` is
-  skipped because it is a likely factory default.
+  skipped because it is a likely factory default, and `0x04` is the bypass relay.
 
 When the frame has been written, `blocking_flush()` returns as soon as the software buffer is
 empty, but the frame is still in the hardware FIFO and shift register rather than on the wire. So
@@ -126,6 +147,50 @@ empty, but the frame is still in the hardware FIFO and shift register rather tha
 early truncates the frame, the fan rejects it on the checksum, and the result looks exactly like a
 fan that is not answering. The line has to be back in the fan's hands well within the 3.5
 characters of silence it waits before replying, which is about 2 ms at this baud rate.
+
+### Bypass relay
+
+The bypass damper hangs off an LC Technology `LC-Modbus-1R-D7`, a single relay module that speaks
+Modbus RTU over the same RS-485 pair as the fans. It is the last device on the bus, so the 120 Ω
+termination that used to sit at fan 2 moves to the relay. It takes its own DC 7–24 V supply; none
+of that passes through the Pico.
+
+> [!WARNING]
+> **Parity is unverified.** The bus runs 19 200 baud, 8 data bits, even parity, 1 stop bit. The
+> relay's manual lists three baud rates and never mentions parity, and modules of this kind are
+> usually 8N1 — which cannot share a line with 8E1 in either direction, because the parity bit
+> lands where the receiver expects the stop bit. If the relay does not answer once it is on the
+> bus, this is the first thing to suspect, and the fallback is to give it its own UART and
+> transceiver at 9600 8N1 rather than to change the fans.
+
+Commission it on the bench, before it goes on the bus with the fans:
+
+- **Set the address to `0x04`.** It ships as `0xFF`, which Modbus reserves rather than gives to a
+  device, and `0x04` carries on from the fans at `0x02` and `0x03`. Write it to holding register
+  `0x0000` with function `0x10`.
+- **Set the baud rate to 19 200.** It ships at 9600. Write `0x04` to holding register `0x03E9`,
+  again with function `0x10`. Note the manual reads the baud rate back from `0x03E8`, one below
+  where it is written — that asymmetry is what the manual says, not a typo here.
+
+The firmware drives coil `0x0000`, which is the module's only relay. Do not confuse it with holding
+register `0x0000` on the same device: that one is the module's address, and writing a bypass
+position there would renumber the module instead of moving the damper.
+
+#### Which contact the damper hangs off
+
+The firmware's convention is that an **energised relay means the bypass is open**. The module has
+three terminals — `NO`, `COM` and `NC` — and which pair the damper actuator sits across decides
+where it ends up when the relay loses power, which the firmware cannot see or control:
+
+| Damper wired across | Relay unpowered | Consequence |
+|---|---|---|
+| `COM` and `NO` | Bypass closed | Heat recovery, the safe winter default |
+| `COM` and `NC` | Bypass open | Heat recovery lost until power returns |
+
+`COM` and `NO` is the conservative build: a relay that loses power, or a controller that never
+comes back, leaves the house recovering heat rather than venting it. Note this is about the
+*relay's* supply, not the controller's — the relay holds its position through a controller reset,
+which is exactly why the firmware reads it back on boot instead of assuming.
 
 ### Button
 

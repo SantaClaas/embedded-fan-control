@@ -1,5 +1,3 @@
-#![allow(dead_code, reason = "called by the bypass routine, added next")]
-
 use crate::modbus;
 
 /// Drives a single coil, which is how the bypass relay is opened and closed.

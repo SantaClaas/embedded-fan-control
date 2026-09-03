@@ -192,12 +192,10 @@ const WRITE_RESPONSE_LENGTH: usize = 8;
 
 /// A successful response to a read coil request: the header, the byte count, the one byte the
 /// single coil that was asked for is packed into, and the checksum
-#[allow(dead_code, reason = "called by the bypass routine, added next")]
 const READ_COIL_RESPONSE_LENGTH: usize = 6;
 
 /// How many data bytes a read of the single coil asked for has to announce. Modbus packs eight
 /// coils into a byte, so asking for one still comes back as a whole byte
-#[allow(dead_code, reason = "called by the bypass routine, added next")]
 const READ_COIL_BYTE_COUNT: u8 = 1;
 
 /// A successful response to a read holding register request: the header, the byte count, the
@@ -285,7 +283,6 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
 
     /// Drives a single coil and waits for the device to acknowledge it, which is how the bypass
     /// relay is opened and closed
-    #[allow(dead_code, reason = "called by the bypass routine, added next")]
     pub(crate) async fn write_single_coil(
         &mut self,
         message: &WriteSingleCoil,
@@ -306,7 +303,6 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
     /// Reads back which position a coil is in, which is how the bypass relay is asked where it
     /// stands. It keeps its position while the controller resets, so this is worth asking on boot
     /// rather than assuming
-    #[allow(dead_code, reason = "called by the bypass routine, added next")]
     pub(crate) async fn read_coil(&mut self, message: &ReadCoil) -> Result<bool, ReadError> {
         let device_identifier = device_identifier(*message.device_address());
 
@@ -420,7 +416,6 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
     /// Unlike the register reads, one coil comes back as one bit in one byte rather than as a
     /// value, so there is nothing to assemble out of the data bytes — only the lowest bit of the
     /// only byte to look at
-    #[allow(dead_code, reason = "called by the bypass routine, added next")]
     async fn transact_read_coil(
         &mut self,
         message: &ReadCoil,

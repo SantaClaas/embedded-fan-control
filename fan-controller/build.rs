@@ -220,6 +220,16 @@ fn create_components() -> BTreeMap<String, Component> {
                     speed_range_max: Some(32_000),
                 },
             ),
+            // The bypass damper, which is a relay rather than a fan
+            (
+                topic::fan_controller::bypass::UNIQUE_ID.to_string(),
+                Component::Switch {
+                    name: Some("Bypass"),
+                    unique_id: Some(topic::fan_controller::bypass::UNIQUE_ID),
+                    state_topic: Some(topic::fan_controller::bypass::STATE),
+                    command_topic: topic::fan_controller::bypass::COMMAND,
+                },
+            ),
         ]);
 
     components.extend(create_fan_sensor_components(
