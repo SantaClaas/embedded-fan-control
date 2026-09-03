@@ -182,10 +182,10 @@ impl RequestedSetPoint {
 
 type SetPointSignal = Signal<CriticalSectionRawMutex, RequestedSetPoint>;
 
-/// The requested bypass position, `true` for open. A signal for the same reason a set point is
-/// one: if two requests arrive before the relay has been written, only the later one matters.
-/// There is no `RequestedSetPoint` equivalent because nothing corrects the bypass but a user
-type BypassSignal = Signal<CriticalSectionRawMutex, bool>;
+/// The requested bypass position. A signal for the same reason a set point is one: if two requests
+/// arrive before the relay has been written, only the later one matters. There is no
+/// `RequestedSetPoint` equivalent because nothing corrects the bypass but a user
+type BypassSignal = Signal<CriticalSectionRawMutex, bypass::Position>;
 
 /// How many routines watch a fan's confirmed set point: the displays, the button, and the MQTT
 /// brain that restores the last running speed when Home Assistant turns the fans back on
@@ -442,7 +442,7 @@ enum IncomingPublish {
     /// Home Assistant asking for the bypass damper to be opened or closed. It has no speed and no
     /// second device to stay in step with, so unlike a fan command it carries nothing but which
     /// of its two positions was asked for
-    BypassCommand { is_bypass_open: bool },
+    BypassCommand { position: bypass::Position },
 }
 
 enum FromPublishError {
@@ -511,10 +511,10 @@ impl TryFrom<publish::Publish<'_>> for IncomingPublish {
             }
             topic::fan_controller::bypass::COMMAND => match publish.payload {
                 b"ON" => Ok(Self::BypassCommand {
-                    is_bypass_open: true,
+                    position: bypass::Position::Open,
                 }),
                 b"OFF" => Ok(Self::BypassCommand {
-                    is_bypass_open: false,
+                    position: bypass::Position::Closed,
                 }),
                 _other => Err(FromPublishError::InvalidSetStateCommandPayload),
             },
@@ -581,7 +581,7 @@ enum OutgoingPublish {
     /// Which position the relay confirmed the bypass is in. Published only after the write was
     /// acknowledged, the same as a fan's speed
     UpdateBypass {
-        is_bypass_open: bool,
+        position: bypass::Position,
     },
 }
 
@@ -632,10 +632,10 @@ impl Publish for OutgoingPublish {
             // The same `ON` and `OFF` Home Assistant defaults to for a switch, which is why the
             // discovery payload sets no `payload_on` or `payload_off`
             OutgoingPublish::UpdateBypass {
-                is_bypass_open: true,
+                position: bypass::Position::Open,
             } => b"ON",
             OutgoingPublish::UpdateBypass {
-                is_bypass_open: false,
+                position: bypass::Position::Closed,
             } => b"OFF",
         }
     }
@@ -784,9 +784,7 @@ async fn mqtt_brain_routine(
             },
             // Nothing to interpret: the bypass has no synchronization to honour and no previous
             // position to restore, so this is passed straight through to the routine that drives it
-            IncomingPublish::BypassCommand { is_bypass_open } => {
-                bypass_state.signal(is_bypass_open)
-            }
+            IncomingPublish::BypassCommand { position } => bypass_state.signal(position),
         }
     }
 }
@@ -1139,7 +1137,7 @@ const BYPASS_STARTUP_DELAY: Duration = SENSOR_POLL_STARTUP_DELAY;
 async fn read_bypass_state(
     modbus_mutex: &'static ModbusMutex,
     requested_state: &'static BypassSignal,
-) -> Option<bool> {
+) -> Option<bypass::Position> {
     let function = modbus::function::ReadCoil::new(bypass::ADDRESS, bypass::COIL);
 
     for attempt in 1..=MAX_ATTEMPTS {
@@ -1147,12 +1145,13 @@ async fn read_bypass_state(
         let result = modbus_mutex.lock().await.read_coil(&function).await;
 
         match result {
-            Ok(is_bypass_open) => {
+            Ok(is_energised) => {
+                let position = bypass::Position::from_coil(is_energised);
                 info!(
-                    "{} Relay reports the bypass as open: {}",
-                    BYPASS_IDENTIFIER, is_bypass_open
+                    "{} Relay reports the bypass as {}",
+                    BYPASS_IDENTIFIER, position
                 );
-                return Some(is_bypass_open);
+                return Some(position);
             }
             Err(error) => error!(
                 "{} Failed to read the relay position on attempt {}: {:?}",
@@ -1205,9 +1204,9 @@ async fn bypass_routine(
     // Stays `None` when the relay cannot be reached, in which case the first command applies
     // whatever it asks for rather than being compared against a position nobody knows
     let mut current_state = read_bypass_state(modbus_mutex, requested_state).await;
-    if let Some(is_bypass_open) = current_state {
+    if let Some(position) = current_state {
         mqtt_out
-            .send(OutgoingPublish::UpdateBypass { is_bypass_open })
+            .send(OutgoingPublish::UpdateBypass { position })
             .await;
     }
 
@@ -1216,9 +1215,9 @@ async fn bypass_routine(
             "{} Waiting for a bypass position request",
             BYPASS_IDENTIFIER
         );
-        let mut is_bypass_open = requested_state.wait().await;
+        let mut position = requested_state.wait().await;
 
-        if current_state == Some(is_bypass_open) {
+        if current_state == Some(position) {
             info!(
                 "{} Requested the position the relay is already in",
                 BYPASS_IDENTIFIER
@@ -1227,20 +1226,20 @@ async fn bypass_routine(
         }
 
         info!(
-            "{} Received request to set the bypass open to {}",
-            BYPASS_IDENTIFIER, is_bypass_open
+            "{} Received request to set the bypass {}",
+            BYPASS_IDENTIFIER, position
         );
 
         for attempt in 1..=MAX_ATTEMPTS {
             let mut modbus = modbus_mutex.lock().await;
             // The request can have been overtaken while waiting for the lock, and writing the
             // stale one first would move the damper twice for nothing
-            is_bypass_open = requested_state.try_take().unwrap_or(is_bypass_open);
+            position = requested_state.try_take().unwrap_or(position);
 
             let function = modbus::function::WriteSingleCoil::new(
                 bypass::ADDRESS,
                 bypass::COIL,
-                is_bypass_open,
+                position.is_coil_energised(),
             );
             let result = modbus.write_single_coil(&function).await;
             // Held only for the one transaction, so a fan speed change never waits behind a run of
@@ -1274,11 +1273,8 @@ async fn bypass_routine(
             back_off(attempt).await;
         }
 
-        info!(
-            "{} Bypass set to open: {}",
-            BYPASS_IDENTIFIER, is_bypass_open
-        );
-        current_state = Some(is_bypass_open);
+        info!("{} Bypass set {}", BYPASS_IDENTIFIER, position);
+        current_state = Some(position);
 
         // Awaited rather than dropped when the channel is full, unlike a sensor reading or a fan
         // display update. Those are repeated on a timer or on the next change, but this is the
@@ -1287,7 +1283,7 @@ async fn bypass_routine(
         // Nothing is lost by waiting: the commands this routine answers arrive over the same MQTT
         // connection that has to come back before the channel drains
         mqtt_out
-            .send(OutgoingPublish::UpdateBypass { is_bypass_open })
+            .send(OutgoingPublish::UpdateBypass { position })
             .await;
     }
 }
