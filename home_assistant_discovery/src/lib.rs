@@ -124,6 +124,31 @@ pub enum Component {
         #[serde(rename = "spd_rng_max")]
         speed_range_max: Option<u16>,
     },
+    /// Anything the controller exposes as a plain on/off toggle, like the relay that opens the
+    /// bypass.
+    ///
+    /// Home Assistant defaults `payload_on` and `payload_off` to `ON` and `OFF`, which is what the
+    /// firmware already sends and matches for the fans, so neither is set here. There is no
+    /// `device_class` either: the two Home Assistant offers for a switch are `switch` and
+    /// `outlet`, and a damper is neither
+    Switch {
+        /// The name of the switch. Can be set to null if only the device name is relevant.
+        name: Option<&'static str>,
+        /// An ID that uniquely identifies this switch. If two switches have the same unique ID,
+        /// Home Assistant will raise an exception. Required when used with device-based discovery.
+        #[serde(rename = "uniq_id")]
+        #[serde(skip_serializing_if = "Option::is_none")]
+        unique_id: Option<&'static str>,
+        /// The MQTT topic subscribed to receive state updates. Without it Home Assistant assumes
+        /// every command took effect, which is exactly what this controller does not want to
+        /// promise: the state is published after the device acknowledged the write
+        #[serde(rename = "stat_t")]
+        #[serde(skip_serializing_if = "Option::is_none")]
+        state_topic: Option<&'static str>,
+        /// The MQTT topic to publish commands to change the switch state.
+        #[serde(rename = "cmd_t")]
+        command_topic: &'static str,
+    },
     Sensor {
         /// The name of the sensor. Owned rather than borrowed, unlike the name of a fan, because
         /// both fans report the same five values and each name is composed from the fan it
@@ -299,5 +324,21 @@ mod tests {
         };
 
         insta::assert_json_snapshot!(payload)
+    }
+
+    /// The bypass switch on its own, rather than added to [`serialize_custom_example`], because it
+    /// is not part of the payload the firmware publishes yet. The topics come from the `topic`
+    /// crate rather than being written out here, so renaming one of them shows up as a failure
+    /// here instead of silently announcing a topic nothing subscribes to
+    #[test]
+    fn serialize_switch() {
+        let component = Component::Switch {
+            name: Some("Bypass"),
+            unique_id: Some(topic::fan_controller::bypass::UNIQUE_ID),
+            state_topic: Some(topic::fan_controller::bypass::STATE),
+            command_topic: topic::fan_controller::bypass::COMMAND,
+        };
+
+        insta::assert_json_snapshot!(component)
     }
 }
