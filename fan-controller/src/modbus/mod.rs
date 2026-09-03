@@ -1,4 +1,5 @@
 pub(crate) mod client;
+pub(crate) mod coil;
 pub(crate) mod device;
 pub(crate) mod function;
 pub(crate) mod register;
