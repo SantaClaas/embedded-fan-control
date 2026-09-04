@@ -7,6 +7,9 @@
  *
  * Relay frames: LC-Modbus-1R-D7 manual, "Modbus RTU instruction introduction".
  * Temperature sensor frames: docs/temperature-sensor.md, "MODBUS command frame".
+ *
+ * `relayPowerUp` below is the exception: no manual prints it, it is not made of frames, and it is
+ * kept in its own object so that everything in `relay` and `temperatureSensor` stays checkable.
  */
 
 /** `"FF 05 00 00"` → bytes. Whitespace is ignored, so frames can be written as the manual prints them */
@@ -19,6 +22,11 @@ export function bytes(hex: string): Uint8Array {
   }
 
   return out;
+}
+
+/** Text the way a device puts it on the line, for the greetings that are not frames at all */
+export function ascii(text: string): Uint8Array {
+  return new TextEncoder().encode(text);
 }
 
 export const relay = {
@@ -48,6 +56,29 @@ export const relay = {
 
   readBaudRequest: bytes("FF 03 03 E8 00 01 11 A4"),
   readBaudResponse: bytes("FF 03 02 00 04 90 53"),
+
+} as const;
+
+/**
+ * The relay module's power-up greeting, and the exchange it ruined.
+ *
+ * Kept out of `relay` above because neither is a frame: `crc.test.ts` holds every entry in these
+ * fixture objects to the manufacturer's own check bytes, and these two have no check bytes to hold
+ * them to. They were captured from the hardware and are written down in docs/relay.md
+ */
+export const relayPowerUp = {
+  /** Sent unasked on power-up. Not a frame, and not addressed to anyone */
+  greeting: ascii("Thank you for using the Modbus modules of LCTECH\r\n"),
+
+  /**
+   * The first exchange after power-up, as it actually arrived: the echo of `relay.closeRelayRequest`
+   * with the greeting driven through it. `FF 05 00 00 FF 00 99 E4` became `FF 05 00 00 FF 80 0A` and
+   * the greeting followed. Nothing in here checks out, which is the point — the relay stayed open
+   */
+  spoiledEcho: bytes(
+    "FF 05 00 00 FF 80 0A 54 68 61 6E 6B 20 79 6F 75 20 66 6F 72 20 75 73 69 6E 67 20 74 68 65 20" +
+      "4D 6F 64 62 75 73 20 6D 6F 64 75 6C 65 73 20 6F 66 20 4C 43 54 45 43 48 0D 0A",
+  ),
 } as const;
 
 export const temperatureSensor = {

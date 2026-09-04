@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { bytes, relay, temperatureSensor } from "../modbus/frames.fixture";
-import { findResponse } from "./connection";
+import { bytes, relay, relayPowerUp, temperatureSensor } from "../modbus/frames.fixture";
+import { POWER_UP_GREETING } from "../devices/relay";
+import { Connection, RequestFailed, findResponse, type PortSettings } from "./connection";
 
 /** The request each fixture response answers, for the echo checks */
 const readBaud = relay.readBaudRequest;
@@ -67,6 +68,127 @@ describe("findResponse", () => {
     expect(Array.from(found)).toEqual(Array.from(relay.readBaudResponse));
   });
 });
+
+describe("findResponse, with a device that greets the line", () => {
+  /**
+   * The greeting is ASCII, so none of its bytes can be mistaken for the relay's own address of
+   * 0xFF. Reaching the answer behind it needs nothing more than the scan already does
+   */
+  it("reads past the module's power-up greeting", () => {
+    const buffer = concat(relayPowerUp.greeting, relay.readBaudResponse);
+
+    expect(findResponse(buffer, 0xff, 0x03, readBaud)).toEqual(relay.readBaudResponse);
+  });
+
+  /**
+   * The exchange the greeting spoiled. There is no answer in here to find — the point of the
+   * fixture is that no amount of scanning recovers one, which is what makes the retry necessary
+   */
+  it("finds nothing in the exchange the greeting collided with", () => {
+    const found = findResponse(relayPowerUp.spoiledEcho, 0xff, 0x05, relay.closeRelayRequest);
+
+    expect(found).toBeUndefined();
+  });
+});
+
+describe("request", () => {
+  const settings: PortSettings = { baudRate: 9600, parity: "none", dataBits: 8, stopBits: 1 };
+
+  it("asks again when the line carried bytes that were not an answer", async () => {
+    // What the relay does when it is powered up: the first exchange is lost to the greeting, and
+    // the second is answered normally
+    const port = fakePort((written, push) => {
+      push(written === 1 ? relayPowerUp.greeting : relay.readBaudResponse);
+    });
+    const connection = new Connection(port.port);
+    await connection.open(settings);
+
+    const answer = await connection.request(relay.readBaudRequest, 50);
+
+    expect(answer).toEqual(relay.readBaudResponse);
+    expect(port.written.length).toBe(2);
+
+    await connection.close();
+  });
+
+  it("says what the stray bytes said, when they are legible", async () => {
+    const port = fakePort((_, push) => push(relayPowerUp.greeting));
+    const connection = new Connection(port.port);
+    await connection.open(settings);
+
+    const failure = await connection.request(relay.readBaudRequest, 30).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(RequestFailed);
+    expect((failure as RequestFailed).reason).toBe("noise");
+    expect((failure as RequestFailed).message).toContain(POWER_UP_GREETING.trim());
+
+    await connection.close();
+  });
+
+  /** Silence is a different fault, and asking again only spends a second timeout confirming it */
+  it("does not ask again when nothing answered at all", async () => {
+    const port = fakePort(() => undefined);
+    const connection = new Connection(port.port);
+    await connection.open(settings);
+
+    const failure = await connection.request(relay.readBaudRequest, 30).catch((error: unknown) => error);
+
+    expect((failure as RequestFailed).reason).toBe("timeout");
+    expect(port.written.length).toBe(1);
+
+    await connection.close();
+  });
+
+  /**
+   * An adapter that echoes would otherwise make every silent device look like a talking one, and
+   * turn each timeout into two
+   */
+  it("does not count the adapter's echo as something having answered", async () => {
+    const port = fakePort((_, push) => push(relay.readBaudRequest));
+    const connection = new Connection(port.port);
+    await connection.open(settings);
+
+    const failure = await connection.request(relay.readBaudRequest, 30).catch((error: unknown) => error);
+
+    expect((failure as RequestFailed).reason).toBe("timeout");
+    expect(port.written.length).toBe(1);
+
+    await connection.close();
+  });
+});
+
+/**
+ * A serial port that is only what `Connection` uses of one: a stream each way, and a hook that
+ * answers a write the way a device on the other end would
+ */
+function fakePort(answer: (written: number, push: (bytes: Uint8Array) => void) => void) {
+  const written: Uint8Array[] = [];
+  let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
+
+  const readable = new ReadableStream<Uint8Array>({
+    start(source) {
+      controller = source;
+    },
+  });
+
+  const push = (chunk: Uint8Array) => controller?.enqueue(chunk);
+
+  const writable = new WritableStream<Uint8Array>({
+    write(chunk) {
+      written.push(new Uint8Array(chunk));
+      answer(written.length, push);
+    },
+  });
+
+  const port = {
+    readable,
+    writable,
+    open: () => Promise.resolve(),
+    close: () => Promise.resolve(),
+  } as unknown as SerialPort;
+
+  return { port, written, push };
+}
 
 function withCrc(frame: Uint8Array): Uint8Array {
   const table = new Uint16Array(256);

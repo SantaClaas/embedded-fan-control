@@ -79,6 +79,14 @@ Two consequences for firmware that talks to this module:
   RP2040 boots — a brown-out on the relay's own supply produces it again with the controller
   already running and none the wiser.
 
+The [serial tool](../serial) already does both. Its frame scan was never troubled by the banner —
+it searches for a valid frame at every offset, and ASCII cannot be mistaken for the relay's address
+of `0xFF` — but the *spoiled* exchange leaves no frame to find at all, and that read used to fail
+as "no reply", which reads like a wrong address or a dead bus. It now separates a line that stayed
+silent from one that carried bytes it could not use, retries only the second, and quotes the stray
+bytes when they are legible, so the greeting names itself in the error. The firmware, when it comes
+to talk to this module, has to do the same on its own.
+
 ## Why it cannot share the fan bus
 
 The fans run 19_200 baud, 8 data bits, **even** parity, 1 stop bit. The relay runs 8N1 and its

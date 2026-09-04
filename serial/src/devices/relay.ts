@@ -13,6 +13,16 @@
 
 import { hex, type Device, type Register } from "./register";
 
+/**
+ * What the module says, unasked, when it powers up — before anything has requested anything.
+ *
+ * It is not a Modbus frame and it belongs to no request. Observed on the hardware: it collided with
+ * the first coil write, mangled the echo and the write was dropped, so the relay never switched.
+ * It follows the *module's* supply rather than the controller's boot, so it can arrive with the
+ * master already running and none the wiser. `docs/relay.md` records the exchange it spoiled
+ */
+export const POWER_UP_GREETING = "Thank you for using the Modbus modules of LCTECH\r\n";
+
 /** Relay 1. The manual lists 0x0000 … 0x0007 for an eight-channel board */
 export const RELAY_COIL = 0x0000;
 

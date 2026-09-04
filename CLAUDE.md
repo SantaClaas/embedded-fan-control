@@ -110,7 +110,7 @@ so the active side must not be used while the controller is polling.
 | `serial/src/serial/` | One open port: a single read loop serving both the monitor and outstanding requests. |
 | `serial/src/ui/` | The components. |
 
-Four things to know before changing it:
+Five things to know before changing it:
 
 - **Register names are the manual's own headings, in the manual's own language**, with an English
   gloss beside them and a section number. For the RadiCal that means German — *Aussteuergrad*,
@@ -120,7 +120,15 @@ Four things to know before changing it:
 - **The tests are built on frames copied out of the manufacturers' manuals, check bytes included.**
   They agree only if the code agrees with the devices rather than with itself, which is how two
   wrong CRCs in `docs/temperature-sensor.md` were found. Keep new device work anchored the same
-  way.
+  way. `crc.test.ts` holds *every* entry of `relay` and `temperatureSensor` to that standard, so
+  anything captured rather than published — `relayPowerUp` is the one so far — goes in its own
+  object rather than weakening the check.
+- **A request that hears nothing and a request that hears rubbish are different faults.** Silence
+  is a wrong address or bit rate, and is reported as-is; stray bytes mean something is there and
+  this exchange was spoiled, so `connection.ts` retries once and quotes the bytes when they are
+  legible. That is what makes the relay reachable on the first read after it is powered — see
+  `docs/relay.md`. Retrying is only safe because every write the tool sends sets a value rather
+  than stepping one, so do not widen it to requests that are not idempotent.
 - **Solid 2.0 is not Solid 1.x.** `createEffect` takes a compute *and* an effect function; there
   is no `onMount`, because a component body already runs once during setup; DOM rendering is in
   `@solidjs/web`, which is also the `jsxImportSource`.

@@ -40,7 +40,13 @@ export type Subscriber = (chunk: Chunk) => void;
 export class RequestFailed extends Error {
   constructor(
     message: string,
-    readonly reason: "timeout" | "closed",
+    readonly reason: "timeout" | "closed" | "noise",
+    /**
+     * What arrived while waiting that was neither the echo of the request nor an answer. Empty for
+     * a line that stayed silent, which is a different fault: silence is a wrong address, a wrong
+     * bit rate or a wire, whereas noise is something that talked and was not understood
+     */
+    readonly stray: Uint8Array = new Uint8Array(0),
   ) {
     super(message);
     this.name = "RequestFailed";
@@ -110,18 +116,41 @@ export class Connection {
    * of the request itself: some RS-485 adapters put what they transmit back on the receive line,
    * and `debug-listener` has a flag for exactly that. An echo is a valid frame, so it has to be
    * ruled out by shape — same address, but the request's shape rather than a response's
+   *
+   * An attempt that heard nothing at all is not retried: silence means the device is not listening
+   * on this address or at this bit rate, and asking again only spends another timeout confirming
+   * it. An attempt that heard *something* is retried once, because bytes on the line prove a device
+   * is there and that this particular exchange was spoiled rather than impossible. The relay module
+   * is why: it greets the line in ASCII when it powers up, and that greeting collides with the
+   * answer to whatever was asked first, taking the request down with it — see `docs/relay.md`.
+   *
+   * Retrying is safe for what this tool sends. Every write it issues sets a coil or a register to
+   * a stated value, so arriving twice leaves the device where arriving once would have
    */
-  async request(frame: Uint8Array, timeoutMs = 1_000): Promise<Uint8Array> {
+  async request(
+    frame: Uint8Array,
+    timeoutMs = 1_000,
+    options: { retries?: number } = {},
+  ): Promise<Uint8Array> {
     const writer = this.#writer;
     if (!writer) throw new RequestFailed("The port is not open", "closed");
 
     const address = frame[0]!;
     const functionCode = frame[1]!;
+    let remaining = options.retries ?? 1;
 
-    const reply = this.#awaitResponse(address, functionCode, frame, timeoutMs);
-    await writer.write(frame);
+    for (;;) {
+      const reply = this.#awaitResponse(address, functionCode, frame, timeoutMs);
+      await writer.write(frame);
 
-    return reply;
+      try {
+        return await reply;
+      } catch (error) {
+        const spoiled = error instanceof RequestFailed && error.reason === "noise";
+        if (!spoiled || remaining <= 0) throw error;
+        remaining--;
+      }
+    }
   }
 
   #awaitResponse(
@@ -135,12 +164,7 @@ export class Connection {
 
       const timer = setTimeout(() => {
         finish();
-        reject(
-          new RequestFailed(
-            `No reply from address ${address} within ${timeoutMs} ms`,
-            "timeout",
-          ),
-        );
+        reject(noAnswer(address, timeoutMs, withoutEcho(pending, sent)));
       }, timeoutMs);
 
       const unsubscribe = this.subscribe(({ bytes }) => {
@@ -217,6 +241,70 @@ export function findResponse(
   }
 
   return undefined;
+}
+
+/**
+ * The failure for a request that ran out of time, which is two different faults wearing one name.
+ *
+ * Saying which one it was is most of the diagnosis. "Nothing answered" sends someone to check the
+ * address and the bit rate; "something answered and it was not Modbus" sends them somewhere else
+ * entirely, and when the stray bytes are legible it usually names the culprit outright
+ */
+function noAnswer(address: number, timeoutMs: number, stray: Uint8Array): RequestFailed {
+  if (stray.length === 0) {
+    return new RequestFailed(`No reply from address ${address} within ${timeoutMs} ms`, "timeout", stray);
+  }
+
+  const text = printableText(stray);
+  const what = text === undefined ? "" : `: “${text}”`;
+
+  return new RequestFailed(
+    `No reply from address ${address} within ${timeoutMs} ms, but ${stray.length} bytes arrived that were not an answer${what}`,
+    "noise",
+    stray,
+  );
+}
+
+/**
+ * Everything that arrived except the echo of the request.
+ *
+ * An adapter that puts its own transmission back on the receive line would otherwise make every
+ * silent device look like a talking one, and turn each timeout into two
+ */
+function withoutEcho(buffer: Uint8Array, sent: Uint8Array): Uint8Array {
+  for (let offset = 0; offset + sent.length <= buffer.length; offset++) {
+    if (!equal(buffer.subarray(offset, offset + sent.length), sent)) continue;
+
+    const kept = new Uint8Array(buffer.length - sent.length);
+    kept.set(buffer.subarray(0, offset));
+    kept.set(buffer.subarray(offset + sent.length), offset);
+    return kept;
+  }
+
+  return buffer;
+}
+
+/**
+ * Stray bytes as text, when they plainly are text.
+ *
+ * Devices that announce themselves do it in ASCII, so showing the words is worth more than showing
+ * the hex. The threshold keeps a misread frame — which is bytes, not prose — from being dressed up
+ * as a message
+ */
+function printableText(bytes: Uint8Array): string | undefined {
+  let printable = 0;
+
+  for (const byte of bytes) {
+    const isText = byte === 0x09 || byte === 0x0a || byte === 0x0d || (byte >= 0x20 && byte <= 0x7e);
+    if (isText) printable++;
+  }
+
+  if (printable / bytes.length < 0.8) return undefined;
+
+  return new TextDecoder("ascii")
+    .decode(bytes)
+    .replace(/[^\x20-\x7e]+/g, " ")
+    .trim();
 }
 
 function equal(left: Uint8Array, right: Uint8Array): boolean {
