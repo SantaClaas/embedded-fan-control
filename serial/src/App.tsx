@@ -1,5 +1,6 @@
 import { For, Show, createSignal, onCleanup } from "solid-js";
 import PortPanel from "./ui/PortPanel";
+import { portKey } from "./ui/preferences";
 
 /**
  * Whether this browser can talk to a serial port at all.
@@ -10,7 +11,12 @@ import PortPanel from "./ui/PortPanel";
  */
 const isSupported = "serial" in navigator;
 
-type Entry = { port: SerialPort; info: Partial<SerialPortInfo> };
+/**
+ * A port as this page sees it: the port itself, what the browser can say about the hardware, and
+ * the name its remembered choices are filed under — assigned here, because it is only among the
+ * other ports that a second identical adapter can be told from the first
+ */
+type Entry = { port: SerialPort; info: Partial<SerialPortInfo>; key: string };
 
 export default function App() {
   return (
@@ -69,9 +75,12 @@ function Ports() {
   const [error, setError] = createSignal<string | undefined>();
 
   function remember(port: SerialPort) {
-    setPorts((current) =>
-      current.some((entry) => entry.port === port) ? current : [...current, { port, info: port.getInfo() }],
-    );
+    setPorts((current) => {
+      if (current.some((entry) => entry.port === port)) return current;
+
+      const info = port.getInfo();
+      return [...current, { port, info, key: portKey(info, current.map((entry) => entry.key)) }];
+    });
   }
 
   function forget(port: SerialPort) {
@@ -128,7 +137,9 @@ function Ports() {
           </p>
         }
       >
-        <For each={ports()}>{(entry) => <PortPanel port={entry.port} info={entry.info} />}</For>
+        <For each={ports()}>
+          {(entry) => <PortPanel port={entry.port} info={entry.info} storageKey={entry.key} />}
+        </For>
       </Show>
     </>
   );

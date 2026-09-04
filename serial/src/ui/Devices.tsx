@@ -1,5 +1,6 @@
 import { For, Show, createMemo, createSignal } from "solid-js";
 import {
+  deviceById,
   devices,
   noContext,
   referencesFor,
@@ -31,9 +32,20 @@ type State = {
 
 const spaces = ["holding", "input", "coil", "discreteInput"] as const;
 
-export default function Devices(props: { connection: Connection }) {
-  const [device, setDevice] = createSignal<Device>(devices[0]!);
-  const [address, setAddress] = createSignal(devices[0]!.defaults.address);
+export default function Devices(props: {
+  connection: Connection;
+  /** The device chosen last time, by id. Unknown ids fall back to the first device */
+  device: string | undefined;
+  /** The address last used for each device, by device id */
+  addresses: Readonly<Record<string, number>>;
+  /** Handed the choice whenever it changes, so the panel above can remember it */
+  onChoose: (device: string, addresses: Readonly<Record<string, number>>) => void;
+}) {
+  // Read once, during setup: this is where the panel is picked up from, not something it follows
+  const restored = deviceById(props.device ?? "") ?? devices[0]!;
+
+  const [device, setDevice] = createSignal<Device>(restored);
+  const [address, setAddress] = createSignal(props.addresses[restored.id] ?? restored.defaults.address);
   const [state, setState] = createSignal<State>({ values: new Map(), refused: [] });
   const valuesIn = (space: Space) => state().values.get(space);
   const [busy, setBusy] = createSignal(false);
@@ -48,12 +60,31 @@ export default function Devices(props: { connection: Connection }) {
   const mismatch = createMemo(() => settingsMismatch(device(), props.connection.settings));
 
   function chooseDevice(id: string) {
-    const chosen = devices.find((entry) => entry.id === id);
+    const chosen = deviceById(id);
     if (!chosen) return;
 
+    // The address this device was last reached at, rather than its default: a fan that had to be
+    // given 0x03 to sit beside another one keeps that address for as long as it is wired that way
     setDevice(chosen);
-    setAddress(chosen.defaults.address);
+    setAddress(props.addresses[chosen.id] ?? chosen.defaults.address);
     setState({ values: new Map(), refused: [] });
+    props.onChoose(chosen.id, props.addresses);
+  }
+
+  /**
+   * Takes the address the field is on, and remembers it when it is one.
+   *
+   * A field being typed into passes through empty and through half-written numbers, which arrive
+   * here as `NaN` and as addresses no device has. The signal follows the field either way, because
+   * it is what the field shows; only a whole address within the device's range is worth keeping
+   */
+  function changeAddress(value: number) {
+    setAddress(value);
+
+    const [low, high] = device().defaults.addressRange;
+    if (!Number.isInteger(value) || value < low || value > high) return;
+
+    props.onChoose(device().id, { ...props.addresses, [device().id]: value });
   }
 
   async function readEverything() {
@@ -115,7 +146,7 @@ export default function Devices(props: { connection: Connection }) {
       <div class="controls">
         <div class="control">
           <label for="device-type">Device</label>
-          <select id="device-type" onChange={(event) => chooseDevice(event.currentTarget.value)}>
+          <select id="device-type" value={device().id} onChange={(event) => chooseDevice(event.currentTarget.value)}>
             <For each={devices}>{(entry) => <option value={entry.id}>{entry.name}</option>}</For>
           </select>
         </div>
@@ -136,7 +167,7 @@ export default function Devices(props: { connection: Connection }) {
             required
             value={address()}
             aria-describedby="device-address-hint"
-            onInput={(event) => setAddress(event.currentTarget.valueAsNumber)}
+            onInput={(event) => changeAddress(event.currentTarget.valueAsNumber)}
           />
         </div>
 

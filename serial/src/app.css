@@ -140,6 +140,20 @@ p.hint {
 .panel-header .actions {
   display: flex;
   gap: 0.5rem;
+  align-items: center;
+}
+
+/*
+ * A label wrapping its own control, so the words are part of the hit area rather than only tied to
+ * it. Laid out along the row because it sits beside a button rather than above a field, unlike
+ * .control.
+ */
+.checkbox {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  white-space: nowrap;
+  cursor: pointer;
 }
 
 /* -------------------------------------------------------------------------- */
