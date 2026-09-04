@@ -246,3 +246,8 @@ cd serial && pnpm test
 - [docs/temperature-sensor.md](docs/temperature-sensor.md) — the Modbus registers and protocol of
   the RS-485 temperature/humidity sensor. No manufacturer PDF exists for that device, so this
   file, and the raw text it was formatted from next to it, is the only documentation there is.
+- [docs/relay.md](docs/relay.md) — the LC-Modbus-1R-D7 relay module as measured on the bench rather
+  than as documented: the address and line settings it shipped with, the frames that were actually
+  exercised against it, the ASCII banner it sends on power-up, and why its 8N1 framing keeps it off
+  the fans' 8E1 bus. `serial/src/devices/relay.ts` models the same device from the manual; this
+  records where the hardware was checked against that.

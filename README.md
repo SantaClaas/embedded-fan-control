@@ -48,12 +48,16 @@ Three kinds of device sit on the Modbus bus, and their documentation lives in th
 | Device | Documentation |
 |---|---|
 | ebm-papst RadiCal fans | `docs/manufacturer/radical/` (submodule) |
-| Modbus relay module | `docs/manufacturer/relay/` (submodule) |
+| Modbus relay module | `docs/manufacturer/relay/` (submodule), and [docs/relay.md](docs/relay.md) for how it actually behaves |
 | RS-485 temperature/humidity sensor | [docs/temperature-sensor.md](docs/temperature-sensor.md) |
 
 The temperature sensor has no manufacturer PDF — that markdown file, and the
 [raw text](docs/temperature-sensor-unformatted.txt) it was formatted from, are the only
 documentation for it, which is why they live in this public repo rather than the submodule.
+
+The relay has both: the manual in the submodule, and [docs/relay.md](docs/relay.md) for what the
+module was measured to do — the settings it shipped with, and the ASCII banner it sends on power-up
+that any parser talking to it has to survive.
 
 # The serial tool
 [serial](serial) opens a USB serial adapter straight from the browser with the
