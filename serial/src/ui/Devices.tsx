@@ -313,11 +313,20 @@ function RegisterRow(props: {
                   <Show
                     when={writable().input.control === "number" ? writable().input : undefined}
                     fallback={
-                      // Says what it is doing while it does it, the way the Write button beside it
-                      // does. Without that, a press that reaches nothing and a press that wrote a
-                      // value the device already held look exactly alike: nothing happens
-                      <button type="button" disabled={writing()} onClick={() => { setPending(props.raw ? 0 : 1); void send(); }}>
-                        {writing() ? "Writing…" : props.raw ? "Open" : "Close"}
+                      // A toggle is the one control whose meaning comes from the value it is
+                      // showing, so it has nothing to offer until something has been read: an
+                      // unknown state used to fall to "Close", which wrote a close to a relay that
+                      // was already closed and looked for all the world like a dead button.
+                      //
+                      // It says what it is doing while it does it for the same reason — the Write
+                      // button beside it always has
+                      <button
+                        type="button"
+                        disabled={writing() || props.raw === undefined}
+                        title={props.raw === undefined ? "Read the registers first: which way this writes depends on where the relay is now" : undefined}
+                        onClick={() => { setPending(props.raw ? 0 : 1); void send(); }}
+                      >
+                        {writing() ? "Writing…" : props.raw === undefined ? "Not read" : props.raw ? "Open" : "Close"}
                       </button>
                     }
                   >
