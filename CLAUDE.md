@@ -133,7 +133,12 @@ Five things to know before changing it:
   documented bit rate and parity and says so before a read rather than after a timeout.
 - **Solid 2.0 is not Solid 1.x.** `createEffect` takes a compute *and* an effect function; there
   is no `onMount`, because a component body already runs once during setup; DOM rendering is in
-  `@solidjs/web`, which is also the `jsxImportSource`.
+  `@solidjs/web`, which is also the `jsxImportSource`. A signal write is **not** visible to a read
+  in the same synchronous block — it lands on the following microtask — so a handler that sets a
+  value and then acts on it must pass the value along rather than read it back; the coil toggle
+  needed two presses for exactly that reason. Note this cannot be checked from a test: under node,
+  vitest resolves `solid-js` to its *server* build, where writes are synchronous and inert, so a
+  test will happily prove the opposite of what the browser does.
 - **Register write fields rely on the browser's own validation.** The bounds are real
   `min`/`max`/`step` attributes taken from the register definition, and `:user-invalid` styles them
   only after the field is left. Do not add a parallel bounds check in a signal.

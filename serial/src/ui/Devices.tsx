@@ -246,10 +246,17 @@ function RegisterRow(props: {
     return raw === undefined ? undefined : props.register.decode(raw, props.context ?? noContext);
   });
 
-  async function send() {
-    const value = pending();
+  /**
+   * Writes `value`, which is passed in rather than read back out of `pending`.
+   *
+   * A signal write is not visible to a read in the same synchronous block — Solid 2.0 applies it on
+   * the following microtask — so a control that sets the value and sends in one handler sends
+   * whatever was there before. On the coil's toggle that meant every press wrote the previous
+   * press's value: one press did nothing, and the button appeared to need two
+   */
+  async function send(value: number) {
     const writable = props.register.write;
-    if (value === undefined || !writable) return;
+    if (!writable) return;
 
     // Refuse to put a value on the bus that the device is bound to reject anyway
     if (field && !field.validity.valid) {
@@ -324,7 +331,7 @@ function RegisterRow(props: {
                         type="button"
                         disabled={writing() || props.raw === undefined}
                         title={props.raw === undefined ? "Read the registers first: which way this writes depends on where the relay is now" : undefined}
-                        onClick={() => { setPending(props.raw ? 0 : 1); void send(); }}
+                        onClick={() => void send(props.raw ? 0 : 1)}
                       >
                         {writing() ? "Writing…" : props.raw === undefined ? "Not read" : props.raw ? "Open" : "Close"}
                       </button>
@@ -375,7 +382,7 @@ function RegisterRow(props: {
                 <button
                   type="button"
                   disabled={writing() || pending() === undefined || (writable().input.control === "number" && !valid())}
-                  onClick={() => void send()}
+                  onClick={() => { const value = pending(); if (value !== undefined) void send(value); }}
                 >
                   {writing() ? "Writing…" : "Write"}
                 </button>
