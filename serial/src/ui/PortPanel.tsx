@@ -1,7 +1,8 @@
-import { For, Show, createSignal } from "solid-js";
+import { For, Show, createEffect, createSignal } from "solid-js";
 import { Connection, baudRates, defaultSettings, type Parity, type PortSettings } from "../serial/connection";
 import Devices from "./Devices";
 import Monitor from "./Monitor";
+import { load, sameSettings, save, type Mode, type Remembered } from "./preferences";
 
 /**
  * Settings that make a device answer at all.
@@ -18,26 +19,39 @@ const presets: readonly { label: string; settings: PortSettings }[] = [
   },
 ];
 
-type Mode = "monitor" | "devices";
-
-export default function PortPanel(props: { port: SerialPort; info: Partial<SerialPortInfo> }) {
+export default function PortPanel(props: {
+  port: SerialPort;
+  info: Partial<SerialPortInfo>;
+  /** Where this port's remembered choices are kept, from `portKey` */
+  storageKey: string;
+}) {
   const connection = new Connection(props.port);
 
-  const [settings, setSettings] = createSignal<PortSettings>(defaultSettings);
+  // Every choice this panel offers, as it was left last time. One record rather than a signal
+  // each, because they are saved and restored together and a panel that remembered half of them
+  // would be worse than one that remembered none
+  const [remembered, setRemembered] = createSignal<Remembered>(load(props.storageKey));
+  const settings = () => remembered().settings;
+  const mode = () => remembered().mode;
+
+  function remember(change: Partial<Remembered>) {
+    setRemembered((current) => ({ ...current, ...change }));
+  }
+
+  // The compute tracks the record, the effect writes it out. Saving here rather than in each
+  // handler means there is one place a change can fail to be remembered from, instead of six
+  createEffect(
+    () => remembered(),
+    (value) => save(props.storageKey, value),
+  );
+
   const [isOpen, setIsOpen] = createSignal(false);
-  const [mode, setMode] = createSignal<Mode>("monitor");
   const [error, setError] = createSignal<string | undefined>();
 
-  async function toggle() {
+  async function open() {
     setError(undefined);
 
     try {
-      if (isOpen()) {
-        await connection.close();
-        setIsOpen(false);
-        return;
-      }
-
       await connection.open(settings());
       setIsOpen(true);
     } catch (cause) {
@@ -45,9 +59,35 @@ export default function PortPanel(props: { port: SerialPort; info: Partial<Seria
     }
   }
 
-  function update<K extends keyof PortSettings>(key: K, value: PortSettings[K]) {
-    setSettings((current) => ({ ...current, [key]: value }));
+  async function toggle() {
+    if (!isOpen()) return open();
+
+    setError(undefined);
+
+    try {
+      await connection.close();
+      setIsOpen(false);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
   }
+
+  // A component body runs once during setup, so this is the port being opened as the panel
+  // appears — on a reload, and equally when the adapter is plugged back in. Only ever for a port
+  // that has been asked to do it; a failure lands in the same place a failed click would
+  if (remembered().reopen) void open();
+
+  function update<K extends keyof PortSettings>(key: K, value: PortSettings[K]) {
+    remember({ settings: { ...settings(), [key]: value } });
+  }
+
+  /**
+   * Which preset the current settings are, if they are one.
+   *
+   * Restored settings have to put the select back where the user left it, and a select showing
+   * "RadiCal fans" over a port about to be opened at 9600 8N1 is worse than no preset at all
+   */
+  const preset = () => presets.findIndex((entry) => sameSettings(entry.settings, settings()));
 
   return (
     <article class="port">
@@ -64,9 +104,22 @@ export default function PortPanel(props: { port: SerialPort; info: Partial<Seria
           </h2>
         </div>
 
-        <button type="button" onClick={() => void toggle()}>
-          {isOpen() ? "Close port" : "Open port"}
-        </button>
+        <div class="actions">
+          {/* Outside the settings fieldset, which is disabled while the port is open: this is a
+              choice about the next visit rather than about this connection */}
+          <label class="checkbox">
+            <input
+              type="checkbox"
+              checked={remembered().reopen}
+              onChange={(event) => remember({ reopen: event.currentTarget.checked })}
+            />
+            Open automatically
+          </label>
+
+          <button type="button" onClick={() => void toggle()}>
+            {isOpen() ? "Close port" : "Open port"}
+          </button>
+        </div>
       </header>
 
       <Show when={error()}>{(message) => <p class="error-msg shown">{message()}</p>}</Show>
@@ -78,12 +131,18 @@ export default function PortPanel(props: { port: SerialPort; info: Partial<Seria
           <label for="preset">Preset</label>
           <select
             id="preset"
+            value={preset()}
             onChange={(event) => {
-              const preset = presets[Number(event.currentTarget.value)];
-              if (preset) setSettings(preset.settings);
+              const chosen = presets[Number(event.currentTarget.value)];
+              if (chosen) remember({ settings: chosen.settings });
             }}
           >
-            <For each={presets}>{(preset, index) => <option value={index()}>{preset.label}</option>}</For>
+            {/* Only while the settings are nobody's preset, so it cannot be chosen — there is
+                nothing for choosing "Custom" to do */}
+            <Show when={preset() < 0}>
+              <option value={-1}>Custom</option>
+            </Show>
+            <For each={presets}>{(entry, index) => <option value={index()}>{entry.label}</option>}</For>
           </select>
         </div>
 
@@ -115,18 +174,38 @@ export default function PortPanel(props: { port: SerialPort; info: Partial<Seria
         fallback={<p class="empty">Open the port to watch the bus or read a device.</p>}
       >
         <nav class="tabs" aria-label="What to do with this port">
-          <button type="button" aria-pressed={mode() === "monitor" ? "true" : "false"} onClick={() => setMode("monitor")}>
-            Watch the bus
-          </button>
-          <button type="button" aria-pressed={mode() === "devices" ? "true" : "false"} onClick={() => setMode("devices")}>
-            Talk to a device
-          </button>
+          <For each={["monitor", "devices"] as const}>
+            {(tab) => (
+              <button
+                type="button"
+                aria-pressed={mode() === tab ? "true" : "false"}
+                onClick={() => remember({ mode: tab })}
+              >
+                {tabLabel[tab]}
+              </button>
+            )}
+          </For>
         </nav>
 
-        <Show when={mode() === "monitor"} fallback={<Devices connection={connection} />}>
+        <Show
+          when={mode() === "monitor"}
+          fallback={
+            <Devices
+              connection={connection}
+              device={remembered().device}
+              addresses={remembered().addresses}
+              onChoose={(device, addresses) => remember({ device, addresses })}
+            />
+          }
+        >
           <Monitor connection={connection} />
         </Show>
       </Show>
     </article>
   );
 }
+
+const tabLabel: Record<Mode, string> = {
+  monitor: "Watch the bus",
+  devices: "Talk to a device",
+};

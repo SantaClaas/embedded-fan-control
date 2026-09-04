@@ -110,7 +110,7 @@ so the active side must not be used while the controller is polling.
 | `serial/src/serial/` | One open port: a single read loop serving both the monitor and outstanding requests. |
 | `serial/src/ui/` | The components. |
 
-Five things to know before changing it:
+Six things to know before changing it:
 
 - **Register names are the manual's own headings, in the manual's own language**, with an English
   gloss beside them and a section number. For the RadiCal that means German — *Aussteuergrad*,
@@ -134,6 +134,14 @@ Five things to know before changing it:
 - **Solid 2.0 is not Solid 1.x.** `createEffect` takes a compute *and* an effect function; there
   is no `onMount`, because a component body already runs once during setup; DOM rendering is in
   `@solidjs/web`, which is also the `jsxImportSource`.
+- **The panel remembers the choices, never the readings.** `src/ui/preferences.ts` keeps each
+  port's settings, tab, device and address in `localStorage` under a key made from the adapter's
+  USB ids, because the page is reloaded often and those are the same six choices every time. Values
+  read from a device are deliberately not kept — a restored reading beside a live one would make
+  the page lie about what it knows — and reopening the port on load stays opt-in per port, since
+  opening a port asserts control lines an adapter may be driving its transceiver from. Anything
+  added to `Remembered` has to be parsed as if written by an older build: check the field, fall
+  back on its own, never discard the record.
 - **Register write fields rely on the browser's own validation.** The bounds are real
   `min`/`max`/`step` attributes taken from the register definition, and `:user-invalid` styles them
   only after the field is left. Do not add a parallel bounds check in a signal.
