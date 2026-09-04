@@ -17,8 +17,32 @@ import {
   writeSingleCoil,
   writeSingleRegister,
 } from "../modbus/pdu";
-import { runsOf, type Register, type Space } from "../devices";
-import type { Connection } from "./connection";
+import { runsOf, type Device, type Register, type Space } from "../devices";
+import type { Connection, PortSettings } from "./connection";
+
+/**
+ * Whether the port speaks what the device answers to, said plainly.
+ *
+ * A device at the wrong bit rate or parity is simply silent, and silence is the least informative
+ * failure there is — it looks exactly like a wrong address or a wire that fell out. Both numbers
+ * are known here long before a request goes out, so the mismatch is worth saying out loud rather
+ * than leaving to be inferred from a timeout.
+ *
+ * It is a warning and not a bar: a device that has been reconfigured no longer matches the defaults
+ * its manual describes, and reading it is exactly how that gets confirmed
+ */
+export function settingsMismatch(device: Device, settings: PortSettings | undefined): string | undefined {
+  if (!settings) return undefined;
+
+  const { baudRate, parity } = device.defaults;
+  if (settings.baudRate === baudRate && settings.parity === parity) return undefined;
+
+  return `The port is open at ${settings.baudRate} baud with ${parityName(settings.parity)}, but ${device.name} answers at ${baudRate} baud with ${parityName(parity)}. A device that cannot hear the request stays silent, which reads as "no reply".`;
+}
+
+function parityName(parity: PortSettings["parity"]): string {
+  return parity === "none" ? "no parity" : `${parity} parity`;
+}
 
 const readers: Record<Space, (address: number, start: number, quantity: number) => Uint8Array> = {
   input: readInputRegisters,

@@ -9,7 +9,7 @@ import {
   type Register,
 } from "../devices";
 import { BAUD_RATE_WRITE, BAUD_RATE_READ, relay } from "../devices/relay";
-import { readAll, write } from "../serial/client";
+import { readAll, settingsMismatch, write } from "../serial/client";
 import type { Connection } from "../serial/connection";
 import { registerAddress, toHex } from "./format";
 
@@ -27,6 +27,10 @@ export default function Devices(props: { connection: Connection }) {
   const [error, setError] = createSignal<string | undefined>();
 
   const context = createMemo<Context>(() => ({ holding: state().values }));
+
+  // The port cannot be reconfigured while it is open, and this panel only exists while it is, so
+  // reading the connection's settings here is stable for as long as the warning is on screen
+  const mismatch = createMemo(() => settingsMismatch(device(), props.connection.settings));
 
   function chooseDevice(id: string) {
     const chosen = devices.find((entry) => entry.id === id);
@@ -124,6 +128,14 @@ export default function Devices(props: { connection: Connection }) {
         Documented in <code>{device().documentation}</code>. Expects {device().defaults.baudRate} baud,{" "}
         {device().defaults.parity} parity — set the port to match before reading.
       </p>
+
+      <Show when={mismatch()}>
+        {(message) => (
+          <p class="error-msg shown">
+            {message()} Close the port and reopen it with the preset for this device.
+          </p>
+        )}
+      </Show>
 
       <Show when={error()}>{(message) => <p class="error-msg shown">{message()}</p>}</Show>
 

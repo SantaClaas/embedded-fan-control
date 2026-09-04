@@ -59,11 +59,17 @@ export class Connection {
   #subscribers = new Set<Subscriber>();
   #reading: Promise<void> | undefined;
   #closing = false;
+  #settings: PortSettings | undefined;
 
   constructor(readonly port: SerialPort) {}
 
   get isOpen(): boolean {
     return this.#reader !== undefined;
+  }
+
+  /** What the port was actually opened with, which is what the devices on it have to agree with */
+  get settings(): PortSettings | undefined {
+    return this.#settings;
   }
 
   async open(settings: PortSettings): Promise<void> {
@@ -81,6 +87,7 @@ export class Connection {
     }
 
     this.#closing = false;
+    this.#settings = settings;
     this.#reader = this.port.readable.getReader();
     this.#writer = this.port.writable.getWriter();
     this.#reading = this.#readLoop();
@@ -100,6 +107,7 @@ export class Connection {
     this.#writer?.releaseLock();
     this.#reader = undefined;
     this.#writer = undefined;
+    this.#settings = undefined;
 
     await this.port.close().catch(() => undefined);
   }

@@ -128,7 +128,9 @@ Five things to know before changing it:
   this exchange was spoiled, so `connection.ts` retries once and quotes the bytes when they are
   legible. That is what makes the relay reachable on the first read after it is powered — see
   `docs/relay.md`. Retrying is only safe because every write the tool sends sets a value rather
-  than stepping one, so do not widen it to requests that are not idempotent.
+  than stepping one, so do not widen it to requests that are not idempotent. Silence usually means
+  the port is on the wrong preset, so the device panel compares the open port against the device's
+  documented bit rate and parity and says so before a read rather than after a timeout.
 - **Solid 2.0 is not Solid 1.x.** `createEffect` takes a compute *and* an effect function; there
   is no `onMount`, because a component body already runs once during setup; DOM rendering is in
   `@solidjs/web`, which is also the `jsxImportSource`.
