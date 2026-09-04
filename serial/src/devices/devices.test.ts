@@ -420,6 +420,19 @@ describe("the registry", () => {
     }
   });
 
+  /**
+   * The hazard behind a bug worth not repeating: an address identifies a register only together
+   * with its space. The relay has three different things at 0x0000 — its address, its relay, its
+   * optocoupler input — so anything that files read values by address alone loses two of them, and
+   * what that looked like was a relay that could be closed and never opened
+   */
+  it("has one device answering for three different things at the same address", () => {
+    const atZero = relay.registers.filter((register) => register.address === 0x0000);
+
+    expect(atZero).toHaveLength(3);
+    expect(new Set(atZero.map((register) => register.space)).size).toBe(3);
+  });
+
   it("has no duplicate register within one device and address space", () => {
     for (const device of devices) {
       const keys = device.registers.map((register) => `${register.space}:${register.address}`);

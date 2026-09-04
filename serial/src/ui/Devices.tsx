@@ -7,26 +7,41 @@ import {
   type Context,
   type Device,
   type Register,
+  type Space,
 } from "../devices";
 import { BAUD_RATE_WRITE, BAUD_RATE_READ, relay } from "../devices/relay";
 import { describeFailure, readAll, settingsMismatch, write } from "../serial/client";
 import type { Connection } from "../serial/connection";
 import { registerAddress, toHex } from "./format";
 
+/**
+ * What the last read produced.
+ *
+ * The values are kept apart by address space, because an address only means something within one:
+ * the relay has a register at 0x0000 in three of the four — its address, its relay, its
+ * optocoupler input — and one map keyed by address alone had them overwriting each other in read
+ * order. What that looked like was a relay that could be closed and then never opened, because the
+ * button was reading the optocoupler's state for the coil's
+ */
 type State = {
-  values: Map<number, number>;
-  refused: { start: number; quantity: number; message: string }[];
+  values: ReadonlyMap<Space, ReadonlyMap<number, number>>;
+  refused: { space: Space; start: number; quantity: number; message: string }[];
   at?: Date;
 };
+
+const spaces = ["holding", "input", "coil", "discreteInput"] as const;
 
 export default function Devices(props: { connection: Connection }) {
   const [device, setDevice] = createSignal<Device>(devices[0]!);
   const [address, setAddress] = createSignal(devices[0]!.defaults.address);
   const [state, setState] = createSignal<State>({ values: new Map(), refused: [] });
+  const valuesIn = (space: Space) => state().values.get(space);
   const [busy, setBusy] = createSignal(false);
   const [error, setError] = createSignal<string | undefined>();
 
-  const context = createMemo<Context>(() => ({ holding: state().values }));
+  // Only holding registers are ever referred to by another register's decoder, and only holding
+  // values belong in the context — a coil at the same address is a different thing entirely
+  const context = createMemo<Context>(() => ({ holding: valuesIn("holding") ?? new Map() }));
 
   // The port cannot be reconfigured while it is open, and this panel only exists while it is, so
   // reading the connection's settings here is stable for as long as the warning is on screen
@@ -46,8 +61,14 @@ export default function Devices(props: { connection: Connection }) {
     setError(undefined);
 
     try {
-      const values = new Map<number, number>();
+      const values = new Map<Space, Map<number, number>>();
       const refused: State["refused"] = [];
+
+      const keep = (space: Space, read: ReadonlyMap<number, number>) => {
+        const known = values.get(space) ?? new Map<number, number>();
+        for (const [key, value] of read) known.set(key, value);
+        values.set(space, known);
+      };
 
       // The references first, and on their own: almost every RadiCal input register is a fraction
       // of one of them, so reading them last would mean a first pass that can state nothing
@@ -59,16 +80,16 @@ export default function Devices(props: { connection: Connection }) {
           "holding",
           references.map((reference) => ({ address: reference }) as Register),
         );
-        for (const [key, value] of result.values) values.set(key, value);
+        keep("holding", result.values);
       }
 
-      for (const space of ["holding", "input", "coil", "discreteInput"] as const) {
+      for (const space of spaces) {
         const registers = registersIn(device(), space);
         if (registers.length === 0) continue;
 
         const result = await readAll(props.connection, address(), space, registers);
-        for (const [key, value] of result.values) values.set(key, value);
-        refused.push(...result.refused);
+        keep(space, result.values);
+        refused.push(...result.refused.map((refusal) => ({ ...refusal, space })));
       }
 
       setState({ values, refused, at: new Date() });
@@ -146,7 +167,8 @@ export default function Devices(props: { connection: Connection }) {
       <For each={state().refused}>
         {(refusal) => (
           <p class="error-msg shown">
-            {registerAddress(refusal.start)} +{refusal.quantity}: {refusal.message}
+            {spaceName[refusal.space]} {registerAddress(refusal.start)} +{refusal.quantity}:{" "}
+            {refusal.message}
           </p>
         )}
       </For>
@@ -172,7 +194,7 @@ export default function Devices(props: { connection: Connection }) {
                         connection={props.connection}
                         deviceAddress={address()}
                         register={register}
-                        raw={state().values.get(register.address)}
+                        raw={valuesIn(register.space)?.get(register.address)}
                         context={context()}
                         onWritten={() => void readEverything()}
                       />
@@ -193,6 +215,14 @@ const spaceHeading = {
   holding: "Holding registers — read and write",
   coil: "Coils — read and write",
   discreteInput: "Discrete inputs — read only",
+} as const;
+
+/** Short enough to put in front of an address, which does not identify a read on its own */
+const spaceName = {
+  input: "Input register",
+  holding: "Holding register",
+  coil: "Coil",
+  discreteInput: "Discrete input",
 } as const;
 
 function RegisterRow(props: {
