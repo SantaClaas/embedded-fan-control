@@ -350,3 +350,27 @@ tbody tr:last-child td {
     flex-direction: column;
   }
 }
+
+/* -------------------------------------------------------------------------- */
+/* Version                                                                    */
+/* -------------------------------------------------------------------------- */
+
+/*
+ * Pinned to the corner rather than placed at the end of the page, so which build is open is
+ * answerable without scrolling past a monitor holding hundreds of frames. main's bottom padding
+ * keeps it clear of the last panel once the page is scrolled to the end.
+ */
+.version {
+  position: fixed;
+  inset-block-end: 0;
+  inset-inline-end: 0;
+  padding: 0.2rem 0.6rem;
+  font-family: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, monospace;
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-inline-end: 0;
+  border-block-end: 0;
+  border-start-start-radius: 0.375rem;
+}

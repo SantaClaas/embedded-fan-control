@@ -26,7 +26,41 @@ export default function App() {
       <Show when={isSupported} fallback={<Unsupported />}>
         <Ports />
       </Show>
+
+      <Version />
     </main>
+  );
+}
+
+/**
+ * What this page was built from, stamped in by `define` in vite.config.ts. Read into a constant
+ * here because every mention of `__BUILD__` is replaced by the whole literal
+ */
+const build = __BUILD__;
+
+/**
+ * Which build this is, so a page open on a bench can be told apart from the one that was just
+ * deployed. The hash links to the repository as it stood at that commit.
+ *
+ * Nothing here is reactive; Show is only how the missing case is written
+ */
+function Version() {
+  return (
+    <footer class="version">
+      {build.version}
+      <Show when={build.commit}>
+        {(commit) => (
+          <>
+            +
+            {/* In a new tab: leaving this one closes the port with it, losing the monitor's
+                frames and the connection the user is in the middle of using */}
+            <a href={commit().url} target="_blank" rel="noreferrer">
+              {commit().short}
+            </a>
+          </>
+        )}
+      </Show>
+    </footer>
   );
 }
 

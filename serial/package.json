@@ -1,7 +1,7 @@
 {
   "name": "serial",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.1.0",
   "type": "module",
   "packageManager": "pnpm@11.10.0",
   "scripts": {
@@ -19,6 +19,7 @@
   "devDependencies": {
     "@solidjs/vite-plugin": "3.0.0-next.36",
     "@types/dom-serial": "^1.0.6",
+    "@types/node": "^26.4.1",
     "typescript": "^5.9.3",
     "vite": "^8.2.2",
     "vitest": "^4.1.11"
