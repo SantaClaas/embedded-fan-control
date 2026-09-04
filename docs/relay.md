@@ -33,7 +33,9 @@ sweeping all 255 of them.
 ## Useful frames
 
 Addressed to `0xFF`, CRC included. The module echoes writes back verbatim, which is how a write is
-confirmed.
+confirmed — and which is why the tool has to know whether the *adapter* echoes too, since on an
+adapter that does, a coil write puts the same eight bytes on the line twice and only the second
+copy is the module's. It settles that from any read, where the request's bytes cannot be an answer.
 
 | Intent | Send | Expect |
 |---|---|---|

@@ -12,7 +12,7 @@
  */
 
 import { isValid } from "../modbus/crc";
-import { responseLength } from "../modbus/pdu";
+import { answersWithTheRequest, responseLength } from "../modbus/pdu";
 
 export type Parity = "none" | "even" | "odd";
 
@@ -60,6 +60,12 @@ export class Connection {
   #reading: Promise<void> | undefined;
   #closing = false;
   #settings: PortSettings | undefined;
+  /**
+   * Whether this adapter puts what it transmits back on the receive line. `undefined` until
+   * something has been asked that can tell, which is anything but a single write — see
+   * `#awaitResponse`
+   */
+  #echoes: boolean | undefined;
 
   constructor(readonly port: SerialPort) {}
 
@@ -70,6 +76,19 @@ export class Connection {
   /** What the port was actually opened with, which is what the devices on it have to agree with */
   get settings(): PortSettings | undefined {
     return this.#settings;
+  }
+
+  /**
+   * Whether this adapter has been seen putting what it transmits back on the receive line, or
+   * `undefined` while nothing has been asked that could tell.
+   *
+   * It matters for one thing only: a single write is answered with the request's own bytes, so
+   * whether the first copy of them is the device agreeing or the adapter talking to itself cannot
+   * be read off the bytes. Every read settles the question for free, and reading is what this panel
+   * does first
+   */
+  get echoesTransmissions(): boolean | undefined {
+    return this.#echoes;
   }
 
   async open(settings: PortSettings): Promise<void> {
@@ -108,6 +127,8 @@ export class Connection {
     this.#reader = undefined;
     this.#writer = undefined;
     this.#settings = undefined;
+    // A different adapter may be behind the next open
+    this.#echoes = undefined;
 
     await this.port.close().catch(() => undefined);
   }
@@ -161,6 +182,15 @@ export class Connection {
     }
   }
 
+  /**
+   * Waits for the answer, and — when the request is one that can tell — notes on the way whether
+   * this adapter echoes.
+   *
+   * Anything but a single write settles that for free: the request's own bytes cannot be a valid
+   * answer to it, so finding them in what came back means the adapter echoed them, and finishing
+   * without finding them means it did not. By the time an attempt is over the echo would have
+   * arrived if it were coming, so a timeout on a silent line is as good an answer as a reply is
+   */
   #awaitResponse(
     address: number,
     functionCode: number,
@@ -169,6 +199,7 @@ export class Connection {
   ): Promise<Uint8Array> {
     return new Promise((resolve, reject) => {
       let pending: Uint8Array = new Uint8Array(0);
+      const canTell = !answersWithTheRequest(functionCode);
 
       const timer = setTimeout(() => {
         finish();
@@ -178,17 +209,22 @@ export class Connection {
       const unsubscribe = this.subscribe(({ bytes }) => {
         pending = concat(pending, bytes);
 
-        const found = findResponse(pending, address, functionCode, sent);
+        const found = findResponse(pending, address, functionCode, sent, this.#echoes ?? false);
         if (!found) return;
 
         finish();
         resolve(found);
       });
 
-      function finish() {
+      const learn = () => {
+        if (canTell) this.#echoes = indexOf(pending, sent) >= 0;
+      };
+
+      const finish = () => {
+        learn();
         clearTimeout(timer);
         unsubscribe();
-      }
+      };
     });
   }
 
@@ -218,14 +254,28 @@ export class Connection {
  * Finds the device's answer in what has arrived so far.
  *
  * Returns `undefined` while the answer could still be incomplete, so the caller keeps waiting
- * rather than deciding early
+ * rather than deciding early.
+ *
+ * `adapterEchoes` is only consulted for a single write, where the module confirms by returning the
+ * request byte for byte and the bytes therefore cannot say by themselves whether the first copy is
+ * the device or the adapter. When the adapter is known to echo, the first copy is its and the
+ * second is the device's; when it is not, the first copy is the answer. Assuming it does not is the
+ * assumption that fails visibly — the panel re-reads after every write, so a write that only the
+ * adapter confirmed is contradicted on screen a moment later, whereas the opposite mistake makes
+ * every write on an honest adapter look like a dead device
  */
 export function findResponse(
   buffer: Uint8Array,
   address: number,
   functionCode: number,
   sent: Uint8Array,
+  adapterEchoes = false,
 ): Uint8Array | undefined {
+  // The request's own bytes are an answer only for a single write, and then only once the
+  // adapter's copy of them has been stepped over
+  const requestMayBeTheAnswer = answersWithTheRequest(functionCode);
+  let steppedOverEcho = false;
+
   for (let offset = 0; offset + 4 <= buffer.length; offset++) {
     if (buffer[offset] !== address) continue;
 
@@ -243,7 +293,14 @@ export function findResponse(
 
     // The echo of our own request is a valid frame with the right address and function code, so
     // it has to be recognised and skipped rather than returned as an answer
-    if (equal(candidate, sent)) continue;
+    if (equal(candidate, sent)) {
+      if (!requestMayBeTheAnswer) continue;
+
+      if (adapterEchoes && !steppedOverEcho) {
+        steppedOverEcho = true;
+        continue;
+      }
+    }
 
     return new Uint8Array(candidate);
   }
@@ -280,16 +337,22 @@ function noAnswer(address: number, timeoutMs: number, stray: Uint8Array): Reques
  * silent device look like a talking one, and turn each timeout into two
  */
 function withoutEcho(buffer: Uint8Array, sent: Uint8Array): Uint8Array {
-  for (let offset = 0; offset + sent.length <= buffer.length; offset++) {
-    if (!equal(buffer.subarray(offset, offset + sent.length), sent)) continue;
+  const offset = indexOf(buffer, sent);
+  if (offset < 0) return buffer;
 
-    const kept = new Uint8Array(buffer.length - sent.length);
-    kept.set(buffer.subarray(0, offset));
-    kept.set(buffer.subarray(offset + sent.length), offset);
-    return kept;
+  const kept = new Uint8Array(buffer.length - sent.length);
+  kept.set(buffer.subarray(0, offset));
+  kept.set(buffer.subarray(offset + sent.length), offset);
+  return kept;
+}
+
+/** Where `needle` starts in `buffer`, or -1. The bytes are short enough that scanning is fine */
+function indexOf(buffer: Uint8Array, needle: Uint8Array): number {
+  for (let offset = 0; offset + needle.length <= buffer.length; offset++) {
+    if (equal(buffer.subarray(offset, offset + needle.length), needle)) return offset;
   }
 
-  return buffer;
+  return -1;
 }
 
 /**

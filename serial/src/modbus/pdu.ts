@@ -51,6 +51,19 @@ export const exceptionText: Readonly<Record<number, string>> = {
 };
 
 /**
+ * Whether a successful answer to this function code is the request sent back byte for byte.
+ *
+ * A single write is confirmed by returning exactly what was asked for, so for 0x05 and 0x06 — and
+ * only for those two — a frame identical to the request is as likely to be the device agreeing as
+ * it is to be an adapter echoing. Every other code answers in a shape of its own: a read carries a
+ * byte count, and a multiple write answers with a header shorter than the request that carried the
+ * payload
+ */
+export function answersWithTheRequest(functionCode: number): boolean {
+  return functionCode === FunctionCode.WriteSingleCoil || functionCode === FunctionCode.WriteSingleRegister;
+}
+
+/**
  * How long a frame is, once its function code and any count byte have been seen.
  *
  * `"incomplete"` means the bytes that carry the length have not arrived yet and the caller should

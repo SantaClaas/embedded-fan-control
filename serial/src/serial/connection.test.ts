@@ -69,6 +69,43 @@ describe("findResponse", () => {
   });
 });
 
+/**
+ * The bug this section exists for: a coil write reported "no reply" from a module that had answered
+ * perfectly. 0x05 and 0x06 are confirmed by returning the request byte for byte — the fixture holds
+ * the manual's own proof, `closeRelayRequest` and `closeRelayResponse` being the same eight bytes —
+ * and the rule that steps over an adapter's echo was throwing that answer away every time
+ */
+describe("findResponse, for a write the device confirms by repeating it", () => {
+  const write = relay.closeRelayRequest;
+
+  it("is the manual's own frame in both directions", () => {
+    expect(relay.closeRelayResponse).toEqual(relay.closeRelayRequest);
+  });
+
+  it("takes the request's bytes as the answer when the adapter does not echo", () => {
+    expect(findResponse(relay.closeRelayResponse, 0xff, 0x05, write, false)).toEqual(relay.closeRelayResponse);
+  });
+
+  /** Two copies on an echoing adapter: the first is ours coming back, the second is the module */
+  it("takes the second copy when the adapter echoes", () => {
+    const withEcho = concat(write, relay.closeRelayResponse);
+
+    expect(findResponse(withEcho, 0xff, 0x05, write, true)).toEqual(relay.closeRelayResponse);
+  });
+
+  it("does not take the adapter's own copy as the module's answer", () => {
+    expect(findResponse(write, 0xff, 0x05, write, true)).toBeUndefined();
+  });
+
+  /** A read is unambiguous whatever the adapter does: its answer never looks like the request */
+  it("still steps over the echo of a read, echoing adapter or not", () => {
+    expect(findResponse(readBaud, 0xff, 0x03, readBaud, false)).toBeUndefined();
+    expect(findResponse(concat(readBaud, relay.readBaudResponse), 0xff, 0x03, readBaud, false)).toEqual(
+      relay.readBaudResponse,
+    );
+  });
+});
+
 describe("findResponse, with a device that greets the line", () => {
   /**
    * The greeting is ASCII, so none of its bytes can be mistaken for the relay's own address of
@@ -139,6 +176,64 @@ describe("request", () => {
     await connection.close();
   });
 
+  /** The write that could not be confirmed: the module answers, and the answer is the request */
+  it("confirms a coil write from the bytes the module actually sends back", async () => {
+    const port = fakePort((_, push) => push(relay.closeRelayResponse));
+    const connection = new Connection(port.port);
+    await connection.open(settings);
+
+    expect(await connection.request(relay.closeRelayRequest, 30)).toEqual(relay.closeRelayResponse);
+    expect(port.written.length).toBe(1);
+
+    await connection.close();
+  });
+
+  /**
+   * The adapter's habit is learned from a read, where the request's bytes cannot be an answer, and
+   * then applied to the write, where they can be both
+   */
+  it("learns from a read that the adapter echoes, and counts copies on the write after it", async () => {
+    const port = fakePort((_, push, sent) => push(concat(sent, answerTo(sent))));
+    const connection = new Connection(port.port);
+    await connection.open(settings);
+
+    expect(connection.echoesTransmissions).toBeUndefined();
+
+    await connection.request(relay.readBaudRequest, 30);
+    expect(connection.echoesTransmissions).toBe(true);
+
+    // Two copies arrive; taking the first would be reporting the adapter's word for the module's
+    expect(await connection.request(relay.closeRelayRequest, 30)).toEqual(relay.closeRelayResponse);
+
+    await connection.close();
+  });
+
+  /** And on an adapter that does not echo, one read is enough to know that too */
+  it("learns from a read that the adapter is quiet", async () => {
+    const port = fakePort((_, push) => push(relay.readBaudResponse));
+    const connection = new Connection(port.port);
+    await connection.open(settings);
+
+    await connection.request(relay.readBaudRequest, 30);
+
+    expect(connection.echoesTransmissions).toBe(false);
+
+    await connection.close();
+  });
+
+  /** Even a silent device says this much: had the adapter echoed, the bytes would be here */
+  it("learns it from a request nothing answered", async () => {
+    const port = fakePort(() => undefined);
+    const connection = new Connection(port.port);
+    await connection.open(settings);
+
+    await connection.request(relay.readBaudRequest, 30).catch(() => undefined);
+
+    expect(connection.echoesTransmissions).toBe(false);
+
+    await connection.close();
+  });
+
   /**
    * An adapter that echoes would otherwise make every silent device look like a talking one, and
    * turn each timeout into two
@@ -161,7 +256,7 @@ describe("request", () => {
  * A serial port that is only what `Connection` uses of one: a stream each way, and a hook that
  * answers a write the way a device on the other end would
  */
-function fakePort(answer: (written: number, push: (bytes: Uint8Array) => void) => void) {
+function fakePort(answer: (written: number, push: (bytes: Uint8Array) => void, sent: Uint8Array) => void) {
   const written: Uint8Array[] = [];
   let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
 
@@ -175,8 +270,9 @@ function fakePort(answer: (written: number, push: (bytes: Uint8Array) => void) =
 
   const writable = new WritableStream<Uint8Array>({
     write(chunk) {
-      written.push(new Uint8Array(chunk));
-      answer(written.length, push);
+      const sent = new Uint8Array(chunk);
+      written.push(sent);
+      answer(written.length, push, sent);
     },
   });
 
@@ -188,6 +284,11 @@ function fakePort(answer: (written: number, push: (bytes: Uint8Array) => void) =
   } as unknown as SerialPort;
 
   return { port, written, push };
+}
+
+/** What a device on the other end would answer, for the two requests these tests send */
+function answerTo(sent: Uint8Array): Uint8Array {
+  return sent[1] === 0x03 ? relay.readBaudResponse : relay.closeRelayResponse;
 }
 
 function withCrc(frame: Uint8Array): Uint8Array {
