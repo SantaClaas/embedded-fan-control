@@ -313,8 +313,11 @@ function RegisterRow(props: {
                   <Show
                     when={writable().input.control === "number" ? writable().input : undefined}
                     fallback={
+                      // Says what it is doing while it does it, the way the Write button beside it
+                      // does. Without that, a press that reaches nothing and a press that wrote a
+                      // value the device already held look exactly alike: nothing happens
                       <button type="button" disabled={writing()} onClick={() => { setPending(props.raw ? 0 : 1); void send(); }}>
-                        {props.raw ? "Open" : "Close"}
+                        {writing() ? "Writing…" : props.raw ? "Open" : "Close"}
                       </button>
                     }
                   >
