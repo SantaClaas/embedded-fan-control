@@ -131,7 +131,9 @@ about 4.7 V when the Pico is USB-powered, VBUS less a Schottky drop — and it i
 all but the Pico's *own* input, feeding the RP2040's buck-boost converter and the CYW43 radio, both
 of which draw in bursts of their own.
 
-Give it 7–24 V from its own supply and share only the ground. The [serial tool](../serial) now
+Given 7–24 V from its own supply, with only the ground shared, the module switches on command and
+holds: the coil write is confirmed, and the relay opens and closes from the tool one press at a
+time. Take the supply from its own rail and share only the ground. The [serial tool](../serial) now
 names this rather than leaving it to be read out of the quoted bytes: any failure carrying the
 greeting is reported as the module having restarted mid-exchange, with the supply as the thing to
 suspect.
