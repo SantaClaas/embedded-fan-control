@@ -23,6 +23,27 @@ import { hex, type Device, type Register } from "./register";
  */
 export const POWER_UP_GREETING = "Thank you for using the Modbus modules of LCTECH\r\n";
 
+/**
+ * Enough of the greeting to recognise it by, with room for the front of it to be lost.
+ *
+ * What arrives when the module resets mid-exchange is the tail of the answer it was in the middle
+ * of sending, then the greeting, and the boundary between the two is not clean — the bytes around
+ * it are whatever a UART produces while its supply is on the way down. Matching the end of the
+ * line rather than the whole of it survives that. `devices.test.ts` keeps the two in step
+ */
+const GREETING_SIGNATURE = "modules of LCTECH";
+
+/**
+ * Whether these bytes carry the module announcing itself.
+ *
+ * Worth asking of any failure that came back with bytes in it, because the greeting means one
+ * specific thing: the module booted. Mid-exchange, that is a module that restarted rather than
+ * answered
+ */
+export function carriesPowerUpGreeting(bytes: Uint8Array): boolean {
+  return new TextDecoder("ascii").decode(bytes).includes(GREETING_SIGNATURE);
+}
+
 /** Relay 1. The manual lists 0x0000 … 0x0007 for an eight-channel board */
 export const RELAY_COIL = 0x0000;
 

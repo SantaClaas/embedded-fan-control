@@ -13,7 +13,7 @@ import {
   type Register,
 } from "./index";
 import { MAXIMUM_SPEED, SET_POINT_MAX, VOLTAGE_REFERENCE, CURRENT_REFERENCE } from "./radical";
-import { ADDRESS_QUERY_UNIT, CHANNEL_COUNT, DEVICE_ADDRESS } from "./relay";
+import { ADDRESS_QUERY_UNIT, CHANNEL_COUNT, DEVICE_ADDRESS, POWER_UP_GREETING, carriesPowerUpGreeting } from "./relay";
 import { readCoils, readDiscreteInputs, readHoldingRegisters } from "../modbus/pdu";
 import { relay as relayFrames } from "../modbus/frames.fixture";
 
@@ -307,6 +307,19 @@ describe("relay", () => {
         relayFrames.readBaudRequest,
       );
     });
+  });
+
+  /**
+   * The greeting is recognised by a fragment of itself, so that the front of it can be lost to the
+   * dying answer in front of it. The fragment has to still be in the greeting
+   */
+  it("recognises its own power-up greeting, whole or with the front of it lost", () => {
+    const greeting = new TextEncoder().encode(POWER_UP_GREETING);
+
+    expect(carriesPowerUpGreeting(greeting)).toBe(true);
+    expect(carriesPowerUpGreeting(greeting.subarray(9))).toBe(true);
+    expect(carriesPowerUpGreeting(new TextEncoder().encode("Thank you for using"))).toBe(false);
+    expect(carriesPowerUpGreeting(new Uint8Array([0xff, 0x05, 0x00, 0x00]))).toBe(false);
   });
 
   it("names the baud rate codes from the manual's examples", () => {

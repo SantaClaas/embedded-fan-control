@@ -18,7 +18,8 @@ import {
   writeSingleRegister,
 } from "../modbus/pdu";
 import { runsOf, type Device, type Register, type Space } from "../devices";
-import type { Connection, PortSettings } from "./connection";
+import { carriesPowerUpGreeting } from "../devices/relay";
+import { RequestFailed, type Connection, type PortSettings } from "./connection";
 
 /**
  * Whether the port speaks what the device answers to, said plainly.
@@ -42,6 +43,44 @@ export function settingsMismatch(device: Device, settings: PortSettings | undefi
 
 function parityName(parity: PortSettings["parity"]): string {
   return parity === "none" ? "no parity" : `${parity} parity`;
+}
+
+/**
+ * A failure as the panel should show it: what happened, and what it means where the bytes say more
+ * than that they were not an answer.
+ *
+ * `connection.ts` reports the fault it can see — nothing answered, or something arrived that was
+ * not the answer, quoted when it is legible. It cannot go further without knowing the device, and
+ * this is where the device is known
+ */
+export function describeFailure(cause: unknown): string {
+  const message = cause instanceof Error ? cause.message : String(cause);
+  const meaning = restartedMidExchange(cause);
+
+  return meaning === undefined ? message : `${message} — ${meaning}`;
+}
+
+/**
+ * The relay module's greeting, arriving in place of an answer.
+ *
+ * The module sends that line when it boots and at no other time, so hearing it in the middle of an
+ * exchange is not noise on the line: it is the module having restarted between being asked and
+ * answering. A write is when its coil pulls in and its supply is asked for the most it will ever be
+ * asked for, which is why this is nearly always a write.
+ *
+ * No device check is needed to be sure it is the relay — it is the only thing on any of these buses
+ * that announces itself in English
+ */
+function restartedMidExchange(cause: unknown): string | undefined {
+  if (!(cause instanceof RequestFailed) || !carriesPowerUpGreeting(cause.stray)) return undefined;
+
+  return (
+    "that is the module's power-up greeting, which it only sends when it boots, so it restarted " +
+    "mid-exchange rather than answering. Switching the relay is when its coil draws current, so " +
+    "suspect the supply before the bus: give the module its own supply rather than a rail shared " +
+    "with something else, or bulk capacitance at its power input, and the relay will hold instead " +
+    "of flickering."
+  );
 }
 
 const readers: Record<Space, (address: number, start: number, quantity: number) => Uint8Array> = {
@@ -107,11 +146,7 @@ export async function readAll(
         message: decoded?.kind === "exception" ? decoded.text : "The device answered with something unexpected",
       });
     } catch (error) {
-      refused.push({
-        start: run.start,
-        quantity: run.quantity,
-        message: error instanceof Error ? error.message : String(error),
-      });
+      refused.push({ start: run.start, quantity: run.quantity, message: describeFailure(error) });
     }
   }
 

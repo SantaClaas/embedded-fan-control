@@ -9,7 +9,7 @@ import {
   type Register,
 } from "../devices";
 import { BAUD_RATE_WRITE, BAUD_RATE_READ, relay } from "../devices/relay";
-import { readAll, settingsMismatch, write } from "../serial/client";
+import { describeFailure, readAll, settingsMismatch, write } from "../serial/client";
 import type { Connection } from "../serial/connection";
 import { registerAddress, toHex } from "./format";
 
@@ -73,7 +73,7 @@ export default function Devices(props: { connection: Connection }) {
 
       setState({ values, refused, at: new Date() });
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      setError(describeFailure(cause));
     } finally {
       setBusy(false);
     }
@@ -240,7 +240,7 @@ function RegisterRow(props: {
 
       props.onWritten();
     } catch (cause) {
-      setFailure(cause instanceof Error ? cause.message : String(cause));
+      setFailure(describeFailure(cause));
     } finally {
       setWriting(false);
     }

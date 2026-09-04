@@ -107,6 +107,35 @@ in front of an answer costs a few milliseconds instead of the whole transaction.
 rather than a fix in use: this module cannot join the fans' bus at all, because they run 8E1 and it
 only answers 8N1, so nothing the controller drives today can hear the greeting.
 
+## What it needs for power
+
+> [!IMPORTANT]
+> `VCC`/`GND` is a **DC 7–24 V** input, and the relay on the board is a 15 V type. The manual says
+> so in as many words: *"Power supply voltage: DC7-24V, with input anti-reverse connection
+> protection"*.
+
+Observed 2026-09-04, with `VCC` taken from a Pico W's `VSYS` pin and the grounds tied together:
+every read worked perfectly, and every coil write failed the same way. The module executed the
+write — its relay LED flickered — then never finished confirming it, and sent its power-up greeting
+instead. The tool's retry produced a byte-identical failure, 59 bytes both times: the few bytes the
+module managed of its answer, then the greeting.
+
+That is a brown-out, and the 7–24 V rating is why. The MCU and the MAX485 run on far less than the
+board is rated for, so a module fed 5 V looks entirely healthy for as long as it is only talking.
+The coil is the first real load it ever sees, and there is nothing in reserve to meet it: the rail
+collapses, the MCU resets, the coil drops out — which is the flicker — and the module comes back up
+and greets the line, with the master still waiting for a confirmation that no longer has a sender.
+
+`VSYS` is doubly the wrong place to take it from. It is below the module's minimum to begin with —
+about 4.7 V when the Pico is USB-powered, VBUS less a Schottky drop — and it is not a supply rail at
+all but the Pico's *own* input, feeding the RP2040's buck-boost converter and the CYW43 radio, both
+of which draw in bursts of their own.
+
+Give it 7–24 V from its own supply and share only the ground. The [serial tool](../serial) now
+names this rather than leaving it to be read out of the quoted bytes: any failure carrying the
+greeting is reported as the module having restarted mid-exchange, with the supply as the thing to
+suspect.
+
 ## Why it cannot share the fan bus
 
 The fans run 19_200 baud, 8 data bits, **even** parity, 1 stop bit. The relay runs 8N1 and its
