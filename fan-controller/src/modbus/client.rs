@@ -206,6 +206,18 @@ const EXCEPTION_RESPONSE_LENGTH: usize = 5;
 /// Modbus separates frames by 3.5 characters of silence which is about 2 ms at 19200 baud 8E1
 const DISCARD_TIMEOUT: Duration = Duration::from_millis(5);
 
+/// How many bytes that cannot begin the answer to step over before giving up on finding it.
+///
+/// A device is not obliged to put only frames on the line. The Modbus relay module greets it in
+/// ASCII whenever it is powered, 49 bytes of it, and that greeting arrives in front of the answer
+/// to whatever was asked first — see `docs/relay.md`. Reading the first two bytes and treating them
+/// as the header throws away a frame that is sitting right behind them.
+///
+/// The bound is the fan's own maximum telegram length, so a whole spurious frame can be stepped
+/// over as readily as a greeting, and a line that is babbling still fails rather than being read
+/// forever
+const MAX_STRAY_BYTES: usize = 80;
+
 /// Which of the two fans a device address belongs to, for the log
 fn fan_identifier(device_address: u8) -> &'static str {
     match device_address {
@@ -213,6 +225,38 @@ fn fan_identifier(device_address: u8) -> &'static str {
         3 => "[Fan 2]",
         _other => "Unknown (oops)",
     }
+}
+
+/// Whether this two byte window can begin the answer to the request that was sent: the address of
+/// the device it went to, and either the function code it used or the exception form of it
+fn starts_answer(window: &[u8], device_address: u8, function_code: u8) -> bool {
+    window[0] == device_address
+        && (window[1] == function_code || window[1] == function_code | code::EXCEPTION_MASK)
+}
+
+/// What to report about a header that never appeared, which is what the first two bytes said.
+///
+/// Naming the bytes that actually arrived first is more use than naming wherever the search gave
+/// up, so this is handed the window as it was before any stepping over
+fn unexpected_header(
+    seen: [u8; HEADER_LENGTH],
+    device_address: u8,
+    function_code: u8,
+    fan_identifier: &str,
+) -> ExchangeError {
+    if seen[0] != device_address {
+        warn!(
+            "{} Response came from device address {:?} instead of {:?}",
+            fan_identifier, seen[0], device_address
+        );
+        return ExchangeError::DeviceAddress(seen[0]);
+    }
+
+    warn!(
+        "{} Response used function code {:?} instead of {:?}",
+        fan_identifier, seen[1], function_code
+    );
+    ExchangeError::FunctionCode(seen[1])
 }
 
 /// Modbus transmits the checksum low byte first, unlike the rest of the frame
@@ -531,15 +575,10 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
             .await
             .map_err(|failure| ExchangeError::Response(Part::Header, failure))?;
 
-        if response[0] != request[0] {
-            warn!(
-                "{} Response came from device address {:?} instead of {:?}",
-                fan_identifier, response[0], request[0]
-            );
-            return Err(ExchangeError::DeviceAddress(response[0]));
-        }
-
         let function_code = request[1];
+        self.find_answer_start(response, request[0], function_code, fan_identifier)
+            .await?;
+
         if response[1] == function_code | code::EXCEPTION_MASK {
             self.receive_exact(&mut response[HEADER_LENGTH..EXCEPTION_RESPONSE_LENGTH])
                 .await
@@ -561,22 +600,94 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
             return Ok(Answer::Exception(response[2]));
         }
 
-        if response[1] != function_code {
-            warn!(
-                "{} Response used function code {:?} instead of {:?}",
-                fan_identifier, response[1], function_code
-            );
-            return Err(ExchangeError::FunctionCode(response[1]));
+        // The function code needs no check of its own: the search above only returns once the
+        // window holds this function code or the exception form of it, and the exception form was
+        // handled just now
+        Ok(Answer::Requested)
+    }
+
+    /// Slides the two byte window forward until it can begin the answer, or until there is reason
+    /// to stop looking.
+    ///
+    /// The first byte the request produces is not always the first byte of the answer: a device
+    /// that greets the line on power-up puts its greeting in front of it, and noise on a long
+    /// RS-485 run does the same without meaning to. Both leave a perfectly good frame one byte
+    /// count away from being read, and reading it costs a byte at a time until the header appears.
+    ///
+    /// Stepping over is bounded twice, so a talkative line cannot hold a transaction open. By
+    /// [`MAX_STRAY_BYTES`], and by [`DISCARD_TIMEOUT`] on each byte after the first — the stray
+    /// bytes and the answer belong to the same burst, and a gap of 3.5 characters means the burst
+    /// is over and nothing more is coming. The wait for the device to answer at all is the read
+    /// before this one and keeps [`configuration::FAN_TIMEOUT`], so a silent fan still looks like a
+    /// silent fan
+    async fn find_answer_start(
+        &mut self,
+        response: &mut [u8],
+        device_address: u8,
+        function_code: u8,
+        fan_identifier: &str,
+    ) -> Result<(), ExchangeError> {
+        // Kept for the failure, which is more useful naming what arrived than where the search
+        // stopped
+        let seen = [response[0], response[1]];
+        let mut stepped_over = 0;
+
+        while !starts_answer(&response[..HEADER_LENGTH], device_address, function_code) {
+            if stepped_over == MAX_STRAY_BYTES {
+                warn!(
+                    "{} No header in {:?} bytes, giving up on finding the answer",
+                    fan_identifier, MAX_STRAY_BYTES
+                );
+                return Err(unexpected_header(
+                    seen,
+                    device_address,
+                    function_code,
+                    fan_identifier,
+                ));
+            }
+
+            response[0] = response[1];
+            if self
+                .receive_within(&mut response[1..HEADER_LENGTH], DISCARD_TIMEOUT)
+                .await
+                .is_err()
+            {
+                return Err(unexpected_header(
+                    seen,
+                    device_address,
+                    function_code,
+                    fan_identifier,
+                ));
+            }
+
+            stepped_over += 1;
         }
 
-        Ok(Answer::Requested)
+        if stepped_over > 0 {
+            warn!(
+                "{} Stepped over {:?} bytes that were not the answer, starting with {:?}",
+                fan_identifier, stepped_over, seen
+            );
+        }
+
+        Ok(())
     }
 
     /// Fills the whole buffer or fails. Reading exactly the frame length avoids the short reads
     /// [`Read::read`] would allow, which would leave the rest of the frame for the next caller.
     /// Which part of the frame this was is added by the caller, which is the only one that knows
     async fn receive_exact(&mut self, buffer: &mut [u8]) -> Result<(), ReceiveFailure> {
-        match with_timeout(configuration::FAN_TIMEOUT, self.uart.read_exact(buffer)).await {
+        self.receive_within(buffer, configuration::FAN_TIMEOUT).await
+    }
+
+    /// As [`receive_exact`](Self::receive_exact), but for the reads whose wait is not the fan
+    /// deciding whether to answer at all
+    async fn receive_within(
+        &mut self,
+        buffer: &mut [u8],
+        timeout: Duration,
+    ) -> Result<(), ReceiveFailure> {
+        match with_timeout(timeout, self.uart.read_exact(buffer)).await {
             Ok(Ok(())) => Ok(()),
             Ok(Err(ReadExactError::UnexpectedEof)) => Err(ReceiveFailure::Incomplete),
             Ok(Err(ReadExactError::Other(_error))) => Err(ReceiveFailure::Uart),

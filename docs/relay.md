@@ -84,8 +84,14 @@ it searches for a valid frame at every offset, and ASCII cannot be mistaken for 
 of `0xFF` — but the *spoiled* exchange leaves no frame to find at all, and that read used to fail
 as "no reply", which reads like a wrong address or a dead bus. It now separates a line that stayed
 silent from one that carried bytes it could not use, retries only the second, and quotes the stray
-bytes when they are legible, so the greeting names itself in the error. The firmware, when it comes
-to talk to this module, has to do the same on its own.
+bytes when they are legible, so the greeting names itself in the error.
+
+The firmware's Modbus client no longer assumes the first two bytes after a request are the header
+either. It slides a two-byte window forward until the address and function code are the ones it
+asked for, bounded by 80 bytes and by the 3.5 characters of silence that end a burst, so a greeting
+in front of an answer costs a few milliseconds instead of the whole transaction. That is groundwork
+rather than a fix in use: this module cannot join the fans' bus at all, because they run 8E1 and it
+only answers 8N1, so nothing the controller drives today can hear the greeting.
 
 ## Why it cannot share the fan bus
 
