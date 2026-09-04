@@ -29,8 +29,29 @@ export const RELAY_COIL = 0x0000;
 /** Optocoupler input 1, read with function code 0x02 */
 export const INPUT_DISCRETE = 0x0000;
 
+/**
+ * How many coils and discrete inputs every read of them asks for.
+ *
+ * This board has one of each, but it is a one-relay variant of an eight-relay design and its manual
+ * only ever prints the eight-wide read — `FF 01 00 00 00 08` and `FF 02 00 00 00 08`, both verified
+ * against the hardware in docs/relay.md. Asking for the one coil that exists is a frame the manual
+ * does not print, and the module answers it with silence. Only bit 0 of what comes back is a real
+ * channel; the rest of the bitmap belongs to relays this board does not have
+ */
+export const CHANNEL_COUNT = 8;
+
 /** Read with 0x03, written with 0x10. Range 1 … 255, default 255 */
 export const DEVICE_ADDRESS = 0x0000;
+
+/**
+ * The unit the device address is read from: 0, not the module's own address.
+ *
+ * That is the whole point of the register — `00 03 00 00 00 01` is answered whatever address the
+ * module is set to, so a module whose address has been forgotten can be found without sweeping all
+ * 255 of them. The manual prints the query only in that form and the module answers only that form,
+ * so asking `FF 03 00 00 00 01` instead gets nothing even from a module that is listening
+ */
+export const ADDRESS_QUERY_UNIT = 0x00;
 
 /**
  * The manual reads the baud rate from 0x03E8 and writes it to 0x03E9 — two different addresses for
@@ -65,6 +86,7 @@ export const registers: readonly Register[] = [
     name: "Relay 1",
     gloss: "Closed shorts COM to NO and lights the board's indicator; open shorts COM to NC",
     reference: "Relay manual, instructions 1, 2 and 8",
+    read: { quantity: CHANNEL_COUNT },
     decode: (raw) => ({ kind: "boolean", value: raw !== 0, text: raw !== 0 ? "Closed" : "Open" }),
     write: { input: { control: "toggle" }, encode: (value) => (value ? 1 : 0) },
   },
@@ -74,6 +96,7 @@ export const registers: readonly Register[] = [
     name: "Optocoupler input 1",
     gloss: "DC 3.3–30 V on IN. Reads the signal only — it does not drive the relay",
     reference: "Relay manual, instruction 9",
+    read: { quantity: CHANNEL_COUNT },
     decode: (raw) => ({ kind: "boolean", value: raw !== 0, text: raw !== 0 ? "High" : "Low" }),
   },
   {
@@ -82,6 +105,7 @@ export const registers: readonly Register[] = [
     name: "Device address",
     gloss: "1 … 255, default 255 (0xFF). Written with function code 0x10, not 0x06",
     reference: "Relay manual, instructions 5, 6 and 7",
+    read: { unit: ADDRESS_QUERY_UNIT },
     decode: (raw) => ({ kind: "quantity", value: raw, unit: "", text: `${raw} (0x${hex(raw, 2)})` }),
     write: { input: { control: "number", min: 1, max: 255, step: 1 }, encode: (value) => value },
   },

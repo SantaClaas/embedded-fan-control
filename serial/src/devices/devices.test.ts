@@ -13,6 +13,9 @@ import {
   type Register,
 } from "./index";
 import { MAXIMUM_SPEED, SET_POINT_MAX, VOLTAGE_REFERENCE, CURRENT_REFERENCE } from "./radical";
+import { ADDRESS_QUERY_UNIT, CHANNEL_COUNT, DEVICE_ADDRESS } from "./relay";
+import { readCoils, readDiscreteInputs, readHoldingRegisters } from "../modbus/pdu";
+import { relay as relayFrames } from "../modbus/frames.fixture";
 
 function find(register: readonly Register[], address: number, space: Register["space"]): Register {
   const found = register.find((entry) => entry.address === address && entry.space === space);
@@ -259,6 +262,53 @@ describe("relay", () => {
     expect(relay.defaults.address).toBe(0xff);
   });
 
+  /**
+   * The failure that put this here: "Read all registers" asked `FF 03 00 00 00 01` for the address,
+   * `FF 01 00 00 00 01` for the coil and `FF 02 00 00 00 01` for the input — three frames no manual
+   * prints, and three timeouts from a module that was listening the whole time. Planning a read is
+   * therefore checked against the manual's own bytes rather than against itself
+   */
+  describe("plans the reads the manual prints", () => {
+    const only = (space: Register["space"]) => {
+      const runs = runsOf(registersIn(relay, space));
+      expect(runs).toHaveLength(1);
+      return runs[0]!;
+    };
+
+    it("reads the coil eight wide, because the one-wide read is not a frame the module answers", () => {
+      const run = only("coil");
+
+      expect(run).toMatchObject({ start: 0x0000, quantity: CHANNEL_COUNT });
+      expect(readCoils(relay.defaults.address, run.start, run.quantity)).toEqual(
+        relayFrames.readRelayStateRequest,
+      );
+    });
+
+    it("reads the optocoupler input eight wide for the same reason", () => {
+      const run = only("discreteInput");
+
+      expect(readDiscreteInputs(relay.defaults.address, run.start, run.quantity)).toEqual(
+        relayFrames.readInputStateRequest,
+      );
+    });
+
+    /** Unit 0 whatever the module's address is — that is what makes a forgotten address findable */
+    it("asks unit 0 for the device address, not the module's own address", () => {
+      const [addressRun, baudRun] = runsOf(registersIn(relay, "holding"));
+
+      expect(addressRun).toMatchObject({ start: DEVICE_ADDRESS, unit: ADDRESS_QUERY_UNIT });
+      expect(readHoldingRegisters(addressRun!.unit!, addressRun!.start, addressRun!.quantity)).toEqual(
+        relayFrames.readAddressRequest,
+      );
+
+      // And the register beside it is untouched by that, still read from the module itself
+      expect(baudRun!.unit).toBeUndefined();
+      expect(readHoldingRegisters(relay.defaults.address, baudRun!.start, baudRun!.quantity)).toEqual(
+        relayFrames.readBaudRequest,
+      );
+    });
+  });
+
   it("names the baud rate codes from the manual's examples", () => {
     const baud = find(relay.registers, 0x03e8, "holding");
 
@@ -306,6 +356,23 @@ describe("planning reads", () => {
     expect(runs).toEqual([
       { start: 0xd010, quantity: 1 },
       { start: 0xd027, quantity: 1 },
+    ]);
+  });
+
+  /**
+   * A register that names its own frame is that frame and nothing else. Merging a neighbour into it
+   * would produce a request the device has never been asked and, on the relay, never answers
+   */
+  it("keeps a register that names its own frame out of its neighbours' run", () => {
+    const runs = runsOf([
+      { address: 0x0000, read: { quantity: 8 } } as Register,
+      { address: 0x0001 } as Register,
+      { address: 0x0002 } as Register,
+    ]);
+
+    expect(runs).toEqual([
+      { start: 0x0000, quantity: 8 },
+      { start: 0x0001, quantity: 2 },
     ]);
   });
 

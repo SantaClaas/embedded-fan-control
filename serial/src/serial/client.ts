@@ -65,6 +65,11 @@ export type ReadResult = {
  * Reads every register in `registers`, which must all be in `space`, in as few requests as the
  * device's limits allow.
  *
+ * A run may name the unit it has to be addressed to — the relay's device address register is read
+ * from unit 0 whatever address the module is set to, which is what makes it findable when the
+ * address has been forgotten — so `address` is what the runs fall back to rather than what they
+ * all use.
+ *
  * A refusal is recorded and the remaining runs are still attempted: one unreadable register
  * should not cost the reading of every other one, and the RadiCal does refuse individual
  * addresses when a variant does not implement them
@@ -82,7 +87,8 @@ export async function readAll(
 
   for (const run of runsOf(registers)) {
     try {
-      const response = await connection.request(read(address, run.start, run.quantity), options.timeoutMs);
+      const frame = read(run.unit ?? address, run.start, run.quantity);
+      const response = await connection.request(frame, options.timeoutMs);
       const decoded = decodeResponse(response);
 
       if (decoded?.kind === "registers") {
@@ -96,11 +102,16 @@ export async function readAll(
       }
 
       refused.push({
-        ...run,
+        start: run.start,
+        quantity: run.quantity,
         message: decoded?.kind === "exception" ? decoded.text : "The device answered with something unexpected",
       });
     } catch (error) {
-      refused.push({ ...run, message: error instanceof Error ? error.message : String(error) });
+      refused.push({
+        start: run.start,
+        quantity: run.quantity,
+        message: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 

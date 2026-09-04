@@ -45,6 +45,18 @@ confirmed.
 | Read baud | `FF 03 03 E8 00 01 11 A4` | `FF 03 02 00 <02=4800, 03=9600, 04=19200>` |
 | Set baud to 19200 | `FF 10 03 E9 00 01 02 00 04 CA 0E` | `FF 10 03 E9 00 01 C5 A7` |
 
+Send them as printed. The [serial tool](../serial) used to derive its requests from the register
+addresses alone, which gave `FF 03 00 00 00 01` for the address, `FF 01 00 00 00 01` for the coil
+and `FF 02 00 00 00 01` for the input: one register each, which is what Modbus says a read of one
+register is, and three frames that appear in no manual. All three timed out. Only these printed
+forms have ever been answered, and a module whose manual is a list of worked examples is the wrong
+place to assume the general case works too — the address query in particular is *defined* as a
+question put to unit 0, not to the module's own address.
+
+The relay's registers therefore name the frame they are read by, so a read plans to the rows above
+byte for byte, and `devices.test.ts` holds the planned frames to the same manufacturer bytes the CRC
+tests use. Whether the module would have answered the one-wide reads is untested and now moot.
+
 Note the baud rate is read from `0x03E8` but written to `0x03E9` — two addresses for the one
 setting. That is not a transcription slip; it is what the manual's own worked examples do, and the
 read above was confirmed against the hardware.

@@ -55,6 +55,24 @@ export type Input =
   | { control: "choice"; options: ReadonlyMap<number, string> }
   | { control: "toggle" };
 
+/**
+ * The one request a register can be read by, when the device answers that frame and no other.
+ *
+ * Modbus reads a range, and a range of one is a range, so a register normally has no say in how it
+ * is asked for — its address and the registers beside it are enough to plan the request. The relay
+ * module disagrees. Its manual documents one example frame per function rather than a register
+ * table, and its firmware answers those frames and stays silent otherwise, so a read that differs
+ * from the printed example in the unit it is addressed to, or in how many addresses it asks for,
+ * gets nothing back at all. Silence is the worst answer to debug, which is why this is stated on
+ * the register instead of being rediscovered against the hardware
+ */
+export type Read = {
+  /** Ask for this many addresses from here, rather than for only the registers that are wanted */
+  quantity?: number;
+  /** Address the request to this unit, rather than to the device's configured address */
+  unit?: number;
+};
+
 export type Register = {
   address: number;
   space: Space;
@@ -70,6 +88,8 @@ export type Register = {
    * polling anything that depends on them
    */
   dependsOn?: readonly number[];
+  /** Present only when the device insists on one particular frame for this register */
+  read?: Read;
   /** Present only when the register can be written. Turns a user's number into the raw value */
   write?: {
     input: Input;

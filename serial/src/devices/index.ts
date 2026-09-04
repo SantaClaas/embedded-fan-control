@@ -41,6 +41,14 @@ export function referencesFor(registers: readonly Register[]): readonly number[]
   return [...addresses].sort((left, right) => left - right);
 }
 
+/** One read request: a range of addresses, and who to ask for it */
+export type Run = {
+  start: number;
+  quantity: number;
+  /** Set only for a register that is read from a unit other than the device's configured address */
+  unit?: number;
+};
+
 /**
  * Groups consecutive registers into runs that can be fetched in one request.
  *
@@ -48,24 +56,46 @@ export function referencesFor(registers: readonly Register[]): readonly number[]
  * any one of them — but the RadiCal refuses more than 37 registers or an answer over 80 bytes
  * (section 1.3.1), and there is no point paying for a long stretch of reserved addresses in
  * between. `maxGap` is how many uninteresting registers are worth carrying to avoid a second
- * request
+ * request.
+ *
+ * A register carrying a `read` is exempt from all of that: it names the only frame the device
+ * answers for it, so it travels alone and neither absorbs a neighbour nor is absorbed by one
  */
 export function runsOf(
   registers: readonly Register[],
   { maxRun = 37, maxGap = 4 }: { maxRun?: number; maxGap?: number } = {},
-): readonly { start: number; quantity: number }[] {
-  const addresses = [...new Set(registers.map((register) => register.address))].sort(
-    (left, right) => left - right,
-  );
+): readonly Run[] {
+  const byAddress = new Map<number, Register>();
+  for (const register of registers) {
+    if (!byAddress.has(register.address)) byAddress.set(register.address, register);
+  }
 
-  const runs: { start: number; quantity: number }[] = [];
+  const sorted = [...byAddress.values()].sort((left, right) => left.address - right.address);
 
-  for (const address of addresses) {
-    const current = runs.at(-1);
+  const runs: Run[] = [];
+  // A run built from a register's own `read` is that frame and nothing else, so the next register
+  // must start a run rather than extend it
+  let isFixed = false;
+
+  for (const register of sorted) {
+    const insisted = register.read;
+
+    if (insisted) {
+      const run: Run = { start: register.address, quantity: insisted.quantity ?? 1 };
+      if (insisted.unit !== undefined) run.unit = insisted.unit;
+
+      runs.push(run);
+      isFixed = true;
+      continue;
+    }
+
+    const current = isFixed ? undefined : runs.at(-1);
     const end = current === undefined ? undefined : current.start + current.quantity;
+    const address = register.address;
 
     if (current === undefined || end === undefined || address - end > maxGap || address - current.start >= maxRun) {
       runs.push({ start: address, quantity: 1 });
+      isFixed = false;
       continue;
     }
 
