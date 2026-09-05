@@ -5,7 +5,7 @@ use embassy_rp::{
     interrupt::typelevel::Binding,
     uart::{self, BufferedInterruptHandler, BufferedUart, RxPin, TxPin},
 };
-use embassy_time::{Duration, with_timeout};
+use embassy_time::{Duration, Instant, with_timeout};
 use embedded_io_async::{Read, ReadExactError, Write};
 
 use crate::{
@@ -683,13 +683,30 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
         device_identifier: &str,
     ) -> Result<Answer, ExchangeError> {
         info!("{} Waiting for response from device", device_identifier);
-        self.receive_exact(&mut response[..HEADER_LENGTH])
-            .await
-            .map_err(|failure| ExchangeError::Response(Part::Header, failure))?;
+
+        // Bytes that were not the answer, however they failed to be it: stepped over because they
+        // were something else, or dropped because they arrived mangled. Both are the same thing
+        // from here — a byte that is not the header — so they spend from one budget
+        let mut stepped_over = 0;
+
+        self.receive_past_errors(
+            &mut response[..HEADER_LENGTH],
+            configuration::FAN_TIMEOUT,
+            &mut stepped_over,
+            device_identifier,
+        )
+        .await
+        .map_err(|failure| ExchangeError::Response(Part::Header, failure))?;
 
         let function_code = request[1];
-        self.find_answer_start(response, request[0], function_code, device_identifier)
-            .await?;
+        self.find_answer_start(
+            response,
+            request[0],
+            function_code,
+            &mut stepped_over,
+            device_identifier,
+        )
+        .await?;
 
         if response[1] == function_code | code::EXCEPTION_MASK {
             self.receive_exact(&mut response[HEADER_LENGTH..EXCEPTION_RESPONSE_LENGTH])
@@ -737,15 +754,15 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
         response: &mut [u8],
         device_address: u8,
         function_code: u8,
+        stepped_over: &mut usize,
         device_identifier: &str,
     ) -> Result<(), ExchangeError> {
         // Kept for the failure, which is more useful naming what arrived than where the search
         // stopped
         let seen = [response[0], response[1]];
-        let mut stepped_over = 0;
 
         while !starts_answer(&response[..HEADER_LENGTH], device_address, function_code) {
-            if stepped_over == MAX_STRAY_BYTES {
+            if *stepped_over >= MAX_STRAY_BYTES {
                 warn!(
                     "{} No header in {:?} bytes, giving up on finding the answer",
                     device_identifier, MAX_STRAY_BYTES
@@ -760,7 +777,12 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
 
             response[0] = response[1];
             if self
-                .receive_within(&mut response[1..HEADER_LENGTH], DISCARD_TIMEOUT)
+                .receive_past_errors(
+                    &mut response[1..HEADER_LENGTH],
+                    DISCARD_TIMEOUT,
+                    stepped_over,
+                    device_identifier,
+                )
                 .await
                 .is_err()
             {
@@ -772,10 +794,10 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
                 ));
             }
 
-            stepped_over += 1;
+            *stepped_over += 1;
         }
 
-        if stepped_over > 0 {
+        if *stepped_over > 0 {
             warn!(
                 "{} Stepped over {:?} bytes that were not the answer, starting with {:?}",
                 device_identifier, stepped_over, seen
@@ -783,6 +805,54 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
         }
 
         Ok(())
+    }
+
+    /// Fills the buffer while looking for a header, counting a byte that arrived mangled as a byte
+    /// stepped over rather than as the end of the transaction.
+    ///
+    /// A half-duplex line is not quiet at the turnaround: the driver stops driving, the pair is
+    /// briefly held by nothing but its bias, and what the receiver makes of that can be a framing
+    /// error or a phantom break. The fan's answer follows it perfectly intact — the log of a failed
+    /// exchange used to show the whole valid frame being discarded a moment after the error that
+    /// abandoned it.
+    ///
+    /// A receive error is reported once and reception continues, so reading again returns what came
+    /// after the mangled byte rather than the same error.
+    ///
+    /// `timeout` is a deadline for the whole wait rather than for each read within it. The mangled
+    /// byte is the *turnaround*, which happens the moment the driver is released and therefore
+    /// before the device has answered anything: what follows it is not the rest of a burst already
+    /// under way, it is the device still thinking. Giving each read the full timeout again would
+    /// multiply the wait by the budget, and giving the reads after the first a short one — which is
+    /// what this did at first — cuts the device's thinking time down to a few milliseconds and
+    /// turns every glitch into a timeout.
+    ///
+    /// Only the header is read this way. A mangled byte in the body of a frame is a corrupt frame,
+    /// which the checksum is there to catch, and re-reading part of it would put the rest out of
+    /// step
+    async fn receive_past_errors(
+        &mut self,
+        buffer: &mut [u8],
+        timeout: Duration,
+        stepped_over: &mut usize,
+        device_identifier: &str,
+    ) -> Result<(), ReceiveFailure> {
+        let deadline = Instant::now() + timeout;
+
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+
+            match self.receive_within(buffer, remaining).await {
+                Err(ReceiveFailure::Uart) if *stepped_over < MAX_STRAY_BYTES => {
+                    warn!(
+                        "{} A byte arrived mangled while waiting for the header, reading on",
+                        device_identifier
+                    );
+                    *stepped_over += 1;
+                }
+                result => return result,
+            }
+        }
     }
 
     /// Fills the whole buffer or fails. Reading exactly the frame length avoids the short reads
