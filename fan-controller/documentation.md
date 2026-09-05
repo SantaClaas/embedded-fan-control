@@ -48,7 +48,19 @@ After successfully joining the network it tries to look up Homeassistant under t
 Homeassistant needs to have the MQTT broker installed as the controller uses MQTT to connect to homeassitant and send data between them.
 After successful connection to the MQTT broker, the controller sends a discovery packet as defined by Homeassistant and the device should appear in Homeassistant on the dashboard when using the default Homeassistant configuration.
 
-### 3. Sensors
+### 3. What is announced
+
+Two fans, four sensors each, and one switch. The switch is the relay module on the second Modbus
+bus: a plain contact, with no speed and nothing it measures.
+
+Its state topic carries what the module confirmed rather than what it was asked for, which is the
+rule the fans follow too. A write that is never acknowledged leaves the last confirmed state
+standing in Home Assistant rather than showing a command as though it had taken effect, and the
+contact is read back on boot, so a controller that restarts while the relay is closed says so
+instead of assuming it is open. If the module cannot be reached at all the switch stays unknown,
+which is the honest answer rather than a guess.
+
+### 4. Sensors
 
 Alongside the two fans the device announces four sensors per fan: speed in rpm, motor temperature,
 electronics temperature, and power draw in watts. The fans are polled every 30 seconds, starting
@@ -78,6 +90,8 @@ flowchart LR
     PICO[Raspberry Pi Pico W] -- "GP4 to DE/RE<br/>GP12 to DI, GP13 to RO<br/>3V3 and GND" --> TRANSCEIVER[RS-485 transceiver]
     TRANSCEIVER -- "A and B, twisted pair" --> FAN1[Fan 1, address 0x02]
     FAN1 -- "the same pair, daisy chained" --> FAN2[Fan 2, address 0x03]
+    PICO -- "GP7 to DE/RE<br/>GP8 to DI, GP9 to RO<br/>3V3 and GND" --> TRANSCEIVER2[RS-485 transceiver, second bus]
+    TRANSCEIVER2 -- "A and B, twisted pair" --> RELAY[Relay module, address 0xFF<br/>own 7-24 V supply]
     PROBE[Debug probe, optional] -. "SWCLK, GND, SWDIO" .-> PICO
 ```
 
@@ -88,15 +102,23 @@ flowchart LR
 | 6 | GP4 | Output, idle low | `MODBUS_DE` | DE and RE on the transceiver, tied together |
 | 16 | GP12 | UART0 TX | `MODBUS_TX` | DI |
 | 17 | GP13 | UART0 RX | `MODBUS_RX` | RO |
+| 10 | GP7 | Output, idle low | `RELAY_DE` | DE and RE on the second transceiver, tied together |
+| 11 | GP8 | UART1 TX | `RELAY_TX` | DI on the second transceiver |
+| 12 | GP9 | UART1 RX | `RELAY_RX` | RO on the second transceiver |
 | 24 | GP18 | Input, internal pull-up | `BUTTON` | One side of the button, the other side to GND |
 | 26 | GP20 | Output, active high | `LED_2` | LED 2 anode through a series resistor, cathode to GND |
 | 27 | GP21 | Output, active high | `LED_1` | LED 1 anode through a series resistor, cathode to GND |
 | 36 | 3V3(OUT) | Supply out | `+3V3` | Transceiver VCC |
-| 38 | GND | — | `GND` | Transceiver GND, LED cathodes, button, RS-485 common |
+| 38 | GND | — | `GND` | Transceiver GND, LED cathodes, button, RS-485 common, the relay module's supply ground |
 | On the module | GP23, GP24, GP25, GP29 | PIO0 + DMA0 | CYW43439 | Nothing. The Wi-Fi chip sits on the Pico W itself |
 
 Pin numbers are physical positions on the board, GPIO numbers are what the firmware calls them.
 Any of the eight ground pins will do; 38 is just the one nearest the signals on that side.
+
+GP8 and GP9 are not a preference. They are the only pair UART1 can use here: its other transmit
+pins are GP4, which arbitrates the fans' bus, and GP20, which drives a status LED. GP0 and GP1 are
+free but left alone, because that is where a debug probe's UART bridge is conventionally wired and
+this build has no reason to take them.
 
 ### RS-485 to the fans
 
@@ -127,6 +149,38 @@ early truncates the frame, the fan rejects it on the checksum, and the result lo
 fan that is not answering. The line has to be back in the fan's hands well within the 3.5
 characters of silence it waits before replying, which is about 2 ms at this baud rate.
 
+### RS-485 to the relay module
+
+A second bus rather than two more devices on the fans'. The reason is framing: the fans run 8E1 and
+the relay module answers 8N1 and only 8N1, its parity is not settable at all, and one UART speaks
+one of those at a time. Its baud rate *is* settable, so the two could be made to agree on 19_200 —
+but parity cannot, which settles it. `docs/relay.md` records where that was established on the
+bench.
+
+Everything the fans' bus needs, this one needs too: a 3.3 V transceiver, DE and RE tied together to
+GP7, 120 Ω across A and B at each end, and a third conductor tying the module's RS-485 common back
+to controller ground.
+
+Three things are specific to this module:
+
+- **It needs its own supply.** `VCC`/`GND` on the board is a DC 7–24 V input and the relay on it is
+  a 15 V type. Powering it from the Pico's `VSYS` works right up until the coil pulls in, at which
+  point the rail collapses, the module resets, and the write is lost — with the relay LED flickering
+  as the contact drops out again. Give it 7–24 V of its own and share only the ground.
+- **It greets the line when it powers up**, 49 bytes of ASCII, unasked and belonging to no request.
+  That follows the *module's* supply rather than the controller's boot, so it can arrive with the
+  firmware already running. The Modbus client steps over stray bytes while looking for a response
+  header, which is what makes a greeting in front of an answer cost a few milliseconds instead of
+  the transaction; a greeting that collides with the answer spoils that exchange outright, which is
+  what the retries are for.
+- **It is at address `0xFF`**, its factory default, and left there. It is alone on this bus, so
+  there is nothing to collide with, and re-addressing writes a permanent change to its flash.
+
+The firmware asks for eight coils when it reads the contact, though the board has one. The module
+is a one-relay variant of an eight-relay design and answers only the eight wide read its manual
+prints — asking for the single coil that exists gets silence. Bit 0 of the byte that comes back is
+the relay.
+
 ### Button
 
 GP18 has the internal pull-up on and the firmware acts on the falling edge, so the switch just
@@ -142,9 +196,14 @@ the wrong fan.
 
 ### Power
 
-The Pico runs from USB or from a supply on VSYS, and the transceiver is the only thing hanging off
-3V3(OUT). The fans have their own mains supply and none of it passes through this board; only the
-RS-485 pair and its ground reference cross between the two.
+The Pico runs from USB or from a supply on VSYS, and the two transceivers are the only things
+hanging off 3V3(OUT). The fans have their own mains supply and none of it passes through this
+board; only the RS-485 pair and its ground reference cross between the two.
+
+The relay module is the same arrangement and for a stronger reason: its 7–24 V supply is its own,
+and only the RS-485 pair and a ground reference cross to the controller. It draws far more when its
+coil pulls in than at rest, and a rail shared with the Pico is a rail that sags at exactly that
+moment — see the note above.
 
 ### Debug probe
 

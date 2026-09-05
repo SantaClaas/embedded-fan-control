@@ -23,6 +23,27 @@ pub mod fan_controller {
     /// This topic is used by Home Assistant to notify the fan controller to turn on or off.
     pub const COMMAND: &str = formatcp!("{OBJECT_ID}/on/set");
 
+    /// The relay module on the controller's second Modbus bus.
+    ///
+    /// It has one contact and nothing else — no speed, nothing it measures — so unlike a fan it is
+    /// a plain on/off pair of topics
+    pub mod relay {
+        use super::OBJECT_ID;
+        use const_format::formatcp;
+
+        pub const UNIQUE_ID: &str = formatcp!("{OBJECT_ID}/relay-1");
+
+        pub mod state {
+            use super::UNIQUE_ID;
+            use const_format::formatcp;
+
+            /// Published after the module has confirmed the coil write, never before it
+            pub const STATE: &str = formatcp!("{UNIQUE_ID}/on/state");
+            /// Subscribed to for Home Assistant asking the contact to open or close
+            pub const COMMAND: &str = formatcp!("{UNIQUE_ID}/on/set");
+        }
+    }
+
     pub mod fan_1 {
         use super::OBJECT_ID;
         use const_format::formatcp;

@@ -12,7 +12,7 @@ use embassy_futures::select::{Either, Either3, select, select3};
 use embassy_net::Stack;
 use embassy_rp::gpio::{Input, Level, Output, Pin, Pull};
 use embassy_rp::peripherals::{
-    DMA_CH0, PIN_4, PIN_18, PIN_20, PIN_21, PIN_23, PIN_25, PIO0, UART0,
+    DMA_CH0, PIN_4, PIN_7, PIN_18, PIN_20, PIN_21, PIN_23, PIN_25, PIO0, UART0, UART1,
 };
 use embassy_rp::pio::{InterruptHandler as PioInterruptHandler, Pio, PioPin};
 use embassy_rp::uart::BufferedInterruptHandler;
@@ -40,12 +40,16 @@ mod debounce;
 mod fan;
 mod modbus;
 mod mqtt;
+mod relay;
 mod reset_cause;
 mod task;
 
 bind_interrupts!(struct Irqs {
     PIO0_IRQ_0 => PioInterruptHandler<PIO0>;
     UART0_IRQ  => BufferedInterruptHandler<UART0>;
+    // The relay module's bus. Its own UART rather than an address on the fans': it answers 8N1 and
+    // only 8N1, and the fans run 8E1
+    UART1_IRQ  => BufferedInterruptHandler<UART1>;
 });
 
 #[embassy_executor::task]
@@ -149,6 +153,21 @@ async fn input_routine(
 
 type ModbusMutex = Mutex<CriticalSectionRawMutex, modbus::Client<'static, UART0, PIN_4>>;
 type ModbusOnceLock = OnceLock<ModbusMutex>;
+
+/// The relay module's bus, which is owned outright rather than shared.
+///
+/// The fans' client is behind a mutex and a once lock because four tasks reach for it — two that
+/// set a speed and two that poll sensors — and behind the once lock so those tasks can await its
+/// initialization rather than race it. Nothing of the sort applies here: one task talks to this
+/// bus, so it holds the client itself and there is no lock for anything to wait on
+type RelayClient = modbus::Client<'static, UART1, PIN_7>;
+
+/// The state Home Assistant last asked the contact to be in. Only the latest matters, the same way
+/// only the latest set point does, so it is a signal rather than a channel
+type RelayStateSignal = Signal<CriticalSectionRawMutex, bool>;
+
+/// For the log, matching the identifiers the modbus client prints
+const RELAY_IDENTIFIER: &str = "[Relay]";
 
 /// A set point signalled to a [`fan_control_routine`], together with where it came from. The
 /// origin is what decides whether a fan that cannot be reached drags the other one with it
@@ -394,6 +413,16 @@ enum SetStateCommandValue {
     Off,
 }
 
+impl From<bool> for SetStateCommandValue {
+    fn from(is_on: bool) -> Self {
+        if is_on {
+            SetStateCommandValue::On
+        } else {
+            SetStateCommandValue::Off
+        }
+    }
+}
+
 impl From<SetPoint> for SetStateCommandValue {
     fn from(speed: SetPoint) -> Self {
         if speed == SetPoint::ZERO {
@@ -433,6 +462,8 @@ enum IncomingPublish {
         target: Fan,
         command: FanCommand,
     },
+    /// Close or open the relay module's contact
+    RelayCommand(SetStateCommandValue),
 }
 
 enum FromPublishError {
@@ -499,6 +530,11 @@ impl TryFrom<publish::Publish<'_>> for IncomingPublish {
                     command: FanCommand::SetSpeed { set_point },
                 })
             }
+            topic::fan_controller::relay::state::COMMAND => match publish.payload {
+                b"ON" => Ok(Self::RelayCommand(SetStateCommandValue::On)),
+                b"OFF" => Ok(Self::RelayCommand(SetStateCommandValue::Off)),
+                _other => Err(FromPublishError::InvalidSetStateCommandPayload),
+            },
             other => {
                 warn!(
                     "Unexpected topic: {} with payload: {}",
@@ -559,6 +595,9 @@ enum OutgoingPublish {
         fan: Fan,
         payload: heapless::String<{ fan::sensor::JSON_CAPACITY }>,
     },
+    /// Where the relay's contact is, published only once the module has confirmed the write. The
+    /// same rule the fans follow: what is reported is what the device did, not what it was asked
+    UpdateRelayState(SetStateCommandValue),
 }
 
 impl Publish for OutgoingPublish {
@@ -588,6 +627,7 @@ impl Publish for OutgoingPublish {
             OutgoingPublish::UpdateSensors { fan: Fan::Two, .. } => {
                 topic::fan_controller::fan_2::sensor::STATE
             }
+            OutgoingPublish::UpdateRelayState(_) => topic::fan_controller::relay::state::STATE,
         }
     }
 
@@ -604,6 +644,10 @@ impl Publish for OutgoingPublish {
                 SetStateCommandValue::Off => b"OFF",
             },
             OutgoingPublish::UpdateSensors { fan: _, payload } => payload.as_bytes(),
+            OutgoingPublish::UpdateRelayState(payload) => match payload {
+                SetStateCommandValue::On => b"ON",
+                SetStateCommandValue::Off => b"OFF",
+            },
         }
     }
 
@@ -653,6 +697,7 @@ async fn mqtt_brain_routine(
     >,
     fan_one_state: &'static SetPointSignal,
     fan_two_state: &'static SetPointSignal,
+    relay_state: &'static RelayStateSignal,
     mut display_state: (DisplayStateReceiver, DisplayStateReceiver),
 ) {
     // Remembering the last speed the fans were running at for when Home Assistant turns the device
@@ -727,6 +772,9 @@ async fn mqtt_brain_routine(
                     }
                 }
             },
+            IncomingPublish::RelayCommand(new_state) => {
+                relay_state.signal(matches!(new_state, SetStateCommandValue::On))
+            }
             IncomingPublish::FanCommand {
                 target,
                 command: FanCommand::SetState(new_state),
@@ -839,6 +887,123 @@ async fn read_set_point(
         fan_identifier, MAX_ATTEMPTS
     );
     None
+}
+
+/// Reads where the relay's contact is now.
+///
+/// Retried like any other transaction, and for one reason beyond the usual: the module greets the
+/// line in ASCII whenever *it* is powered, which is not the same moment the controller boots, and a
+/// greeting that collides with a request leaves no frame to find at all. The client steps over a
+/// greeting that merely precedes an answer; a spoiled exchange needs the second attempt.
+///
+/// `None` when it cannot be reached, which is honest about not knowing rather than assuming the
+/// contact is open. Nothing is published then, so Home Assistant shows the switch as unknown
+/// instead of showing a guess
+async fn read_relay_state(client: &mut RelayClient) -> Option<bool> {
+    let function = modbus::function::ReadCoils::<{ relay::coil::COUNT }>::new(
+        relay::address::RELAY,
+        relay::coil::RELAY,
+    );
+
+    let mut attempt = 1;
+    loop {
+        match client.read_coils(&function).await {
+            Ok(coils) => return Some(coils & relay::coil::RELAY_BIT != 0),
+            Err(error) if attempt >= MAX_ATTEMPTS => {
+                error!(
+                    "{} Failed to read the contact after {} attempts: {:?}",
+                    RELAY_IDENTIFIER, MAX_ATTEMPTS, error
+                );
+                return None;
+            }
+            Err(error) => {
+                warn!(
+                    "{} Failed to read the contact on attempt {}: {:?}",
+                    RELAY_IDENTIFIER, attempt, error
+                );
+                attempt += 1;
+                back_off(attempt).await;
+            }
+        }
+    }
+}
+
+/// Drives the relay module on its own bus, and reports where its contact actually ended up.
+///
+/// It holds the client rather than sharing it, because nothing else is on this UART. That also
+/// makes the retry simpler than the fans': there is no lock to release between attempts, and no
+/// second device whose transaction is being held up
+#[embassy_executor::task]
+async fn relay_routine(
+    mut client: RelayClient,
+    requested_state: &'static RelayStateSignal,
+    mqtt_out: channel::Sender<'static, CriticalSectionRawMutex, OutgoingPublish, CHANNEL_SIZE>,
+) {
+    // The module holds its contact while the controller resets, so where it is now is the state to
+    // start from — the same reason the fans' speeds are read back rather than assumed
+    let mut current_state = read_relay_state(&mut client).await;
+    if let Some(is_closed) = current_state {
+        info!("{} Contact is closed: {}", RELAY_IDENTIFIER, is_closed);
+        mqtt_out.send(OutgoingPublish::UpdateRelayState(is_closed.into())).await;
+    }
+
+    'signal_loop: loop {
+        info!("{} Waiting for a state to be requested", RELAY_IDENTIFIER);
+        let is_closed = requested_state.wait().await;
+
+        if current_state == Some(is_closed) {
+            info!(
+                "{} Requested state is the state it is already in",
+                RELAY_IDENTIFIER
+            );
+            continue;
+        }
+
+        let function = modbus::function::WriteSingleCoil::new(
+            relay::address::RELAY,
+            relay::coil::RELAY,
+            is_closed,
+        );
+
+        let mut attempt = 1;
+        loop {
+            match client.write_single_coil(&function).await {
+                Ok(()) => break,
+                Err(error) if attempt >= MAX_ATTEMPTS => {
+                    error!(
+                        "{} Failed to write the contact after {} attempts: {:?}",
+                        RELAY_IDENTIFIER, MAX_ATTEMPTS, error
+                    );
+
+                    // The write may or may not have been carried out — a module that stops
+                    // answering partway through an exchange has still received the request. Saying
+                    // the state is unknown makes the next command attempt the write rather than
+                    // skip it as already satisfied, and leaves Home Assistant showing the last
+                    // state that was actually confirmed
+                    current_state = None;
+                    continue 'signal_loop;
+                }
+                Err(error) => {
+                    warn!(
+                        "{} Failed to write the contact on attempt {}: {:?}",
+                        RELAY_IDENTIFIER, attempt, error
+                    );
+                    attempt += 1;
+
+                    // A newer request supersedes this one rather than being made to wait behind it
+                    if requested_state.signaled() {
+                        continue 'signal_loop;
+                    }
+
+                    back_off(attempt).await;
+                }
+            }
+        }
+
+        info!("{} Contact is now closed: {}", RELAY_IDENTIFIER, is_closed);
+        current_state = Some(is_closed);
+        mqtt_out.send(OutgoingPublish::UpdateRelayState(is_closed.into())).await;
+    }
 }
 
 /// Receives the fan state updates and sends them to modbus as modbus messages
@@ -1263,6 +1428,17 @@ async fn main(spawner: Spawner) {
         PIN_12: pin_12,
         // Receiver pin UART + Modbus
         PIN_13: pin_13,
+        // The relay module's bus. UART1's transmit and receive can only be GP8 and GP9 here: its
+        // other pairs are GP4, which is the fans' driver enable, and GP20/GP21, which are the
+        // status LEDs. GP0 and GP1 are left alone as well, since that is where a debug probe's
+        // UART bridge is conventionally wired
+        UART1: uart1,
+        // Driver enable for the relay's transceiver, next to the pair it belongs with
+        PIN_7: pin_7,
+        // Transmitter pin UART + Modbus, relay
+        PIN_8: pin_8,
+        // Receiver pin UART + Modbus, relay
+        PIN_9: pin_9,
         // Button pin
         PIN_18: pin_18,
         // Status LEDs
@@ -1295,6 +1471,27 @@ async fn main(spawner: Spawner) {
     static FANS: ModbusOnceLock = ModbusOnceLock::new();
     // Just initialize it
     _ = FANS.get_or_init(|| client.into());
+
+    // The relay's bus. Its buffers are its own: two devices on two UARTs cannot share one, and the
+    // longest frame either direction carries here is the eight byte coil write and its echo
+    static RELAY_TX_BUFFER: StaticCell<[u8; 16]> = StaticCell::new();
+    let relay_tx_buffer = &mut RELAY_TX_BUFFER.init([0; 16])[..];
+    /// Larger than any answer the module sends, because what arrives is not always an answer: it
+    /// greets the line with 49 bytes of ASCII whenever it is powered, and room to take that in is
+    /// what lets the client step over it rather than read it as a frame
+    static RELAY_RX_BUFFER: StaticCell<[u8; 64]> = StaticCell::new();
+    let relay_rx_buffer = &mut RELAY_RX_BUFFER.init([0; 64])[..];
+
+    let relay_client: RelayClient = modbus::client::Client::new(
+        uart1,
+        pin_8,
+        pin_9,
+        Irqs,
+        pin_7,
+        relay_tx_buffer,
+        relay_rx_buffer,
+        relay::get_configuration(),
+    );
 
     /// Channel for messages incoming from the MQTT broker to this fan controller
     static IN: Channel<
@@ -1376,12 +1573,21 @@ async fn main(spawner: Spawner) {
             .expect("Expected the watch to be configured for DISPLAY_STATE_RECEIVERS receivers"),
     );
 
+    static RELAY_STATE: RelayStateSignal = Signal::new();
+
     let receiver_in = IN.receiver();
     unwrap!(spawner.spawn(mqtt_brain_routine(
         receiver_in,
         &FAN_ONE_STATE,
         &FAN_TWO_STATE,
+        &RELAY_STATE,
         brain_receivers
+    )));
+
+    unwrap!(spawner.spawn(relay_routine(
+        relay_client,
+        &RELAY_STATE,
+        OUT.sender()
     )));
 
     let display_fan_one_sender = FAN_ONE_DISPLAY_STATE.sender();

@@ -150,7 +150,9 @@ synchronization primitive as a `static`, and spawns tasks that communicate only 
 Nothing shares mutable state directly.
 
 Pin assignments live in that destructuring: PIN_4 Modbus driver-enable, UART0 on PIN_12/PIN_13,
-PIN_18 button, PIN_20/PIN_21 status LEDs, PIN_23/25/24/29 + PIO0 + DMA_CH0 for the CYW43 Wi-Fi chip.
+PIN_7 driver-enable and UART1 on PIN_8/PIN_9 for the relay's bus, PIN_18 button, PIN_20/PIN_21
+status LEDs, PIN_23/25/24/29 + PIO0 + DMA_CH0 for the CYW43 Wi-Fi chip. GP8/GP9 is not a choice —
+UART1's other pins here are the fans' driver-enable and a status LED.
 
 The primitive type encodes the intent, so pick deliberately when adding one:
 
@@ -160,6 +162,9 @@ The primitive type encodes the intent, so pick deliberately when adding one:
   set point, published only after the fan acknowledged the Modbus write, and fanned out to both the
   display routine and the button routine.
 - `OnceLock` (`FANS`) — the Modbus client, so fan tasks await initialization rather than race it.
+- Nothing at all for the relay's Modbus client: `relay_routine` is the only task on that bus, so it
+  owns the client outright. The mutex and once lock around `FANS` exist because four tasks reach
+  for that one, which is a reason to copy the pattern only where it applies.
 
 Flow of a speed change:
 
@@ -174,6 +179,13 @@ Flow of a speed change:
 4. `display_routine` debounces both watches by 250 ms so the two fans' updates land as one, then
    drives `LED_STATE` and publishes state back to MQTT via `OUT`.
 5. `led_routine` renders `LedState`; an in-flight animation is cancelled when the state changes.
+
+`relay_routine` is a second, much shorter flow on its own UART. `mqtt_brain_routine` turns a
+command on the relay's topic into a `Signal<bool>`; the routine writes the coil, retries with the
+same back-off the fans use, and publishes the state through `OUT` only once the module has echoed
+the write. It reads the contact back on boot for the same reason the fans' speeds are read back,
+and reports nothing at all rather than a guess when the module cannot be reached. The relay is on
+its own bus because it answers 8N1 and only 8N1 while the fans run 8E1 — see `docs/relay.md`.
 
 Independently of that flow, `sensor_routine` (pool of 2, one per fan address) polls what the fans
 measure about themselves every `SENSOR_POLL_INTERVAL` and publishes it through `OUT`. It shares the
@@ -199,7 +211,12 @@ be encoded straight into the TCP buffer without intermediate allocation — ther
   `MAX / 3`), which makes the button cycle through the same steps the Home Assistant slider shows
   rather than through arbitrary points on it.
 - Fan Modbus addresses start at `0x02`/`0x03`; `0x01` is avoided as a likely factory default.
-- UART is 19_200 baud, 8 data bits, **even** parity, 1 stop bit.
+- The fans' UART is 19_200 baud, 8 data bits, **even** parity, 1 stop bit. The relay's is 9_600
+  8N1, which is why it is a second UART rather than a third address — its parity is not settable.
+- Coils are their own address space: `0x05` writes one and is confirmed by the device echoing the
+  request, `0x01` reads a run of them packed into bits. The relay is read eight coils at a time
+  although it has one, because that is the only frame its manual prints and the only one it
+  answers.
 - Sensor values live in *input* registers (function code `0x04`), which are read only, unlike the
   holding registers (`0x03` / `0x06`) the set point lives in. `ReadInputRegisters<COUNT>` asks for a
   range rather than one register, because a range costs the same round trip; the fan refuses more

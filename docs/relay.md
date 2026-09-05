@@ -1,8 +1,10 @@
 # Modbus relay module
 
 A Shenzhen LC / Elesai **LC-Modbus-1R-D7**: one relay output, one opto-isolated input, speaking
-Modbus RTU over RS-485 or a TTL UART. Not yet wired to the controller — this is what talking to it
-from a desktop established, so the firmware does not have to rediscover it.
+Modbus RTU over RS-485 or a TTL UART. The controller drives it on a second Modbus bus — UART1 on
+GP8/GP9 with GP7 arbitrating a second transceiver, announced to Home Assistant as a switch. What
+follows is what talking to it from a desktop established first, so the firmware did not have to
+rediscover any of it; `fan-controller/documentation.md` carries the wiring.
 
 The manufacturer's manual is [docs/manufacturer/relay](manufacturer/relay), in the private
 submodule, and [serial/src/devices/relay.ts](../serial/src/devices/relay.ts) models the device from
@@ -144,8 +146,9 @@ The fans run 19_200 baud, 8 data bits, **even** parity, 1 stop bit. The relay ru
 manual never mentions parity at all; it answered nothing at 8E1 at any of the three baud rates.
 Baud is settable to 19200, parity is not settable at all, so the two cannot be made to agree.
 
-A shared RS-485 segment is therefore off the table as the hardware stands, and the relay wants a
-second UART rather than a place on the fan pair. If some later revision does put them together,
+A shared RS-485 segment is therefore off the table as the hardware stands, and the relay has a
+second UART rather than a place on the fan pair — GP8/GP9, which is the only pair UART1 has left
+here. If some later revision does put them together,
 re-address the relay off `0xFF` first — the fans deliberately start at `0x02`/`0x03`, skipping
 `0x01` as a likely factory default, and `0xFF` is a likely default for the same reason.
 

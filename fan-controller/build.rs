@@ -17,7 +17,7 @@ use std::rc::Rc;
 use std::str::Utf8Error;
 
 use home_assistant_discovery::{
-    Component, Device, DeviceClass, DiscoveryPayload, ListOrString, Origin, StateClass,
+    Component, Device, DeviceClass, DiscoveryPayload, ListOrString, Origin, StateClass, SwitchClass,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -221,6 +221,19 @@ fn create_components() -> BTreeMap<String, Component> {
                 },
             ),
         ]);
+
+    // The relay on the second Modbus bus. Its state topic carries what the module confirmed rather
+    // than what it was asked for, so Home Assistant shows the contact rather than the command
+    components.insert(
+        topic::fan_controller::relay::UNIQUE_ID.to_string(),
+        Component::Switch {
+            name: Some("Relay 1"),
+            unique_id: Some(topic::fan_controller::relay::UNIQUE_ID),
+            state_topic: Some(topic::fan_controller::relay::state::STATE),
+            command_topic: topic::fan_controller::relay::state::COMMAND,
+            device_class: Some(SwitchClass::Switch),
+        },
+    );
 
     components.extend(create_fan_sensor_components(
         "Fan 1",

@@ -94,6 +94,15 @@ pub enum StateClass {
     TotalIncreasing,
 }
 
+/// What kind of thing a switch controls, which Home Assistant uses only to pick an icon.
+/// See https://www.home-assistant.io/integrations/switch.mqtt/#device_class
+#[derive(Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SwitchClass {
+    Outlet,
+    Switch,
+}
+
 /// Internally tagged by the required `platform` (`p`) field
 #[derive(Serialize)]
 #[serde(tag = "p", rename_all = "lowercase")]
@@ -123,6 +132,26 @@ pub enum Component {
         /// Default: 100
         #[serde(rename = "spd_rng_max")]
         speed_range_max: Option<u16>,
+    },
+    /// A plain on/off control. What the relay module is: one contact, commanded and reported, with
+    /// no speed and nothing measured
+    Switch {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        name: Option<&'static str>,
+        #[serde(rename = "uniq_id")]
+        #[serde(skip_serializing_if = "Option::is_none")]
+        unique_id: Option<&'static str>,
+        /// Where the confirmed state arrives. Without it Home Assistant assumes the command took
+        /// effect, which for a device that can refuse or go silent would be a guess shown as fact
+        #[serde(rename = "stat_t")]
+        #[serde(skip_serializing_if = "Option::is_none")]
+        state_topic: Option<&'static str>,
+        #[serde(rename = "cmd_t")]
+        command_topic: &'static str,
+        /// `switch` or `outlet`, which only decides the icon Home Assistant draws
+        #[serde(rename = "dev_cla")]
+        #[serde(skip_serializing_if = "Option::is_none")]
+        device_class: Option<SwitchClass>,
     },
     Sensor {
         /// The name of the sensor. Owned rather than borrowed, unlike the name of a fan, because
