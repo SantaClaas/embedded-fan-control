@@ -200,9 +200,10 @@ impl RequestedSetPoint {
 
 type SetPointSignal = Signal<CriticalSectionRawMutex, RequestedSetPoint>;
 
-/// How many routines watch a fan's confirmed set point: the displays, the button, and the MQTT
-/// brain that restores the last running speed when Home Assistant turns the fans back on
-const DISPLAY_STATE_RECEIVERS: usize = 3;
+/// How many routines watch a fan's confirmed set point: the displays, the button, the MQTT brain
+/// that restores the last running speed when Home Assistant turns the fans back on, and the sensor
+/// polling that takes a fresh reading when the speed changes rather than waiting out its interval
+const DISPLAY_STATE_RECEIVERS: usize = 4;
 type DisplayStateWatch = Watch<CriticalSectionRawMutex, SetPoint, DISPLAY_STATE_RECEIVERS>;
 type DisplayStateSender =
     watch::Sender<'static, CriticalSectionRawMutex, SetPoint, DISPLAY_STATE_RECEIVERS>;
@@ -1142,6 +1143,18 @@ async fn fan_control_routine(
 /// up is visible in Home Assistant while it happens
 const SENSOR_POLL_INTERVAL: Duration = Duration::from_secs(30);
 
+/// How long after a confirmed speed change to take the second reading.
+///
+/// The fans do not step to a new speed, they travel to it, and what they report of the air while
+/// travelling is real but on its way somewhere: measured on 2026-09-06, a change commanding
+/// 78 m³/h still read 82 and 84 sixteen seconds later and had settled by forty-six. So the poll
+/// fired the moment the change is confirmed is deliberately an early one — it is what the user
+/// asked to see move — and this is the follow-up that catches where it ended up.
+///
+/// The number is a guess bounded by those two samples rather than a measurement of the ramp, which
+/// is why the ordinary interval poll behind it still matters: that one is settled for certain
+const SENSOR_POLL_SETTLE_DELAY: Duration = Duration::from_secs(20);
+
 /// How long to leave the bus alone before the first poll, so the set point both fan control
 /// routines read on boot — with retries, and a timeout each if a fan is silent — is done first.
 /// The fans are the reason the controller exists; what they report about themselves can wait
@@ -1152,13 +1165,19 @@ const SENSOR_POLL_STARTUP_DELAY: Duration = Duration::from_secs(10);
 /// Nothing on the device acts on these values, so a failed poll is logged and dropped rather than
 /// retried: the next poll is along in [`SENSOR_POLL_INTERVAL`] and carries fresher values than a
 /// retry would. That also keeps a fan that has stopped answering from holding the modbus mutex
-/// through a run of timeouts while a speed change waits behind it
+/// through a run of timeouts while a speed change waits behind it.
+///
+/// Between intervals it also watches the fan's *confirmed* set point, so a speed change is
+/// followed by a reading rather than by up to [`SENSOR_POLL_INTERVAL`] of stale numbers. The
+/// confirmed one rather than the requested one, because by then the fan has answered the write and
+/// this poll cannot be queueing behind it for the modbus mutex
 #[embassy_executor::task(pool_size = 2)]
 async fn sensor_routine(
     fan: Fan,
     fan_address: modbus::device::Address,
     modbus: &'static ModbusOnceLock,
     mqtt_out: channel::Sender<'static, CriticalSectionRawMutex, OutgoingPublish, CHANNEL_SIZE>,
+    mut display_state: DisplayStateReceiver,
 ) {
     let fan_identifier = match fan {
         Fan::One => "[Fan 1 sensors]",
@@ -1172,6 +1191,7 @@ async fn sensor_routine(
     // into a rate at all. It only changes when the fan is reconfigured, so it is read once and
     // then kept, and retried on the next poll for as long as it is not known
     let mut maximum_speed: Option<u16> = None;
+    let mut next_poll = NextPoll::AfterInterval;
 
     loop {
         if maximum_speed.is_none() {
@@ -1251,8 +1271,40 @@ async fn sensor_routine(
             }
         }
 
-        Timer::after(SENSOR_POLL_INTERVAL).await;
+        next_poll = match next_poll {
+            // The reading just published is the one taken the moment the speed change was
+            // confirmed, so the fan was still on its way to the new speed. Wait for it to arrive
+            // and take one more, then go back to the interval
+            NextPoll::AfterSettling => {
+                Timer::after(SENSOR_POLL_SETTLE_DELAY).await;
+                NextPoll::AfterInterval
+            }
+            // Whichever comes first: the interval, or the fan confirming a new speed. A change
+            // during the settling wait or during a poll is not lost — the watch keeps the latest
+            // value until this receiver has seen it, so `changed()` returns straight away
+            NextPoll::AfterInterval => {
+                match select(Timer::after(SENSOR_POLL_INTERVAL), display_state.changed()).await {
+                    Either::First(()) => NextPoll::AfterInterval,
+                    Either::Second(set_point) => {
+                        info!(
+                            "{} Fan confirmed {:?}, reading it rather than waiting out the interval",
+                            fan_identifier, set_point
+                        );
+                        NextPoll::AfterSettling
+                    }
+                }
+            }
+        };
     }
+}
+
+/// What [`sensor_routine`] is waiting for before its next reading
+enum NextPoll {
+    /// The ordinary cadence, interrupted by the fan confirming a new speed
+    AfterInterval,
+    /// The follow-up to a speed change, once the fan has had [`SENSOR_POLL_SETTLE_DELAY`] to get
+    /// where it was sent
+    AfterSettling,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1619,11 +1671,17 @@ async fn main(spawner: Spawner) {
         fan::address::FAN_1,
         &FANS,
         OUT.sender(),
+        FAN_ONE_DISPLAY_STATE
+            .receiver()
+            .expect("Expected the watch to be configured for DISPLAY_STATE_RECEIVERS receivers"),
     )));
     unwrap!(spawner.spawn(sensor_routine(
         Fan::Two,
         fan::address::FAN_2,
         &FANS,
         OUT.sender(),
+        FAN_TWO_DISPLAY_STATE
+            .receiver()
+            .expect("Expected the watch to be configured for DISPLAY_STATE_RECEIVERS receivers"),
     )));
 }
