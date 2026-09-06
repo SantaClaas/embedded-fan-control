@@ -254,8 +254,19 @@ loses its sign to the division; `Tenths` writes the sign separately, and a test 
 The run at `D027` grew from the single register it had been shrunk to back to `D027`-`D033`, so all
 three arrive without a third round trip. It spans `D02B`-`D02D`, which the manual's register table
 does not list at all — safe for the same reason the status run is, which has always spanned the
-equally unlisted `D015`. The payload went from 10 components to 16 and past the 4 kB send buffer,
-which the compile-time assertion caught; `SEND_BUFFER_SIZE` is now 8 kB against a 5.3 kB payload.
+equally unlisted `D015`.
+
+The payload went from 10 components to 16 and past the 4 kB send buffer, which the compile-time
+assertion caught. Growing the buffer to 8 kB was the wrong answer and hard faulted before the
+device ever reached the broker — proven by A/B, since the parent commit runs and the parent commit
+with nothing changed but `SEND_BUFFER_SIZE` does not. The payload never needed to be in that buffer
+at all: it is a slice the caller already holds, in flash for the discovery payload, so `send` now
+writes the header and then the payload straight from where it is. The buffer is back to 1 kB and no
+longer grows with the payload; the assertion now checks the header.
+
+That took three flashes longer than it should have, because `panic-probe` had no print feature: a
+real panic only executed an undefined instruction, so it was indistinguishable from a hard fault
+and the executor's task arena spent a while as the prime suspect. `print-defmt` is on now.
 
 Still open in the same area: the second temperature/humidity sensor (`D030`/`D031`), the vane
 anemometer speed (`D032`) and the mass flow (`D034`), none of which have been checked for whether
