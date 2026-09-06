@@ -87,10 +87,10 @@ flowchart LR
     BUTTON[Button<br/>momentary, to GND] -- GP18 --> PICO
     PICO -- GP21 --> LED1[LED 1, fan 1]
     PICO -- GP20 --> LED2[LED 2, fan 2]
-    PICO[Raspberry Pi Pico W] -- "GP4 to DE/RE<br/>GP12 to DI, GP13 to RO<br/>3V3 and GND" --> TRANSCEIVER[RS-485 transceiver]
+    PICO[Raspberry Pi Pico W] -- "GP4 to DE/RE<br/>GP12 to DI, GP13 to RO<br/>3V3 and GND" --> TRANSCEIVER[MAX485 module]
     TRANSCEIVER -- "A and B, twisted pair" --> FAN1[Fan 1, address 0x02]
     FAN1 -- "the same pair, daisy chained" --> FAN2[Fan 2, address 0x03]
-    PICO -- "GP7 to DE/RE<br/>GP8 to DI, GP9 to RO<br/>3V3 and GND" --> TRANSCEIVER2[RS-485 transceiver, second bus]
+    PICO -- "GP7 to DE/RE<br/>GP8 to DI, GP9 to RO<br/>3V3 and GND" --> TRANSCEIVER2[MAX485 module, second bus]
     TRANSCEIVER2 -- "A and B, twisted pair" --> RELAY[Relay module, address 0xFF<br/>own 7-24 V supply]
     PROBE[Debug probe, optional] -. "SWCLK, GND, SWDIO" .-> PICO
 ```
@@ -128,9 +128,12 @@ idles low, which leaves the transceiver receiving and the fans owning the line, 
 for the few hundred microseconds a request takes.
 
 > [!IMPORTANT]
-> Use a transceiver rated for 3.3 V, such as an SN65HVD72. A real MAX485 is a 5 V part and its RO
-> output would then swing to 5 V into GP13, which is not 5 V tolerant. Many of the cheap blue
-> breakout boards sold as "MAX485 modules" are 5 V only.
+> This build uses the cheap blue MAX485 breakout modules, powered from 3V3(OUT) along with
+> everything else on that rail. That is below the 4.75 V the MAX485 datasheet asks for, and it is
+> deliberate: run at 5 V, the module's RO output swings to 5 V into GP13, which is not 5 V
+> tolerant. Powering the transceiver from the same 3.3 V the Pico's pins work at keeps the logic
+> levels inside what GP13 can take, at the price of running the part under its rated supply. A 5 V
+> transceiver would need a divider or a level shifter on RO instead.
 
 - Wire it as a bus, not a star: one pair from the transceiver to fan 1, and on from fan 1 to fan 2.
 - Terminate both ends with 120 Ω across A and B, one at the transceiver and one at the last fan,
@@ -157,9 +160,9 @@ one of those at a time. Its baud rate *is* settable, so the two could be made to
 but parity cannot, which settles it. `docs/relay.md` records where that was established on the
 bench.
 
-Everything the fans' bus needs, this one needs too: a 3.3 V transceiver, DE and RE tied together to
-GP7, 120 Ω across A and B at each end, and a third conductor tying the module's RS-485 common back
-to controller ground.
+Everything the fans' bus needs, this one needs too: a second MAX485 module on 3V3(OUT), DE and RE
+tied together to GP7, 120 Ω across A and B at each end, and a third conductor tying the module's
+RS-485 common back to controller ground.
 
 Three things are specific to this module:
 
@@ -217,6 +220,7 @@ The GPIO column above is compiled in. The rest is ordinary practice and worth kn
 
 - The resistor values, 330 Ω for the LEDs and 120 Ω for termination, are the usual starting points
   and were not measured for this build.
-- Powering the transceiver from 3V3(OUT) assumes a 3.3 V part, as above.
+- Powering the MAX485 modules from 3V3(OUT) runs them below their rated supply, as above. A part
+  specified for 3.3 V would be the correct choice here; these are what this build has.
 - No isolation is shown. For a long run through the house an isolated transceiver is the more
   conservative build.
