@@ -249,6 +249,10 @@ cd home_assistant_discovery && cargo test
 cd fan_sensor && cargo test
 ```
 
+```bash
+cd wiring_diagram && cargo test
+```
+
 That is also the way to make firmware logic testable at all: move it into its own `no_std` crate
 and re-export it, the way `fan/mod.rs` re-exports `set_point`. Worth doing for anything with rules
 of its own; not worth it for code that only exists to drive a peripheral.

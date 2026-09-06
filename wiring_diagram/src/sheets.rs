@@ -86,8 +86,8 @@ pub fn fans() -> Sheet {
         s.wire(&[(tr, y), (f1l, y)], false);
         s.wire(&[(f1r, y), (f2l, y)], false);
     }
-    s.resistor(660.0, y_a, y_b, "120 Ω", Label::Right);
-    s.resistor(935.0, y_a, y_b, "120 Ω", Label::Below);
+    s.resistor(660.0, y_a, y_b, 120, Label::Right);
+    s.resistor(935.0, y_a, y_b, 120, Label::Below);
     s.note(660.0, y_a - 55.0, "terminated here…", Anchor::Middle);
     s.note(935.0, y_a - 55.0, "…and at the last fan", Anchor::Middle);
     s.note(
@@ -226,8 +226,8 @@ pub fn relay() -> Sheet {
     for y in [y_a, y_b] {
         s.wire(&[(tr, y), (rl, y)], false);
     }
-    s.resistor(650.0, y_a, y_b, "120 Ω", Label::Right);
-    s.resistor(820.0, y_a, y_b, "120 Ω", Label::Below);
+    s.resistor(650.0, y_a, y_b, 120, Label::Right);
+    s.resistor(820.0, y_a, y_b, 120, Label::Below);
     s.note(650.0, y_a - 45.0, "at the transceiver…", Anchor::Middle);
     s.note(820.0, y_a - 45.0, "…and at the module", Anchor::Middle);
 
@@ -286,7 +286,7 @@ pub fn panel() -> Sheet {
 
     for (y, which) in [(y_led1, "LED 1, fan 1"), (y_led2, "LED 2, fan 2")] {
         s.wire(&[(pr, y), (rail, y)], false);
-        s.resistor_inline(400.0, y, "330 Ω");
+        s.resistor_inline(400.0, y, 330);
         s.led(540.0, y, which);
     }
 
@@ -513,8 +513,8 @@ pub fn overview() -> Sheet {
         s.wire(&[(f1x + fw, y), (f2x, y)], false);
     }
     s.wire(&[(f1x + fw, y_com), (f2x, y_com)], false);
-    s.resistor(830.0, y_a, y_b, "120 Ω", Label::Right);
-    s.resistor(1225.0, y_a, y_b, "120 Ω", Label::Below);
+    s.resistor(830.0, y_a, y_b, 120, Label::Right);
+    s.resistor(1225.0, y_a, y_b, 120, Label::Below);
     s.note(
         f1x + fw / 2.0,
         fy + fh - 18.0,
@@ -541,8 +541,8 @@ pub fn overview() -> Sheet {
     for y in [y_ra, y_rb] {
         s.wire(&[(trx + trw, y), (rlx, y)], false);
     }
-    s.resistor(830.0, y_ra, y_rb, "120 Ω", Label::Right);
-    s.resistor(985.0, y_ra, y_rb, "120 Ω", Label::Below);
+    s.resistor(830.0, y_ra, y_rb, 120, Label::Right);
+    s.resistor(985.0, y_ra, y_rb, 120, Label::Below);
 
     // The relay module's own supply. Only the ground is shared with the controller
     s.wire(&[(rlx + rlw, y_module_vcc), (sx, y_module_vcc)], false);
@@ -575,7 +575,7 @@ pub fn overview() -> Sheet {
     // The panel
     for (y, which) in [(y_led1, "LED 1, fan 1"), (y_led2, "LED 2, fan 2")] {
         s.wire(&[(pr, y), (panel_rail, y)], false);
-        s.resistor_inline(560.0, y, "330 Ω");
+        s.resistor_inline(560.0, y, 330);
         s.led(700.0, y, which);
     }
     s.wire(&[(pr, y_button), (610.0, y_button)], false);

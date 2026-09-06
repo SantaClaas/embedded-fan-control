@@ -15,6 +15,46 @@ pub const MUTED: &str = "#5c5c5c";
 pub const FONT: &str = "ui-sans-serif, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif";
 pub const MONO: &str = "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
 
+/// The resistor body itself, so the bands on it are legible in the way the
+/// part in your hand is.
+pub const BODY: &str = "#efe3c8";
+
+/// The band colours, black through white, in the order the digits run. Gold is
+/// the tolerance band and is not a digit.
+const DIGITS: [&str; 10] = [
+    "#1c1c1c", // black
+    "#7a4a21", // brown
+    "#c02a1f", // red
+    "#e07b20", // orange
+    "#e6c229", // yellow
+    "#2f8f46", // green
+    "#2f5fbf", // blue
+    "#7d4fbf", // violet
+    "#9a9a9a", // grey
+    "#fbfbfb", // white
+];
+const GOLD: &str = "#c9a227";
+
+/// The four bands of a value in ohms, read from the end the bands are crowded
+/// towards: two digits, the power of ten to multiply them by, and gold for the
+/// 5 % tolerance the parts here are.
+///
+/// Only values with two significant figures are drawn, which is every value on
+/// these sheets and most of the E24 series besides.
+fn colour_code(ohms: u32) -> [&'static str; 4] {
+    let (mut digits, mut exponent) = (ohms, 0usize);
+    while digits >= 100 {
+        digits /= 10;
+        exponent += 1;
+    }
+    [
+        DIGITS[(digits / 10) as usize],
+        DIGITS[(digits % 10) as usize],
+        DIGITS[exponent],
+        GOLD,
+    ]
+}
+
 /// How a run of text is set: the face, the size in points before the sheet's
 /// own scale, and the colour.
 #[derive(Clone, Copy)]
@@ -215,29 +255,60 @@ impl Sheet {
 
     /// A resistor bridging two horizontal wires at one column, as the bus
     /// terminators are.
-    pub fn resistor(&mut self, x: f64, y1: f64, y2: f64, label: &str, place: Label) {
+    pub fn resistor(&mut self, x: f64, y1: f64, y2: f64, ohms: u32, place: Label) {
         let mid = (y1 + y2) / 2.0;
         self.wire(&[(x, y1), (x, mid - 15.0)], false);
         self.wire(&[(x, mid + 15.0), (x, y2)], false);
         self.add(format!(
-            r#"<rect x="{}" y="{}" width="16" height="30" rx="2" fill="{BG}" stroke="{STROKE}" stroke-width="1.5"/>"#,
-            n(x - 8.0), n(mid - 15.0)
+            r#"<rect x="{}" y="{}" width="16" height="30" rx="2" fill="{BODY}" stroke="{STROKE}" stroke-width="1.5"/>"#,
+            n(x - 8.0),
+            n(mid - 15.0)
         ));
+        // Three bands crowded towards the top, the tolerance band alone at the
+        // bottom, which is the end you read from.
+        for (band, offset) in colour_code(ohms).iter().zip([4.0, 9.0, 14.0, 23.0]) {
+            self.add(format!(
+                r#"<rect x="{}" y="{}" width="16" height="3" fill="{band}"/>"#,
+                n(x - 8.0),
+                n(mid - 15.0 + offset)
+            ));
+        }
+        let label = format!("{ohms} Ω");
         match place {
-            Label::Right => self.text(x + 15.0, mid + 4.5, Anchor::Start, Style::mono(12.5), label),
-            Label::Below => self.text(x, y2 + 26.0, Anchor::Middle, Style::mono(12.5), label),
+            Label::Right => self.text(
+                x + 15.0,
+                mid + 4.5,
+                Anchor::Start,
+                Style::mono(12.5),
+                &label,
+            ),
+            Label::Below => self.text(x, y2 + 26.0, Anchor::Middle, Style::mono(12.5), &label),
         }
         self.dot(x, y1);
         self.dot(x, y2);
     }
 
     /// A resistor in line with a horizontal wire, centred on x.
-    pub fn resistor_inline(&mut self, x: f64, y: f64, label: &str) {
+    pub fn resistor_inline(&mut self, x: f64, y: f64, ohms: u32) {
         self.add(format!(
-            r#"<rect x="{}" y="{}" width="38" height="16" rx="2" fill="{BG}" stroke="{STROKE}" stroke-width="1.5"/>"#,
-            n(x - 19.0), n(y - 8.0)
+            r#"<rect x="{}" y="{}" width="38" height="16" rx="2" fill="{BODY}" stroke="{STROKE}" stroke-width="1.5"/>"#,
+            n(x - 19.0),
+            n(y - 8.0)
         ));
-        self.text(x, y - 15.0, Anchor::Middle, Style::mono(12.5), label);
+        for (band, offset) in colour_code(ohms).iter().zip([5.0, 10.0, 15.0, 29.0]) {
+            self.add(format!(
+                r#"<rect x="{}" y="{}" width="3" height="16" fill="{band}"/>"#,
+                n(x - 19.0 + offset),
+                n(y - 8.0)
+            ));
+        }
+        self.text(
+            x,
+            y - 15.0,
+            Anchor::Middle,
+            Style::mono(12.5),
+            &format!("{ohms} Ω"),
+        );
     }
 
     /// An LED in line with a horizontal wire, anode on the left.
@@ -291,5 +362,29 @@ impl Sheet {
             ),
             w, h, self.title, self.description, STROKE, BG, self.body
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DIGITS, GOLD, colour_code};
+
+    #[test]
+    fn reads_the_values_on_these_sheets() {
+        let (brown, red, orange) = (DIGITS[1], DIGITS[2], DIGITS[3]);
+        // 120 Ω: brown, red, brown, gold
+        assert_eq!(colour_code(120), [brown, red, brown, GOLD]);
+        // 330 Ω: orange, orange, brown, gold
+        assert_eq!(colour_code(330), [orange, orange, brown, GOLD]);
+    }
+
+    #[test]
+    fn counts_the_multiplier_rather_than_the_zeroes() {
+        let (black, brown, red, yellow) = (DIGITS[0], DIGITS[1], DIGITS[2], DIGITS[4]);
+        // 10 Ω is brown, black, black: the multiplier is one, not ten
+        assert_eq!(colour_code(10), [brown, black, black, GOLD]);
+        assert_eq!(colour_code(47), [yellow, DIGITS[7], black, GOLD]);
+        assert_eq!(colour_code(4_700), [yellow, DIGITS[7], red, GOLD]);
+        assert_eq!(colour_code(1_000_000), [brown, black, DIGITS[5], GOLD]);
     }
 }

@@ -134,6 +134,12 @@ The button and the LEDs. No transceiver, and nothing shared but ground:
 
 ![GP21 and GP20 through 330 Ω to the LEDs, GP18 to the button, all returning to pin 38](documentation/wiring-button-leds.svg)
 
+The resistors carry their colour code, so the drawing names the part rather than only the value:
+**orange, orange, brown, gold** for the 330 Ω LED resistors, **brown, red, brown, gold** for the
+120 Ω terminators — both 5 % parts, read from the crowded end with the gold band last. Neither is
+directional; either way round is the same resistor. The LED beside them is the part that has an
+end, anode to the pin.
+
 A dot is a junction and a hop is a crossing that is not one. Pin 38 carries two wires in the first
 two pictures because ground is one net reached twice over: the transceiver needs it as a supply
 return, and the far device needs it as the reference its differential pair is measured against. All

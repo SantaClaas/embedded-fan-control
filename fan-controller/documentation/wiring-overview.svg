@@ -100,13 +100,21 @@
   <path d="M1190 650 L1270 650" fill="none" stroke="#3a3a3a" stroke-width="1.6" stroke-linejoin="round"/>
   <path d="M830 560 L830 562.5" fill="none" stroke="#3a3a3a" stroke-width="1.6" stroke-linejoin="round"/>
   <path d="M830 592.5 L830 595" fill="none" stroke="#3a3a3a" stroke-width="1.6" stroke-linejoin="round"/>
-  <rect x="822" y="562.5" width="16" height="30" rx="2" fill="#ffffff" stroke="#3a3a3a" stroke-width="1.5"/>
+  <rect x="822" y="562.5" width="16" height="30" rx="2" fill="#efe3c8" stroke="#3a3a3a" stroke-width="1.5"/>
+  <rect x="822" y="566.5" width="16" height="3" fill="#7a4a21"/>
+  <rect x="822" y="571.5" width="16" height="3" fill="#c02a1f"/>
+  <rect x="822" y="576.5" width="16" height="3" fill="#7a4a21"/>
+  <rect x="822" y="585.5" width="16" height="3" fill="#c9a227"/>
   <text x="845" y="582" text-anchor="start" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15.6" fill="#1a1a1a">120 Ω</text>
   <circle cx="830" cy="560" r="3.4" fill="#3a3a3a"/>
   <circle cx="830" cy="595" r="3.4" fill="#3a3a3a"/>
   <path d="M1225 560 L1225 562.5" fill="none" stroke="#3a3a3a" stroke-width="1.6" stroke-linejoin="round"/>
   <path d="M1225 592.5 L1225 595" fill="none" stroke="#3a3a3a" stroke-width="1.6" stroke-linejoin="round"/>
-  <rect x="1217" y="562.5" width="16" height="30" rx="2" fill="#ffffff" stroke="#3a3a3a" stroke-width="1.5"/>
+  <rect x="1217" y="562.5" width="16" height="30" rx="2" fill="#efe3c8" stroke="#3a3a3a" stroke-width="1.5"/>
+  <rect x="1217" y="566.5" width="16" height="3" fill="#7a4a21"/>
+  <rect x="1217" y="571.5" width="16" height="3" fill="#c02a1f"/>
+  <rect x="1217" y="576.5" width="16" height="3" fill="#7a4a21"/>
+  <rect x="1217" y="585.5" width="16" height="3" fill="#c9a227"/>
   <text x="1225" y="621" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15.6" fill="#1a1a1a">120 Ω</text>
   <circle cx="1225" cy="560" r="3.4" fill="#3a3a3a"/>
   <circle cx="1225" cy="595" r="3.4" fill="#3a3a3a"/>
@@ -125,13 +133,21 @@
   <path d="M740 1045 L1020 1045" fill="none" stroke="#3a3a3a" stroke-width="1.6" stroke-linejoin="round"/>
   <path d="M830 1010 L830 1012.5" fill="none" stroke="#3a3a3a" stroke-width="1.6" stroke-linejoin="round"/>
   <path d="M830 1042.5 L830 1045" fill="none" stroke="#3a3a3a" stroke-width="1.6" stroke-linejoin="round"/>
-  <rect x="822" y="1012.5" width="16" height="30" rx="2" fill="#ffffff" stroke="#3a3a3a" stroke-width="1.5"/>
+  <rect x="822" y="1012.5" width="16" height="30" rx="2" fill="#efe3c8" stroke="#3a3a3a" stroke-width="1.5"/>
+  <rect x="822" y="1016.5" width="16" height="3" fill="#7a4a21"/>
+  <rect x="822" y="1021.5" width="16" height="3" fill="#c02a1f"/>
+  <rect x="822" y="1026.5" width="16" height="3" fill="#7a4a21"/>
+  <rect x="822" y="1035.5" width="16" height="3" fill="#c9a227"/>
   <text x="845" y="1032" text-anchor="start" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15.6" fill="#1a1a1a">120 Ω</text>
   <circle cx="830" cy="1010" r="3.4" fill="#3a3a3a"/>
   <circle cx="830" cy="1045" r="3.4" fill="#3a3a3a"/>
   <path d="M985 1010 L985 1012.5" fill="none" stroke="#3a3a3a" stroke-width="1.6" stroke-linejoin="round"/>
   <path d="M985 1042.5 L985 1045" fill="none" stroke="#3a3a3a" stroke-width="1.6" stroke-linejoin="round"/>
-  <rect x="977" y="1012.5" width="16" height="30" rx="2" fill="#ffffff" stroke="#3a3a3a" stroke-width="1.5"/>
+  <rect x="977" y="1012.5" width="16" height="30" rx="2" fill="#efe3c8" stroke="#3a3a3a" stroke-width="1.5"/>
+  <rect x="977" y="1016.5" width="16" height="3" fill="#7a4a21"/>
+  <rect x="977" y="1021.5" width="16" height="3" fill="#c02a1f"/>
+  <rect x="977" y="1026.5" width="16" height="3" fill="#7a4a21"/>
+  <rect x="977" y="1035.5" width="16" height="3" fill="#c9a227"/>
   <text x="985" y="1071" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15.6" fill="#1a1a1a">120 Ω</text>
   <circle cx="985" cy="1010" r="3.4" fill="#3a3a3a"/>
   <circle cx="985" cy="1045" r="3.4" fill="#3a3a3a"/>
@@ -145,14 +161,22 @@
   <path d="M1235 1060 L1295 1060" fill="none" stroke="#3a3a3a" stroke-width="1.6" stroke-linejoin="round"/>
   <text x="1305" y="1065" text-anchor="start" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15.6" fill="#5c5c5c">the load being switched</text>
   <path d="M280 1235 L900 1235" fill="none" stroke="#3a3a3a" stroke-width="1.6" stroke-linejoin="round"/>
-  <rect x="541" y="1227" width="38" height="16" rx="2" fill="#ffffff" stroke="#3a3a3a" stroke-width="1.5"/>
+  <rect x="541" y="1227" width="38" height="16" rx="2" fill="#efe3c8" stroke="#3a3a3a" stroke-width="1.5"/>
+  <rect x="546" y="1227" width="3" height="16" fill="#e07b20"/>
+  <rect x="551" y="1227" width="3" height="16" fill="#e07b20"/>
+  <rect x="556" y="1227" width="3" height="16" fill="#7a4a21"/>
+  <rect x="570" y="1227" width="3" height="16" fill="#c9a227"/>
   <text x="560" y="1220" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15.6" fill="#1a1a1a">330 Ω</text>
   <path d="M691 1225 L708 1235 L691 1245 z" fill="#f6f6f3" stroke="#3a3a3a" stroke-width="1.5" stroke-linejoin="round"/>
   <path d="M708 1224 L708 1246" stroke="#3a3a3a" stroke-width="1.8"/>
   <path d="M702 1221 l7 -7 M708 1217 l7 -7" stroke="#3a3a3a" stroke-width="1.2" marker-end="url(#arrow)"/>
   <text x="700" y="1265" text-anchor="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15.6" fill="#5c5c5c">LED 1, fan 1</text>
   <path d="M280 1305 L900 1305" fill="none" stroke="#3a3a3a" stroke-width="1.6" stroke-linejoin="round"/>
-  <rect x="541" y="1297" width="38" height="16" rx="2" fill="#ffffff" stroke="#3a3a3a" stroke-width="1.5"/>
+  <rect x="541" y="1297" width="38" height="16" rx="2" fill="#efe3c8" stroke="#3a3a3a" stroke-width="1.5"/>
+  <rect x="546" y="1297" width="3" height="16" fill="#e07b20"/>
+  <rect x="551" y="1297" width="3" height="16" fill="#e07b20"/>
+  <rect x="556" y="1297" width="3" height="16" fill="#7a4a21"/>
+  <rect x="570" y="1297" width="3" height="16" fill="#c9a227"/>
   <text x="560" y="1290" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15.6" fill="#1a1a1a">330 Ω</text>
   <path d="M691 1295 L708 1305 L691 1315 z" fill="#f6f6f3" stroke="#3a3a3a" stroke-width="1.5" stroke-linejoin="round"/>
   <path d="M708 1294 L708 1316" stroke="#3a3a3a" stroke-width="1.8"/>
