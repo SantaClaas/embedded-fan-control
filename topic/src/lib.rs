@@ -95,6 +95,10 @@ pub mod fan_controller {
             /// Read out of the same status run as the speed and the temperatures
             pub const MOTOR_STATUS: &str = formatcp!("{UNIQUE_ID}/sensors/motor-status");
             pub const WARNING: &str = formatcp!("{UNIQUE_ID}/sensors/warning");
+            /// The analog set point input's own entity. It is always broken here, because the set
+            /// point comes over RS-485 and nothing is wired to that input, so it is kept out of
+            /// the warning above rather than sitting in it permanently
+            pub const ANALOG_SET_POINT: &str = formatcp!("{UNIQUE_ID}/sensors/analog-set-point");
         }
     }
 
@@ -150,6 +154,10 @@ pub mod fan_controller {
             /// Read out of the same status run as the speed and the temperatures
             pub const MOTOR_STATUS: &str = formatcp!("{UNIQUE_ID}/sensors/motor-status");
             pub const WARNING: &str = formatcp!("{UNIQUE_ID}/sensors/warning");
+            /// The analog set point input's own entity. It is always broken here, because the set
+            /// point comes over RS-485 and nothing is wired to that input, so it is kept out of
+            /// the warning above rather than sitting in it permanently
+            pub const ANALOG_SET_POINT: &str = formatcp!("{UNIQUE_ID}/sensors/analog-set-point");
         }
     }
 }

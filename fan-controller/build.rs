@@ -125,20 +125,21 @@ struct SensorIdentifiers {
     volume_flow: &'static str,
     motor_status: &'static str,
     warning: &'static str,
+    analog_set_point: &'static str,
 }
 
 /// What a fan reports: what it measures about itself, what it measures of the air it is
 /// moving, and what it says is wrong with it.
 ///
 /// Every one of them reads the same topic and picks its value out of the JSON object published
-/// there, so a poll costs one publish rather than nine. The keys the templates use are the field
+/// there, so a poll costs one publish rather than ten. The keys the templates use are the field
 /// names `fan_sensor::Reading` serializes, which is the one place they have to agree.
 ///
 /// Built per fan rather than written out twice, because only the identifiers and the name differ
 fn create_fan_sensor_components(
     fan_name: &str,
     identifiers: SensorIdentifiers,
-) -> [(String, Component); 9] {
+) -> [(String, Component); 10] {
     [
         (
             identifiers.speed.to_string(),
@@ -257,6 +258,21 @@ fn create_fan_sensor_components(
                 unique_id: Some(identifiers.warning),
             },
         ),
+        // Its own entity rather than a line in the warning above, because it is always set here:
+        // the set point comes over RS-485, so the analog input this watches is deliberately
+        // unwired. A warning that can never clear is the state a real one is easiest to miss in
+        (
+            identifiers.analog_set_point.to_string(),
+            Component::Sensor {
+                name: Some(format!("{fan_name} analog set point")),
+                state_topic: Some(identifiers.state),
+                device_class: None,
+                state_class: None,
+                unit_of_measurement: None,
+                value_template: Some("{{ value_json.analog_set_point }}"),
+                unique_id: Some(identifiers.analog_set_point),
+            },
+        ),
     ]
 }
 
@@ -323,6 +339,7 @@ fn create_components() -> BTreeMap<String, Component> {
             volume_flow: topic::fan_controller::fan_1::sensor::VOLUME_FLOW,
             motor_status: topic::fan_controller::fan_1::sensor::MOTOR_STATUS,
             warning: topic::fan_controller::fan_1::sensor::WARNING,
+            analog_set_point: topic::fan_controller::fan_1::sensor::ANALOG_SET_POINT,
         },
     ));
 
@@ -340,6 +357,7 @@ fn create_components() -> BTreeMap<String, Component> {
             volume_flow: topic::fan_controller::fan_2::sensor::VOLUME_FLOW,
             motor_status: topic::fan_controller::fan_2::sensor::MOTOR_STATUS,
             warning: topic::fan_controller::fan_2::sensor::WARNING,
+            analog_set_point: topic::fan_controller::fan_2::sensor::ANALOG_SET_POINT,
         },
     ));
 

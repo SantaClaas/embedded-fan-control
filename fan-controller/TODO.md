@@ -288,9 +288,33 @@ is a blocked duct or a loading filter saying so.
 Still open in the same area: the second temperature/humidity sensor (`D030`/`D031`), the vane
 anemometer speed (`D032`) and the mass flow (`D034`), none of which have been checked for whether
 they carry anything, and the PT1000 inputs (`D038`/`D039`), which have a documented sentinel for
-being unwired that the temperature/humidity pair does not. The motor status (`D011`) and warning
-(`D012`) bitfields are read as part of the status run and thrown away; decoding them would give
-Home Assistant a real diagnostic instead of inference from a temperature.
+being unwired that the temperature/humidity pair does not.
+
+**Let the fans say what is wrong** — done, `fan_sensor/`, `topic/`, `build.rs`
+
+`D011` (what is wrong now) and `D012` (what is close to going wrong) were being read as part of the
+status run and thrown away, so a fault could only be inferred from a temperature climbing. Both are
+bit fields, printed in sections 3.9 and 3.10 as two rows of eight, most significant row first.
+They are decoded into the manual's own abbreviations, so Home Assistant shows `BLK, FB` rather than
+`0x0090`, and `OK` when there is nothing to say. No extra Modbus traffic: both sit at offsets 1 and
+2 of a run already being read.
+
+Two decisions worth keeping:
+
+- **A bit the manual prints as `0` is reported as raw hex rather than swallowed.** A fan saying
+  something this code does not understand must not read as healthy.
+- **The bit positions are tested against whole 16 bit words**, not against the bit numbers they
+  were transcribed into. Testing `1 << 7` against a constant `7` proves only that the constant
+  equals itself; `0b0000_0000_1000_0000` against the manual's printed row is the actual claim.
+
+On hardware both fans report `motor_status: OK` and, at first, `warning: Kabelbruch` — bit 10, the
+cable break on the *analog* set point input. That input is deliberately unwired, because the set
+point arrives over RS-485, so it sits below the break threshold and both fans flag it on every
+poll. A warning that can never clear is the state a real one is easiest to miss in, so that bit is
+reported as its own entity instead: `warning` reads `OK`, and `analog set point` reads
+`Kabelbruch`. It is excluded from `Warning::is_healthy` for the same reason, and still counts as a
+documented bit so it cannot fall through to the hex branch. Wiring something to that input later
+needs no firmware change to see it.
 
 ### Cheap win worth slotting in anywhere
 

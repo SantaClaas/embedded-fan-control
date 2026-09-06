@@ -75,14 +75,17 @@ fn write_flags(
     formatter: &mut core::fmt::Formatter<'_>,
     value: u16,
     flags: &[(u16, &'static str)],
+    reported_elsewhere: u16,
 ) -> core::fmt::Result {
-    let mut documented = 0;
+    // Bits reported as their own value are still documented ones, so they must not fall through to
+    // the undocumented branch below and be printed as hex
+    let mut documented = reported_elsewhere;
     let mut written = false;
 
     for (bit, name) in flags {
         documented |= 1 << bit;
 
-        if value & (1 << bit) == 0 {
+        if value & (1 << bit) == 0 || reported_elsewhere & (1 << bit) != 0 {
             continue;
         }
 
@@ -135,7 +138,7 @@ impl MotorStatus {
 
 impl core::fmt::Display for MotorStatus {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write_flags(formatter, self.0, &Self::FLAGS)
+        write_flags(formatter, self.0, &Self::FLAGS, 0)
     }
 }
 
@@ -156,15 +159,32 @@ impl Warning {
         (4, "TM_high"),
     ];
 
-    /// Whether the fan is reporting nothing to watch
+    /// Bit 10, `Kabelbruch am Analogeingang für den Sollwert`.
+    ///
+    /// Reported on its own rather than among the others because it is structurally always set
+    /// here: the set point arrives over RS-485, so the analog input this watches is deliberately
+    /// unwired and sits below the break threshold. Left in the warning string it would be a light
+    /// that never goes out, which is the state a genuinely new warning is easiest to miss in
+    const ANALOG_SET_POINT_BREAK: u16 = 1 << 10;
+
+    /// Whether the analog set point input reads as broken. Always true on this controller, and
+    /// kept anyway so that wiring something to that input later does not need new firmware to see
+    pub fn is_analog_set_point_broken(&self) -> bool {
+        self.0 & Self::ANALOG_SET_POINT_BREAK != 0
+    }
+
+    /// Whether the fan is reporting anything worth acting on.
+    ///
+    /// [`Self::ANALOG_SET_POINT_BREAK`] does not count, for the reason given there — it is a
+    /// property of how this controller is wired rather than of how the fan is doing
     pub fn is_healthy(&self) -> bool {
-        self.0 == 0
+        self.0 & !Self::ANALOG_SET_POINT_BREAK == 0
     }
 }
 
 impl core::fmt::Display for Warning {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write_flags(formatter, self.0, &Self::FLAGS)
+        write_flags(formatter, self.0, &Self::FLAGS, Self::ANALOG_SET_POINT_BREAK)
     }
 }
 
@@ -258,7 +278,7 @@ fn relative_humidity(raw: u16) -> Tenths {
 
 /// Enough for every field at its longest, including the minus signs and a `null` speed. Proven by
 /// `json_fits_the_worst_case`
-pub const JSON_CAPACITY: usize = 320;
+pub const JSON_CAPACITY: usize = 384;
 
 impl Reading {
     /// The payload Home Assistant reads, as one JSON object per fan so that every value arrives in
@@ -289,8 +309,14 @@ impl Reading {
             // escape
             write!(
                 json,
-                ",\"motor_status\":\"{}\",\"warning\":\"{}\"",
-                self.motor_status, self.warning
+                ",\"motor_status\":\"{}\",\"warning\":\"{}\",\"analog_set_point\":\"{}\"",
+                self.motor_status,
+                self.warning,
+                if self.warning.is_analog_set_point_broken() {
+                    "Kabelbruch"
+                } else {
+                    "OK"
+                }
             )
         })
         .and_then(|()| {
@@ -385,15 +411,39 @@ mod tests {
         assert_eq!(format_flags(MotorStatus(0b0000_0000_0000_1000)), "SKF");
     }
 
-    /// Section 3.10, checked the same way
+    /// Section 3.10, checked the same way. `Kabelbruch` is bit 10 and is checked separately,
+    /// because it is reported as its own value rather than in this string
     #[test]
     fn warning_bits_are_where_the_manual_puts_them() {
         assert_eq!(format_flags(Warning(0b0001_0000_0000_0000)), "UzHigh");
-        assert_eq!(format_flags(Warning(0b0000_0100_0000_0000)), "Kabelbruch");
+        assert!(Warning(0b0000_0100_0000_0000).is_analog_set_point_broken());
         assert_eq!(format_flags(Warning(0b0000_0010_0000_0000)), "n_Low");
         assert_eq!(format_flags(Warning(0b0000_0000_0100_0000)), "UzLow");
         assert_eq!(format_flags(Warning(0b0000_0000_0010_0000)), "TEI_high");
         assert_eq!(format_flags(Warning(0b0000_0000_0001_0000)), "TM_high");
+    }
+
+    /// The analog set point input is unwired on this controller, so both fans set that bit on
+    /// every poll. It has to stay out of the warning string and out of `is_healthy`, or the
+    /// warning entity is a light that never goes out — but it is still documented, so it must not
+    /// come out as hex either
+    #[test]
+    fn the_analog_set_point_break_is_reported_on_its_own() {
+        let only_the_break = Warning(0b0000_0100_0000_0000);
+
+        assert!(only_the_break.is_analog_set_point_broken());
+        assert!(only_the_break.is_healthy());
+        assert_eq!(format_flags(only_the_break), "OK");
+    }
+
+    /// A real warning alongside it still has to show, and show alone
+    #[test]
+    fn a_real_warning_shows_past_the_analog_set_point_break() {
+        let both = Warning(0b0000_0100_0001_0000);
+
+        assert!(both.is_analog_set_point_broken());
+        assert!(!both.is_healthy());
+        assert_eq!(format_flags(both), "TM_high");
     }
 
     /// A healthy fan is the common case and has to read as such rather than as an empty string
@@ -508,7 +558,7 @@ mod tests {
 
         assert_eq!(
             reading.to_json().as_str(),
-            r#"{"speed":1500,"motor_temperature":42,"electronics_temperature":38,"power":25,"motor_status":"OK","warning":"OK","air_temperature":21.5,"air_humidity":47.3,"volume_flow":120}"#
+            r#"{"speed":1500,"motor_temperature":42,"electronics_temperature":38,"power":25,"motor_status":"OK","warning":"OK","analog_set_point":"OK","air_temperature":21.5,"air_humidity":47.3,"volume_flow":120}"#
         );
     }
 
@@ -518,7 +568,7 @@ mod tests {
         let reading = Reading {
             speed: None,
             motor_status: MotorStatus(1 << 7 | 1 << 4),
-            warning: Warning(1 << 4),
+            warning: Warning(1 << 10 | 1 << 4),
             motor_temperature: -5,
             electronics_temperature: 38,
             power: 25,
@@ -529,7 +579,7 @@ mod tests {
 
         assert_eq!(
             reading.to_json().as_str(),
-            r#"{"speed":null,"motor_temperature":-5,"electronics_temperature":38,"power":25,"motor_status":"BLK, FB","warning":"TM_high","air_temperature":-0.3,"air_humidity":80.2,"volume_flow":0}"#
+            r#"{"speed":null,"motor_temperature":-5,"electronics_temperature":38,"power":25,"motor_status":"BLK, FB","warning":"TM_high","analog_set_point":"Kabelbruch","air_temperature":-0.3,"air_humidity":80.2,"volume_flow":0}"#
         );
     }
 
