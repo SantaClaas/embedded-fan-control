@@ -179,3 +179,85 @@ no parity RS485 communication
 
 PARAM instruction:
 TC:0.0,HC:0.0,BR:9600,HZ:1 -> Temperature correction value 0.0 Humidity correction value 0.0 Baud rate 9600 Report rate 1Hz SLAVE_ADD:1 ->MODBUS slave address 0x01
+
+---
+
+# How the controller uses these sensors
+
+Everything above is the transcription. What follows is this repository's own decisions about the
+two of these that hang off the fan controller, which belong here rather than in the document they
+came with.
+
+## They share the relay's bus
+
+The controller drives two Modbus buses and has no room for a third: the RP2040 has two UARTs, UART0
+carries the fans and UART1 carries the relay module. The sensors are on UART1, alongside the relay.
+
+That is forced rather than chosen, and it works out only because of the framing. The fans run
+19_200 baud 8E1 and refuse to be anything else; these sensors answer 8N1, like the relay, and their
+parity is not settable any more than the relay's is — so the fans' bus was never an option. Both
+ship at 9600, which is what the bus is opened at, and
+[fan-controller/src/temperature_sensor/mod.rs](../fan-controller/src/temperature_sensor/mod.rs)
+fails the build if those two bit rates are ever changed apart.
+
+Sharing the bus is why `relay_routine` no longer owns its Modbus client. It is behind the same
+mutex and once lock the fans' client is behind, and every transaction — a coil write, a contact
+read, a sensor poll — takes the lock for one exchange and releases it, so a device that has stopped
+answering costs the others a timeout rather than a run of them.
+
+## Addresses
+
+| Device | Address |
+|---|---|
+| Relay module | `0xFF` |
+| Temperature sensor 1 | `0x04` |
+| Temperature sensor 2 | `0x05` |
+
+Both sensors ship at `0x01`, and two devices at one address answer over each other, so **each
+sensor has to be re-addressed before it is wired onto the bus** — one at a time, with nothing else
+of the same address on the line. The [serial tool](../serial) does this: holding register `0x0101`,
+which it presents as "Device address". The change is written to the device's flash and survives a
+power cycle.
+
+`0x04` and `0x05` continue the fans' `0x02`/`0x03` rather than starting over. The two buses could
+not collide even if they shared a number, but one address for one device reads back more easily in
+a log — the firmware's Modbus client prints `[Temperature 1]` and `[Temperature 2]` from the
+address alone — and `0x01` is skipped for the same reason the fans skip it: it is the likely
+factory default of whatever is added next.
+
+## What is read, and how often
+
+One transaction per sensor every 30 seconds, after a 10 second delay at boot that leaves the bus to
+the relay's contact read. It is the "continuously read the temperature and humidity" frame above —
+input registers `0x0001` and `0x0002` in one request — because a range costs the same round trip as
+a single register, and reading both at once means the two values describe the same moment.
+
+A failed poll is logged and dropped rather than retried. The next one is along in 30 seconds
+carrying fresher values than a retry would, and a silent sensor never holds the bus while a relay
+command waits behind it. That also absorbs the relay's power-up greeting, which spoils whatever
+exchange it collides with whenever the *module* is powered — see [relay.md](relay.md).
+
+## What Home Assistant is told
+
+Two sensors per device, temperature and humidity, both reading one topic per device:
+
+```
+fan-controller/temperature-sensor-1/sensors/state
+fan-controller/temperature-sensor-2/sensors/state
+```
+
+carrying `{"temperature":21.4,"humidity":54.6}`, which each sensor picks its value out of with a
+value template. One publish per poll rather than two, the same shape the fans' readings are
+published in.
+
+The values are written with one decimal because that is the resolution the device has. The firmware
+keeps them as signed tenths and never divides: an RP2040 has no floating point unit, and the
+decimal point is put in only where the number is written out.
+
+## What has not been checked
+
+None of this has run against the hardware. The register addresses, the coding and the frames come
+from a transcription that was wrong twice before, so the first thing worth doing with a sensor on
+the bench is comparing a reading against something else in the same room — a value that decodes to
+a plausible temperature but a nonsensical humidity would be the signature of a register table that
+does not match this device.

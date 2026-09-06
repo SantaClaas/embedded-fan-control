@@ -243,6 +243,50 @@ wired to the fans. The motor status (`D011`) and warning (`D012`) bitfields are 
 status run and thrown away; decoding them would give Home Assistant a real diagnostic instead of
 inference from a temperature.
 
+### Done since — the temperature and humidity sensors
+
+**Read the two RS-485 temperature/humidity sensors** — done, `temperature_sensor/`,
+`src/temperature_sensor/`, `src/main.rs`
+
+The devices in [docs/temperature-sensor.md](../docs/temperature-sensor.md), which until now only
+the [serial tool](../serial) could talk to. Each is announced to Home Assistant as a temperature
+sensor and a humidity sensor, polled every 30 s after the same 10 s startup delay the fans' poll
+uses, and published as one JSON object per device.
+
+The decision that shaped the rest of it: **they share the relay's bus.** The RP2040 has two UARTs
+and both were taken, and of the two only the relay's could carry these — they answer 9600 8N1,
+which is the relay's framing and the opposite of the fans' 19_200 8E1, and no device on either side
+has a settable parity. So the second bus stopped being single-owner. `relay_routine` used to hold
+its Modbus client outright; the client is now behind the same `Mutex` and `OnceLock` the fans' is
+behind, and every transaction on that bus — coil write, contact read, sensor poll — takes the lock
+for one exchange rather than across a run of retries.
+
+Decoding lives in `temperature_sensor/`, following the `set_point` and `fan_sensor` pattern, so the
+rules it has are tested on the host: both values are signed tenths of their unit, and the sign has
+to be written separately from the digits or a reading between −1 and 0 loses it. The tests quote
+the document's own worked examples rather than restating the code, because that document is a
+transcription that had two wrong check bytes in it until `serial`'s tests caught them.
+
+The sensors are at `0x04` and `0x05`, continuing the fans' numbering rather than restarting. They
+ship at `0x01`, which two of them cannot share, so **each has to be re-addressed with the serial
+tool before it is wired onto the bus.**
+
+One thing this ran into that is worth knowing: four more components took the discovery payload to
+4,835 bytes, past the 4,096 byte MQTT send buffer, and the compile time assertion in `main.rs`
+caught it exactly as it was written to. `SEND_BUFFER_SIZE` is now 6,144 and `build.rs` prints the
+payload's size on every build, so the next one does not have to be guessed at.
+
+Untested on hardware, and in two ways worth separating:
+
+- Nothing here has ever spoken to one of these sensors. The registers, the coding and the frames
+  are from a transcription that has been wrong before, so the first check is a reading against
+  something else in the same room — a plausible temperature next to a nonsensical humidity would
+  mean the register table does not match this device.
+- The send buffer grew by 2 KiB on the MQTT task's stack, which comes out of the executor's arena
+  (`task-arena-size-98304`). If the arena no longer fits every task, the `unwrap!` around a spawn
+  in `main()` panics at boot and says so — loud rather than subtle, but it is a boot failure and
+  it would be this change that caused it.
+
 ### Cheap win worth slotting in anywhere
 
 **Make `SetPoint` host-testable** — done, `set_point/`
@@ -266,17 +310,18 @@ and re-export it. Recorded in `CLAUDE.md`, which also no longer claims `bacon te
 
 ### Break up `main.rs`
 
-`src/main.rs` is 1,396 lines and holds nearly everything that is not a protocol: the button
+`src/main.rs` is 1,751 lines and holds nearly everything that is not a protocol: the button
 routine, the display debounce and its MQTT publishing, the LED state machine and its animations,
 the MQTT brain that interprets incoming publishes, the fan control routine with its retry and
-correction logic, the sensor polling routine, the shared type aliases and statics, and the pin
-destructuring in `main()` itself. Reading any one of those means scrolling past the other seven.
+correction logic, the relay routine, the two polling routines, the shared type aliases and statics,
+and the pin destructuring in `main()` itself. Reading any one of those means scrolling past the
+other eight.
 
 The task boundaries are already the seams — the routines only talk through the statics declared in
 `main()`, so moving each into its own module costs nothing structurally. What needs deciding is
 where the shared vocabulary goes: `RequestedSetPoint`, `LedState`/`Blink`, the `DisplayState*`
-aliases, `ModbusMutex`/`ModbusOnceLock`, and `back_off`/`MAX_ATTEMPTS` are used across several
-routines. `main()` should end up as the wiring — peripherals, statics, spawns — and nothing else.
+aliases, `ModbusMutex`/`ModbusOnceLock`, `SecondBusMutex`/`SecondBusOnceLock`, and
+`back_off`/`MAX_ATTEMPTS` are used across several routines. `main()` should end up as the wiring — peripherals, statics, spawns — and nothing else.
 
 `src/task.rs` (778 lines) is the second candidate and may be the bigger win: it is the MQTT
 session, the reconnect loop, the subscription acknowledgement machinery and the packet plumbing in

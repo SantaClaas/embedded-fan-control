@@ -105,9 +105,10 @@ bytes when they are legible, so the greeting names itself in the error.
 The firmware's Modbus client no longer assumes the first two bytes after a request are the header
 either. It slides a two-byte window forward until the address and function code are the ones it
 asked for, bounded by 80 bytes and by the 3.5 characters of silence that end a burst, so a greeting
-in front of an answer costs a few milliseconds instead of the whole transaction. That is groundwork
-rather than a fix in use: this module cannot join the fans' bus at all, because they run 8E1 and it
-only answers 8N1, so nothing the controller drives today can hear the greeting.
+in front of an answer costs a few milliseconds instead of the whole transaction. That was
+groundwork when it was written, because the controller did not yet drive this module. It is in use
+now: `relay_routine` talks to it on the second bus, and the two temperature and humidity sensors
+share that bus, so a greeting can arrive in front of any of their answers.
 
 ## What it needs for power
 
@@ -151,6 +152,19 @@ second UART rather than a place on the fan pair — GP8/GP9, which is the only p
 here. If some later revision does put them together,
 re-address the relay off `0xFF` first — the fans deliberately start at `0x02`/`0x03`, skipping
 `0x01` as a likely factory default, and `0xFF` is a likely default for the same reason.
+
+## What it does share the bus with
+
+The two RS-485 temperature and humidity sensors, at `0x04` and `0x05`. They answer 9600 8N1, which
+is this module's framing rather than the fans', so UART1 was the only place they could go on a chip
+with two of them — see [temperature-sensor.md](temperature-sensor.md).
+
+Two things follow for this module. Its Modbus client is now shared rather than owned by the one
+task that drives it, so a coil write takes the bus for one exchange and lets go of it between
+attempts instead of holding it across a run of retries. And the greeting below is no longer only
+this module's problem: it arrives whenever the *module* is powered, and what it collides with may
+now be a sensor poll rather than a coil write. A spoiled poll is dropped and the next one is along
+in thirty seconds, so it costs a reading rather than a command.
 
 ## Talking to it from a desktop
 

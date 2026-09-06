@@ -72,6 +72,7 @@ Testing reality below.
 | `topic` | `no_std` | The single source of truth for Home Assistant MQTT topic strings, composed at compile time with `const_format`. Used by both the firmware and `build.rs`. |
 | `set_point` | `no_std` | The `SetPoint` newtype and its bounds, parsing and formatting. Its own crate purely so it can be tested on the host; re-exported by the firmware as `crate::fan::set_point`. Feature-gated `defmt`. |
 | `fan_sensor` | `no_std` | Decoding what a fan reports about itself — actual speed, both temperatures, power — from its input registers, plus the JSON payload Home Assistant reads. Owns the register addresses and the layout of the two runs that are read. Its own crate for the same reason as `set_point`; re-exported as `crate::fan::sensor`. Feature-gated `defmt`. |
+| `temperature_sensor` | `no_std` | Decoding what the two RS-485 temperature/humidity sensors report — both values are signed tenths of their unit — plus the JSON payload Home Assistant reads. Owns their register addresses. Its own crate for the same reason as `set_point`; re-exported as `crate::temperature_sensor::sensor`. Feature-gated `defmt`. |
 | `home_assistant_discovery` | host | Serde model of the Home Assistant MQTT discovery payload. Build-dependency only. `components` is a `BTreeMap` so the generated payload is byte-stable across builds. |
 | `debug-listener` | host | Reads the RS-485/Modbus line off a USB serial adapter to inspect fan traffic. The port path is hardcoded in `src/main.rs`. |
 
@@ -150,7 +151,7 @@ synchronization primitive as a `static`, and spawns tasks that communicate only 
 Nothing shares mutable state directly.
 
 Pin assignments live in that destructuring: PIN_4 Modbus driver-enable, UART0 on PIN_12/PIN_13,
-PIN_7 driver-enable and UART1 on PIN_8/PIN_9 for the relay's bus, PIN_18 button, PIN_20/PIN_21
+PIN_7 driver-enable and UART1 on PIN_8/PIN_9 for the second bus, PIN_18 button, PIN_20/PIN_21
 status LEDs, PIN_23/25/24/29 + PIO0 + DMA_CH0 for the CYW43 Wi-Fi chip. GP8/GP9 is not a choice —
 UART1's other pins here are the fans' driver-enable and a status LED.
 
@@ -161,10 +162,12 @@ The primitive type encodes the intent, so pick deliberately when adding one:
 - `Watch` (`FAN_ONE_DISPLAY_STATE` / `FAN_TWO_DISPLAY_STATE`, 2 receivers each) — the *confirmed*
   set point, published only after the fan acknowledged the Modbus write, and fanned out to both the
   display routine and the button routine.
-- `OnceLock` (`FANS`) — the Modbus client, so fan tasks await initialization rather than race it.
-- Nothing at all for the relay's Modbus client: `relay_routine` is the only task on that bus, so it
-  owns the client outright. The mutex and once lock around `FANS` exist because four tasks reach
-  for that one, which is a reason to copy the pattern only where it applies.
+- `OnceLock` (`FANS`, `SECOND_BUS`) — a Modbus client, so the tasks on that bus await
+  initialization rather than race it. Both buses are shared now: four tasks reach for the fans'
+  client and three for the second bus's, so both are a `Mutex` inside a `OnceLock`. The second bus
+  was owned outright by `relay_routine` until the temperature sensors joined it, which is worth
+  knowing before copying either pattern — it is the number of tasks on the bus that decides, not
+  the bus.
 
 Flow of a speed change:
 
@@ -180,12 +183,22 @@ Flow of a speed change:
    drives `LED_STATE` and publishes state back to MQTT via `OUT`.
 5. `led_routine` renders `LedState`; an in-flight animation is cancelled when the state changes.
 
-`relay_routine` is a second, much shorter flow on its own UART. `mqtt_brain_routine` turns a
+`relay_routine` is a second, much shorter flow on the other UART. `mqtt_brain_routine` turns a
 command on the relay's topic into a `Signal<bool>`; the routine writes the coil, retries with the
 same back-off the fans use, and publishes the state through `OUT` only once the module has echoed
 the write. It reads the contact back on boot for the same reason the fans' speeds are read back,
-and reports nothing at all rather than a guess when the module cannot be reached. The relay is on
-its own bus because it answers 8N1 and only 8N1 while the fans run 8E1 — see `docs/relay.md`.
+and reports nothing at all rather than a guess when the module cannot be reached. The relay is kept
+off the fans' bus because it answers 8N1 and only 8N1 while they run 8E1 — see `docs/relay.md`. It
+takes the bus lock for one exchange at a time and lets go of it between retries, because it no
+longer has that bus to itself.
+
+`temperature_sensor_routine` (pool of 2, one per sensor address) shares it. The two RS-485
+temperature/humidity sensors answer 9600 8N1, which is the relay's line rather than the fans', and
+the RP2040 has no third UART — so they are on the relay's bus by necessity, and that is why it is
+shared at all. One transaction per sensor every `TEMPERATURE_POLL_INTERVAL` reads both values at
+once, and a failed poll is dropped rather than retried, for the same reasons `sensor_routine`
+drops one. Nothing on the device acts on what they measure; they are published for Home Assistant.
+See `docs/temperature-sensor.md`.
 
 Independently of that flow, `sensor_routine` (pool of 2, one per fan address) polls what the fans
 measure about themselves every `SENSOR_POLL_INTERVAL` and publishes it through `OUT`. It shares the
@@ -210,9 +223,15 @@ be encoded straight into the TCP buffer without intermediate allocation — ther
   the range it shows is that capped one. `LOW` and `MEDIUM` are the thirds of it (`MAX / 6` and
   `MAX / 3`), which makes the button cycle through the same steps the Home Assistant slider shows
   rather than through arbitrary points on it.
-- Fan Modbus addresses start at `0x02`/`0x03`; `0x01` is avoided as a likely factory default.
-- The fans' UART is 19_200 baud, 8 data bits, **even** parity, 1 stop bit. The relay's is 9_600
-  8N1, which is why it is a second UART rather than a third address — its parity is not settable.
+- Fan Modbus addresses start at `0x02`/`0x03`; `0x01` is avoided as a likely factory default. The
+  temperature sensors continue that numbering at `0x04`/`0x05` although they are on the other bus,
+  so one address names one device in the log. They ship at `0x01` and have to be re-addressed with
+  the `serial` tool, one at a time, before both go on the bus.
+- The fans' UART is 19_200 baud, 8 data bits, **even** parity, 1 stop bit. The second bus is 9_600
+  8N1, which is why it is a second UART rather than more addresses on the first — neither the
+  relay's parity nor the sensors' is settable. The relay's configuration is the whole bus's, and
+  `fan-controller/src/temperature_sensor/mod.rs` fails the build if the two bit rates are changed
+  apart.
 - Coils are their own address space: `0x05` writes one and is confirmed by the device echoing the
   request, `0x01` reads a run of them packed into bits. The relay is read eight coils at a time
   although it has one, because that is the only frame its manual prints and the only one it
@@ -248,6 +267,10 @@ cd home_assistant_discovery && cargo test
 cd fan_sensor && cargo test
 ```
 
+```bash
+cd temperature_sensor && cargo test
+```
+
 That is also the way to make firmware logic testable at all: move it into its own `no_std` crate
 and re-export it, the way `fan/mod.rs` re-exports `set_point`. Worth doing for anything with rules
 of its own; not worth it for code that only exists to drive a peripheral.
@@ -276,8 +299,10 @@ cd serial && pnpm test
   cloning; it needs access to that private repo. This is the authority on RadiCal register
   addresses, units and naming.
 - [docs/temperature-sensor.md](docs/temperature-sensor.md) — the Modbus registers and protocol of
-  the RS-485 temperature/humidity sensor. No manufacturer PDF exists for that device, so this
-  file, and the raw text it was formatted from next to it, is the only documentation there is.
+  the RS-485 temperature/humidity sensor, and below it how the controller uses the two of them:
+  which bus and addresses, what is polled, and what has not been checked against the hardware. No
+  manufacturer PDF exists for that device, so this file, and the raw text it was formatted from
+  next to it, is the only documentation there is.
 - [docs/relay.md](docs/relay.md) — the LC-Modbus-1R-D7 relay module as measured on the bench rather
   than as documented: the address and line settings it shipped with, the frames that were actually
   exercised against it, the ASCII banner it sends on power-up, and why its 8N1 framing keeps it off

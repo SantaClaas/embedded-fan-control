@@ -50,8 +50,9 @@ After successful connection to the MQTT broker, the controller sends a discovery
 
 ### 3. What is announced
 
-Two fans, four sensors each, and one switch. The switch is the relay module on the second Modbus
-bus: a plain contact, with no speed and nothing it measures.
+Two fans, four sensors each, one switch, and two more sensors for each of the two temperature and
+humidity sensors on the second bus. The switch is the relay module on that same bus: a plain
+contact, with no speed and nothing it measures.
 
 Its state topic carries what the module confirmed rather than what it was asked for, which is the
 rule the fans follow too. A write that is never acknowledged leaves the last confirmed state
@@ -77,6 +78,18 @@ every speed the fan reports is a fraction of. It retries that read on each poll,
 unreachable at boot fills in on its own. The other three values do not depend on it and appear
 right away.
 
+The two RS-485 temperature and humidity sensors are announced as two sensors each — the air
+temperature in °C and the relative humidity in % — and polled on the same 30 second interval after
+the same 10 second startup delay, which on their bus leaves the relay's contact read to go first.
+Both values of a sensor arrive as one JSON object on one topic, the way a fan's four do, and are
+written with a single decimal because a tenth is the resolution the device has.
+
+Nothing on the controller acts on what they measure. They are announced so Home Assistant can, and
+so that what the fans are being run for is visible next to what they are doing. A failed poll is
+dropped rather than retried, so a sensor that is unplugged goes stale in Home Assistant rather than
+holding up the relay behind it. `docs/temperature-sensor.md` carries the addresses, the registers,
+and what has not been checked against the hardware yet.
+
 ## Wiring
 
 Every pin the firmware uses is baked into the binary. There is no runtime configuration, so moving
@@ -92,6 +105,8 @@ flowchart LR
     FAN1 -- "the same pair, daisy chained" --> FAN2[Fan 2, address 0x03]
     PICO -- "GP7 to DE/RE<br/>GP8 to DI, GP9 to RO<br/>3V3 and GND" --> TRANSCEIVER2[RS-485 transceiver, second bus]
     TRANSCEIVER2 -- "A and B, twisted pair" --> RELAY[Relay module, address 0xFF<br/>own 7-24 V supply]
+    RELAY -- "the same pair, daisy chained" --> TEMPERATURE1[Temperature sensor 1, address 0x04]
+    TEMPERATURE1 -- "the same pair, daisy chained" --> TEMPERATURE2[Temperature sensor 2, address 0x05]
     PROBE[Debug probe, optional] -. "SWCLK, GND, SWDIO" .-> PICO
 ```
 
@@ -149,17 +164,23 @@ early truncates the frame, the fan rejects it on the checksum, and the result lo
 fan that is not answering. The line has to be back in the fan's hands well within the 3.5
 characters of silence it waits before replying, which is about 2 ms at this baud rate.
 
-### RS-485 to the relay module
+### RS-485 to the relay module and the temperature sensors
 
-A second bus rather than two more devices on the fans'. The reason is framing: the fans run 8E1 and
-the relay module answers 8N1 and only 8N1, its parity is not settable at all, and one UART speaks
-one of those at a time. Its baud rate *is* settable, so the two could be made to agree on 19_200 —
-but parity cannot, which settles it. `docs/relay.md` records where that was established on the
-bench.
+A second bus rather than more devices on the fans'. The reason is framing: the fans run 8E1, while
+the relay module and both temperature and humidity sensors answer 8N1 and only 8N1, and one UART
+speaks one of those at a time. Their baud rates *are* settable, so they could be made to agree with
+the fans on 19_200 — but parity cannot be, which settles it. `docs/relay.md` records where that was
+established on the bench for the module, and `docs/temperature-sensor.md` for the sensors.
 
 Everything the fans' bus needs, this one needs too: a 3.3 V transceiver, DE and RE tied together to
-GP7, 120 Ω across A and B at each end, and a third conductor tying the module's RS-485 common back
-to controller ground.
+GP7, 120 Ω across A and B at each end, and a third conductor tying each device's RS-485 common back
+to controller ground. Wire it as a bus like the fans': one pair from the transceiver to the module
+and on from device to device, with the 120 Ω at the two ends of the chain and nothing in between.
+
+The sensors run at 9600 8N1, which is what the port is opened at for the module's sake, and they
+have to be given their addresses — `0x04` and `0x05` — before they are wired in. They ship at
+`0x01`, and two devices at one address answer over each other, so it is one sensor at a time on the
+line for that. The [serial tool](../serial) writes it, and the change is permanent.
 
 Three things are specific to this module:
 
@@ -172,9 +193,11 @@ Three things are specific to this module:
   firmware already running. The Modbus client steps over stray bytes while looking for a response
   header, which is what makes a greeting in front of an answer cost a few milliseconds instead of
   the transaction; a greeting that collides with the answer spoils that exchange outright, which is
-  what the retries are for.
-- **It is at address `0xFF`**, its factory default, and left there. It is alone on this bus, so
-  there is nothing to collide with, and re-addressing writes a permanent change to its flash.
+  what the retries are for. A sensor poll it collides with is dropped instead of retried, and costs
+  a reading rather than a command.
+- **It is at address `0xFF`**, its factory default, and left there. The sensors sharing the bus are
+  at `0x04` and `0x05`, so there is nothing to collide with, and re-addressing writes a permanent
+  change to its flash.
 
 The firmware asks for eight coils when it reads the contact, though the board has one. The module
 is a one-relay variant of an eight-relay design and answers only the eight wide read its manual
