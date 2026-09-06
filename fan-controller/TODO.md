@@ -279,6 +279,15 @@ The speeds are not the same and are not meant to be: holding 78 m³/h took fan 1
 976 rpm, the difference being what their two ducts restrict. Two fans reporting an identical flow
 at different rpm is the system working, not a stuck register.
 
+**The fans overshoot, and far more when slowing down than speeding up.** Measured on 2026-09-06 at
+a two second cadence. Commanded down from 180 to 93 m³/h they dipped to 79 and 74 — some 15 % below
+target — before recovering over about ten seconds. Commanded up from 93 to 210 they peaked at 213,
+1.4 % over, and were done. So a *reduction* in speed costs the house a real, if brief, shortfall in
+ventilation, and an increase costs nothing worth naming. That is the fans' own control loop rather
+than anything the firmware does, and it is visible in Home Assistant's history now that a change is
+sampled every two seconds instead of once. Read a dip right after a speed reduction as this, not as
+a fault.
+
 `D033` is the flow *achieved* rather than the flow commanded — it converged on 78 from above as
 the fans spun down, reading 82 and 84 sixteen seconds after the change and disagreeing between the
 fans while they were still ramping. That is what makes it worth having: at steady state it should
