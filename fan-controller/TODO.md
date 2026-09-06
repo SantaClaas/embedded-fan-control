@@ -12,9 +12,12 @@ Everything in the priority section is done: the four ranked items, the cheap win
 polling that followed them. They are kept here rather than deleted because each one records what was
 actually wrong, what was decided, and what has never run on hardware — the write-ups are the closest
 thing this firmware has to a changelog with reasons. What follows them is what has been asked for
-but not started, and then the unranked inventory to pick from. The one thing worth doing before
-anything else is flashing the device and watching the log, because none of the finished items have
-run on hardware.
+but not started, and then the unranked inventory to pick from.
+
+All of it has now run on hardware, as of 2026-09-06: both Modbus buses answer, every sensor reaches
+Home Assistant, and the discovery payload is accepted. What has *not* been exercised is the failure
+paths — the reconnect loop, the retry back-off, and the out-of-sync LED pattern all still need a
+pulled cable to prove.
 
 ---
 
