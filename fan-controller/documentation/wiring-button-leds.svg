@@ -8,7 +8,7 @@
   </defs>
   <rect width="900" height="480" fill="#ffffff"/>
   <rect x="40" y="70" width="200" height="330" rx="6" fill="#f6f6f3" stroke="#3a3a3a" stroke-width="1.5"/>
-  <text x="140.0" y="94" text-anchor="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#1a1a1a">Raspberry Pi Pico W</text>
+  <text x="140.0" y="94" text-anchor="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15.0" font-weight="600" fill="#1a1a1a">Raspberry Pi Pico W</text>
   <text x="232" y="124.5" text-anchor="end" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" fill="#1a1a1a">27 GP21</text>
   <text x="232" y="194.5" text-anchor="end" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" fill="#1a1a1a">26 GP20</text>
   <text x="232" y="279.5" text-anchor="end" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" fill="#1a1a1a">24 GP18</text>

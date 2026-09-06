@@ -262,8 +262,11 @@ cd serial && pnpm test
 ## Reference documents
 
 - [fan-controller/documentation.md](fan-controller/documentation.md) — the LED status protocol
-  (which blink pattern means which fan speed / out-of-sync state) and the Home Assistant
-  onboarding sequence. Update it when LED behaviour changes.
+  (which blink pattern means which fan speed / out-of-sync state), the Home Assistant onboarding
+  sequence, and the wiring down to the pin. Update it when LED behaviour changes. Its wiring
+  diagrams are SVGs written by `fan-controller/documentation/wiring.py` (standard library only,
+  run from that directory) — edit the coordinates there and commit what it writes, rather than
+  editing the SVGs.
 - [fan-controller/TODO.md](fan-controller/TODO.md) — the working TODO list for the firmware:
   every outstanding item with source line references and a suggested priority order. Keep it in
   sync when adding or resolving a `//TODO` in `fan-controller/src/`.

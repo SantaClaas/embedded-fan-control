@@ -82,18 +82,13 @@ right away.
 Every pin the firmware uses is baked into the binary. There is no runtime configuration, so moving
 a wire means editing the peripheral destructuring at the top of `main.rs` and flashing again.
 
-```mermaid
-flowchart LR
-    BUTTON[Button<br/>momentary, to GND] -- GP18 --> PICO
-    PICO -- GP21 --> LED1[LED 1, fan 1]
-    PICO -- GP20 --> LED2[LED 2, fan 2]
-    PICO[Raspberry Pi Pico W] -- "GP4 to DE/RE<br/>GP12 to DI, GP13 to RO<br/>3V3 and GND" --> TRANSCEIVER[MAX485 module]
-    TRANSCEIVER -- "A and B, twisted pair" --> FAN1[Fan 1, address 0x02]
-    FAN1 -- "the same pair, daisy chained" --> FAN2[Fan 2, address 0x03]
-    PICO -- "GP7 to DE/RE<br/>GP8 to DI, GP9 to RO<br/>3V3 and GND" --> TRANSCEIVER2[MAX485 module, second bus]
-    TRANSCEIVER2 -- "A and B, twisted pair" --> RELAY[Relay module, address 0xFF<br/>own 7-24 V supply]
-    PROBE[Debug probe, optional] -. "SWCLK, GND, SWDIO" .-> PICO
-```
+![Everything on one sheet: the Pico W, both MAX485 modules on their own UARTs, the two fans, the relay module and its supply, the button and the LEDs, and the ground net they share](documentation/wiring-overview.svg)
+
+That is the whole thing on one sheet, down to the pin. It is a lot to take in at once, so
+[Every pin, device by device](#every-pin-device-by-device) below draws the same wiring one bus
+at a time, and the tables after it list every pin of every device, including the ones that stay
+empty. A debug probe, when one is attached, is three more wires to the connector on the bottom
+edge: SWCLK, GND and SWDIO.
 
 ### Pin assignment
 
@@ -124,8 +119,8 @@ this build has no reason to take them.
 
 The table above is the controller's side of each wire. This is the same wiring seen from every
 device on the bench, including the pins that stay empty, so a board can be checked against it
-without inferring anything. One bus at a time, because a single picture of all of it is a picture
-of a ground net with everything else hidden behind it.
+without inferring anything. The sheet at the top of this section has all of it at once; these take
+it one bus at a time.
 
 The fans' bus. GP4 arbitrates it, UART0 carries it, and the two fans share one pair:
 
@@ -145,8 +140,9 @@ return, and the far device needs it as the reference its differential pair is me
 of it — the Pico's GND, both transceivers', the LED cathodes, the button, the fans' RS-485 common
 and the relay module's supply ground — is the same net.
 
-The three files are in [documentation](documentation), and being SVG they are text: a wire, a
-label or a pin can be moved by editing them.
+All four drawings are written by [documentation/wiring.py](documentation/wiring.py), which takes
+coordinates rather than SVG paths, so moving a wire is an edit to a number. It needs nothing but
+Python: `cd fan-controller/documentation && python3 wiring.py`, then commit what it writes.
 
 #### Raspberry Pi Pico W
 
