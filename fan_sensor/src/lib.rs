@@ -42,6 +42,10 @@ pub const POWER_AND_AIR_LENGTH: usize = 13;
 mod status {
     /// `D010`, section 3.8
     pub(super) const ACTUAL_SPEED: usize = 0x0;
+    /// `D011`, section 3.9
+    pub(super) const MOTOR_STATUS: usize = 0x1;
+    /// `D012`, section 3.10
+    pub(super) const WARNING: usize = 0x2;
     /// `D016`, section 3.13
     pub(super) const MOTOR_TEMPERATURE: usize = 0x6;
     /// `D017`, section 3.14
@@ -59,6 +63,109 @@ mod power_and_air {
     pub(super) const AIR_HUMIDITY: usize = 0x8;
     /// `D033`, section 3.17.5
     pub(super) const VOLUME_FLOW: usize = 0xC;
+}
+
+/// What the fan says is wrong with it, as the manual's own abbreviations.
+///
+/// Both registers are bit fields printed in section 3.9 and 3.10 as two rows of eight, most
+/// significant row first. Only some bits carry a meaning; the manual prints the rest as `0`.
+/// A bit set outside the documented ones is reported as raw hex rather than swallowed, because a
+/// fan reporting something this does not know about is worth seeing rather than reading as healthy
+fn write_flags(
+    formatter: &mut core::fmt::Formatter<'_>,
+    value: u16,
+    flags: &[(u16, &'static str)],
+) -> core::fmt::Result {
+    let mut documented = 0;
+    let mut written = false;
+
+    for (bit, name) in flags {
+        documented |= 1 << bit;
+
+        if value & (1 << bit) == 0 {
+            continue;
+        }
+
+        if written {
+            formatter.write_str(", ")?;
+        }
+        formatter.write_str(name)?;
+        written = true;
+    }
+
+    let undocumented = value & !documented;
+    if undocumented != 0 {
+        if written {
+            formatter.write_str(", ")?;
+        }
+        write!(formatter, "{undocumented:#06X}")?;
+        written = true;
+    }
+
+    if !written {
+        formatter.write_str("OK")?;
+    }
+
+    Ok(())
+}
+
+/// `D011`, section 3.9. A set bit is a fault present on the fan right now
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MotorStatus(pub u16);
+
+impl MotorStatus {
+    /// Section 3.9, most significant bit first. `FB` is set alongside whichever fault actually
+    /// happened — the manual: "Fan Bad wird bei jedem Fehler gesetzt" — so it is a summary rather
+    /// than a fault of its own
+    const FLAGS: [(u16, &'static str); 5] = [
+        (12, "UzLow"),
+        (7, "BLK"),
+        (5, "TFM"),
+        (4, "FB"),
+        (3, "SKF"),
+    ];
+
+    /// Whether the fan is reporting no fault at all. Any bit set means something, including one
+    /// the manual does not document
+    pub fn is_healthy(&self) -> bool {
+        self.0 == 0
+    }
+}
+
+impl core::fmt::Display for MotorStatus {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write_flags(formatter, self.0, &Self::FLAGS)
+    }
+}
+
+/// `D012`, section 3.10. The same shape as [`MotorStatus`], one step before the matching fault:
+/// "der Grenzwert für die Fehlermeldung ist fast erreicht"
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Warning(pub u16);
+
+impl Warning {
+    /// Section 3.10, most significant bit first
+    const FLAGS: [(u16, &'static str); 6] = [
+        (12, "UzHigh"),
+        (10, "Kabelbruch"),
+        (9, "n_Low"),
+        (6, "UzLow"),
+        (5, "TEI_high"),
+        (4, "TM_high"),
+    ];
+
+    /// Whether the fan is reporting nothing to watch
+    pub fn is_healthy(&self) -> bool {
+        self.0 == 0
+    }
+}
+
+impl core::fmt::Display for Warning {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write_flags(formatter, self.0, &Self::FLAGS)
+    }
 }
 
 /// A quantity the fan reports in tenths of its unit, carried as those tenths rather than as a
@@ -86,6 +193,10 @@ pub struct Reading {
     /// The reported speed is a fraction of that maximum, so without it the raw value cannot be
     /// turned into a rate at all
     pub speed: Option<u16>,
+    /// What the fan says is currently wrong with it, if anything
+    pub motor_status: MotorStatus,
+    /// What the fan says is close to going wrong
+    pub warning: Warning,
     /// Degrees celsius, and genuinely signed: a fan in an unheated loft reports below zero
     pub motor_temperature: i16,
     /// Degrees celsius, measured inside the electronics housing rather than in the air stream
@@ -113,6 +224,8 @@ pub fn decode(
 ) -> Reading {
     Reading {
         speed: maximum_speed.map(|maximum| speed(status[status::ACTUAL_SPEED], maximum)),
+        motor_status: MotorStatus(status[status::MOTOR_STATUS]),
+        warning: Warning(status[status::WARNING]),
         motor_temperature: status[status::MOTOR_TEMPERATURE] as i16,
         electronics_temperature: status[status::ELECTRONICS_TEMPERATURE] as i16,
         power: power_and_air_block[power_and_air::CURRENT_POWER],
@@ -145,7 +258,7 @@ fn relative_humidity(raw: u16) -> Tenths {
 
 /// Enough for every field at its longest, including the minus signs and a `null` speed. Proven by
 /// `json_fits_the_worst_case`
-pub const JSON_CAPACITY: usize = 192;
+pub const JSON_CAPACITY: usize = 320;
 
 impl Reading {
     /// The payload Home Assistant reads, as one JSON object per fan so that every value arrives in
@@ -172,6 +285,15 @@ impl Reading {
             )
         })
         .and_then(|()| {
+            // The flag names are the manual's own abbreviations, which contain nothing JSON has to
+            // escape
+            write!(
+                json,
+                ",\"motor_status\":\"{}\",\"warning\":\"{}\"",
+                self.motor_status, self.warning
+            )
+        })
+        .and_then(|()| {
             write!(
                 json,
                 ",\"air_temperature\":{},\"air_humidity\":{},\"volume_flow\":{}}}",
@@ -192,6 +314,12 @@ mod tests {
 
     /// The crate is `no_std`, so `ToString` is not available. Formatting into a small heapless
     /// buffer exercises the same `Display` impl the JSON payload goes through
+    fn format_flags(flags: impl core::fmt::Display) -> heapless::String<64> {
+        let mut buffer = heapless::String::new();
+        write!(buffer, "{flags}").unwrap();
+        buffer
+    }
+
     fn format(tenths: Tenths) -> heapless::String<16> {
         let mut buffer = heapless::String::new();
         write!(buffer, "{tenths}").unwrap();
@@ -245,6 +373,71 @@ mod tests {
         assert_eq!(format(Tenths(i16::MIN)), "-3276.8");
     }
 
+    /// The manual prints section 3.9 as two rows of eight, most significant row first, so the
+    /// flags are checked against whole 16 bit words rather than against the bit numbers this
+    /// transcribed them into — a transcription error would survive the latter
+    #[test]
+    fn motor_status_bits_are_where_the_manual_puts_them() {
+        assert_eq!(format_flags(MotorStatus(0b0001_0000_0000_0000)), "UzLow");
+        assert_eq!(format_flags(MotorStatus(0b0000_0000_1000_0000)), "BLK");
+        assert_eq!(format_flags(MotorStatus(0b0000_0000_0010_0000)), "TFM");
+        assert_eq!(format_flags(MotorStatus(0b0000_0000_0001_0000)), "FB");
+        assert_eq!(format_flags(MotorStatus(0b0000_0000_0000_1000)), "SKF");
+    }
+
+    /// Section 3.10, checked the same way
+    #[test]
+    fn warning_bits_are_where_the_manual_puts_them() {
+        assert_eq!(format_flags(Warning(0b0001_0000_0000_0000)), "UzHigh");
+        assert_eq!(format_flags(Warning(0b0000_0100_0000_0000)), "Kabelbruch");
+        assert_eq!(format_flags(Warning(0b0000_0010_0000_0000)), "n_Low");
+        assert_eq!(format_flags(Warning(0b0000_0000_0100_0000)), "UzLow");
+        assert_eq!(format_flags(Warning(0b0000_0000_0010_0000)), "TEI_high");
+        assert_eq!(format_flags(Warning(0b0000_0000_0001_0000)), "TM_high");
+    }
+
+    /// A healthy fan is the common case and has to read as such rather than as an empty string
+    #[test]
+    fn nothing_set_reads_as_healthy() {
+        assert!(MotorStatus(0).is_healthy());
+        assert!(Warning(0).is_healthy());
+        assert_eq!(format_flags(MotorStatus(0)), "OK");
+        assert_eq!(format_flags(Warning(0)), "OK");
+    }
+
+    /// `FB` accompanies whichever fault actually happened, so the common real reading is two bits,
+    /// listed most significant first the way the manual prints them
+    #[test]
+    fn several_faults_are_listed_together() {
+        assert_eq!(format_flags(MotorStatus(0b0000_0000_1001_0000)), "BLK, FB");
+        assert_eq!(
+            format_flags(MotorStatus(0b0001_0000_0011_1000)),
+            "UzLow, TFM, FB, SKF"
+        );
+    }
+
+    /// The manual prints the remaining bits as `0`, so a fan setting one is saying something this
+    /// does not understand. Reading that as healthy would be the worst of the available answers
+    #[test]
+    fn an_undocumented_bit_is_reported_rather_than_swallowed() {
+        assert!(!MotorStatus(0b0000_0000_0000_0001).is_healthy());
+        assert_eq!(format_flags(MotorStatus(0b0000_0000_0000_0001)), "0x0001");
+        assert_eq!(format_flags(MotorStatus(0b0000_0000_1000_0001)), "BLK, 0x0001");
+    }
+
+    /// Both registers are read as part of the status run rather than asked for separately
+    #[test]
+    fn the_status_and_warning_come_out_of_the_status_run() {
+        let mut status = [0; STATUS_LENGTH];
+        status[status::MOTOR_STATUS] = 0b0000_0000_1001_0000;
+        status[status::WARNING] = 0b0000_0000_0001_0000;
+
+        let reading = decode(&status, &[0; POWER_AND_AIR_LENGTH], None);
+
+        assert_eq!(reading.motor_status, MotorStatus(0b0000_0000_1001_0000));
+        assert_eq!(reading.warning, Warning(0b0000_0000_0001_0000));
+    }
+
     /// Both temperatures are signed, which the raw register does not say
     #[test]
     fn temperatures_below_zero_stay_below_zero() {
@@ -287,6 +480,8 @@ mod tests {
             reading,
             Reading {
                 speed: Some(1_500),
+                motor_status: MotorStatus(0),
+                warning: Warning(0),
                 motor_temperature: 42,
                 electronics_temperature: 38,
                 power: 25,
@@ -301,6 +496,8 @@ mod tests {
     fn serializes_to_json() {
         let reading = Reading {
             speed: Some(1_500),
+            motor_status: MotorStatus(0),
+            warning: Warning(0),
             motor_temperature: 42,
             electronics_temperature: 38,
             power: 25,
@@ -311,7 +508,7 @@ mod tests {
 
         assert_eq!(
             reading.to_json().as_str(),
-            r#"{"speed":1500,"motor_temperature":42,"electronics_temperature":38,"power":25,"air_temperature":21.5,"air_humidity":47.3,"volume_flow":120}"#
+            r#"{"speed":1500,"motor_temperature":42,"electronics_temperature":38,"power":25,"motor_status":"OK","warning":"OK","air_temperature":21.5,"air_humidity":47.3,"volume_flow":120}"#
         );
     }
 
@@ -320,6 +517,8 @@ mod tests {
     fn serializes_an_unknown_speed_as_null() {
         let reading = Reading {
             speed: None,
+            motor_status: MotorStatus(1 << 7 | 1 << 4),
+            warning: Warning(1 << 4),
             motor_temperature: -5,
             electronics_temperature: 38,
             power: 25,
@@ -330,7 +529,7 @@ mod tests {
 
         assert_eq!(
             reading.to_json().as_str(),
-            r#"{"speed":null,"motor_temperature":-5,"electronics_temperature":38,"power":25,"air_temperature":-0.3,"air_humidity":80.2,"volume_flow":0}"#
+            r#"{"speed":null,"motor_temperature":-5,"electronics_temperature":38,"power":25,"motor_status":"BLK, FB","warning":"TM_high","air_temperature":-0.3,"air_humidity":80.2,"volume_flow":0}"#
         );
     }
 
@@ -340,6 +539,8 @@ mod tests {
     fn json_fits_the_worst_case() {
         let reading = Reading {
             speed: Some(u16::MAX),
+            motor_status: MotorStatus(u16::MAX),
+            warning: Warning(u16::MAX),
             motor_temperature: i16::MIN,
             electronics_temperature: i16::MIN,
             power: u16::MAX,

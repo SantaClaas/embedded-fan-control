@@ -91,6 +91,10 @@ pub mod fan_controller {
             pub const AIR_TEMPERATURE: &str = formatcp!("{UNIQUE_ID}/sensors/air-temperature");
             pub const AIR_HUMIDITY: &str = formatcp!("{UNIQUE_ID}/sensors/air-humidity");
             pub const VOLUME_FLOW: &str = formatcp!("{UNIQUE_ID}/sensors/volume-flow");
+            /// What the fan says is wrong with it, and what it says is close to going wrong.
+            /// Read out of the same status run as the speed and the temperatures
+            pub const MOTOR_STATUS: &str = formatcp!("{UNIQUE_ID}/sensors/motor-status");
+            pub const WARNING: &str = formatcp!("{UNIQUE_ID}/sensors/warning");
         }
     }
 
@@ -142,6 +146,10 @@ pub mod fan_controller {
             pub const AIR_TEMPERATURE: &str = formatcp!("{UNIQUE_ID}/sensors/air-temperature");
             pub const AIR_HUMIDITY: &str = formatcp!("{UNIQUE_ID}/sensors/air-humidity");
             pub const VOLUME_FLOW: &str = formatcp!("{UNIQUE_ID}/sensors/volume-flow");
+            /// What the fan says is wrong with it, and what it says is close to going wrong.
+            /// Read out of the same status run as the speed and the temperatures
+            pub const MOTOR_STATUS: &str = formatcp!("{UNIQUE_ID}/sensors/motor-status");
+            pub const WARNING: &str = formatcp!("{UNIQUE_ID}/sensors/warning");
         }
     }
 }

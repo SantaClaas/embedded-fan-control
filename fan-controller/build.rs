@@ -123,19 +123,22 @@ struct SensorIdentifiers {
     air_temperature: &'static str,
     air_humidity: &'static str,
     volume_flow: &'static str,
+    motor_status: &'static str,
+    warning: &'static str,
 }
 
-/// What a fan reports: four values about itself, and three about the air it is moving.
+/// What a fan reports: what it measures about itself, what it measures of the air it is
+/// moving, and what it says is wrong with it.
 ///
 /// Every one of them reads the same topic and picks its value out of the JSON object published
-/// there, so a poll costs one publish rather than seven. The keys the templates use are the field
+/// there, so a poll costs one publish rather than nine. The keys the templates use are the field
 /// names `fan_sensor::Reading` serializes, which is the one place they have to agree.
 ///
 /// Built per fan rather than written out twice, because only the identifiers and the name differ
 fn create_fan_sensor_components(
     fan_name: &str,
     identifiers: SensorIdentifiers,
-) -> [(String, Component); 7] {
+) -> [(String, Component); 9] {
     [
         (
             identifiers.speed.to_string(),
@@ -225,6 +228,35 @@ fn create_fan_sensor_components(
                 unique_id: Some(identifiers.volume_flow),
             },
         ),
+        // The two bit fields the fan sets when something is wrong, decoded on the device into the
+        // manual's own abbreviations. Text rather than a number, because "BLK, FB" says what
+        // `0x0090` does not, and plain sensors rather than binary ones because *which* fault it is
+        // matters as much as whether there is one. A healthy fan reads `OK`
+        (
+            identifiers.motor_status.to_string(),
+            Component::Sensor {
+                name: Some(format!("{fan_name} motor status")),
+                state_topic: Some(identifiers.state),
+                device_class: None,
+                // No state class: these are text, and Home Assistant keeps statistics for numbers
+                state_class: None,
+                unit_of_measurement: None,
+                value_template: Some("{{ value_json.motor_status }}"),
+                unique_id: Some(identifiers.motor_status),
+            },
+        ),
+        (
+            identifiers.warning.to_string(),
+            Component::Sensor {
+                name: Some(format!("{fan_name} warning")),
+                state_topic: Some(identifiers.state),
+                device_class: None,
+                state_class: None,
+                unit_of_measurement: None,
+                value_template: Some("{{ value_json.warning }}"),
+                unique_id: Some(identifiers.warning),
+            },
+        ),
     ]
 }
 
@@ -289,6 +321,8 @@ fn create_components() -> BTreeMap<String, Component> {
             air_temperature: topic::fan_controller::fan_1::sensor::AIR_TEMPERATURE,
             air_humidity: topic::fan_controller::fan_1::sensor::AIR_HUMIDITY,
             volume_flow: topic::fan_controller::fan_1::sensor::VOLUME_FLOW,
+            motor_status: topic::fan_controller::fan_1::sensor::MOTOR_STATUS,
+            warning: topic::fan_controller::fan_1::sensor::WARNING,
         },
     ));
 
@@ -304,6 +338,8 @@ fn create_components() -> BTreeMap<String, Component> {
             air_temperature: topic::fan_controller::fan_2::sensor::AIR_TEMPERATURE,
             air_humidity: topic::fan_controller::fan_2::sensor::AIR_HUMIDITY,
             volume_flow: topic::fan_controller::fan_2::sensor::VOLUME_FLOW,
+            motor_status: topic::fan_controller::fan_2::sensor::MOTOR_STATUS,
+            warning: topic::fan_controller::fan_2::sensor::WARNING,
         },
     ));
 
