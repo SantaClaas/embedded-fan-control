@@ -128,9 +128,9 @@ idles low, which leaves the transceiver receiving and the fans owning the line, 
 for the few hundred microseconds a request takes.
 
 > [!IMPORTANT]
-> Use a transceiver rated for 3.3 V, such as a MAX3485 or an SN65HVD72. A real MAX485 is a 5 V
-> part and its RO output would then swing to 5 V into GP13, which is not 5 V tolerant. Many of the
-> cheap blue breakout boards sold as "MAX485 modules" are 5 V only.
+> Use a transceiver rated for 3.3 V, such as an SN65HVD72. A real MAX485 is a 5 V part and its RO
+> output would then swing to 5 V into GP13, which is not 5 V tolerant. Many of the cheap blue
+> breakout boards sold as "MAX485 modules" are 5 V only.
 
 - Wire it as a bus, not a star: one pair from the transceiver to fan 1, and on from fan 1 to fan 2.
 - Terminate both ends with 120 Ω across A and B, one at the transceiver and one at the last fan,
