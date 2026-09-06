@@ -69,7 +69,7 @@ pub mod fan_controller {
             pub const COMMAND: &str = formatcp!("{UNIQUE_ID}/speed/percentage");
         }
 
-        /// All four sensor values a fan reports arrive as one JSON object on this topic, so a poll
+        /// Every sensor value a fan reports arrives as one JSON object on this topic, so a poll
         /// costs a single publish and Home Assistant picks each value out with a value template
         pub mod sensor {
             use super::UNIQUE_ID;
@@ -77,7 +77,7 @@ pub mod fan_controller {
 
             pub const STATE: &str = formatcp!("{UNIQUE_ID}/sensors/state");
 
-            /// The identifiers Home Assistant tells the four sensors apart by. They are not
+            /// The identifiers Home Assistant tells the sensors apart by. They are not
             /// topics, but they are composed from the same fan identifier and have to stay unique
             /// alongside it, so they belong next to it rather than in the build script
             pub const SPEED: &str = formatcp!("{UNIQUE_ID}/sensors/speed");
@@ -85,6 +85,12 @@ pub mod fan_controller {
             pub const ELECTRONICS_TEMPERATURE: &str =
                 formatcp!("{UNIQUE_ID}/sensors/electronics-temperature");
             pub const POWER: &str = formatcp!("{UNIQUE_ID}/sensors/power");
+            /// The air the fan is moving rather than the fan itself: the first two come from the
+            /// temperature/humidity sensor wired to it, the third from what the fan measures of
+            /// the flow through it
+            pub const AIR_TEMPERATURE: &str = formatcp!("{UNIQUE_ID}/sensors/air-temperature");
+            pub const AIR_HUMIDITY: &str = formatcp!("{UNIQUE_ID}/sensors/air-humidity");
+            pub const VOLUME_FLOW: &str = formatcp!("{UNIQUE_ID}/sensors/volume-flow");
         }
     }
 
@@ -114,7 +120,7 @@ pub mod fan_controller {
             pub const COMMAND: &str = formatcp!("{UNIQUE_ID}/speed/percentage");
         }
 
-        /// All four sensor values a fan reports arrive as one JSON object on this topic, so a poll
+        /// Every sensor value a fan reports arrives as one JSON object on this topic, so a poll
         /// costs a single publish and Home Assistant picks each value out with a value template
         pub mod sensor {
             use super::UNIQUE_ID;
@@ -122,7 +128,7 @@ pub mod fan_controller {
 
             pub const STATE: &str = formatcp!("{UNIQUE_ID}/sensors/state");
 
-            /// The identifiers Home Assistant tells the four sensors apart by. They are not
+            /// The identifiers Home Assistant tells the sensors apart by. They are not
             /// topics, but they are composed from the same fan identifier and have to stay unique
             /// alongside it, so they belong next to it rather than in the build script
             pub const SPEED: &str = formatcp!("{UNIQUE_ID}/sensors/speed");
@@ -130,6 +136,12 @@ pub mod fan_controller {
             pub const ELECTRONICS_TEMPERATURE: &str =
                 formatcp!("{UNIQUE_ID}/sensors/electronics-temperature");
             pub const POWER: &str = formatcp!("{UNIQUE_ID}/sensors/power");
+            /// The air the fan is moving rather than the fan itself: the first two come from the
+            /// temperature/humidity sensor wired to it, the third from what the fan measures of
+            /// the flow through it
+            pub const AIR_TEMPERATURE: &str = formatcp!("{UNIQUE_ID}/sensors/air-temperature");
+            pub const AIR_HUMIDITY: &str = formatcp!("{UNIQUE_ID}/sensors/air-humidity");
+            pub const VOLUME_FLOW: &str = formatcp!("{UNIQUE_ID}/sensors/volume-flow");
         }
     }
 }

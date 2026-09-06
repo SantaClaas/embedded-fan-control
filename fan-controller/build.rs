@@ -111,28 +111,31 @@ fn get_git_hash() -> Result<Rc<str>, GitHashError> {
     Ok(Rc::from(str::from_utf8(&output.stdout)?.trim()))
 }
 
-/// Which identifiers one fan's four sensors are announced under. All of them are composed from
-/// that fan's identifier in the `topic` crate, so the two fans differ only in what is passed here
+/// Which identifiers one fan's sensors are announced under. All of them are composed from that
+/// fan's identifier in the `topic` crate, so the two fans differ only in what is passed here
 struct SensorIdentifiers {
-    /// The topic all five values arrive on, as one JSON object
+    /// The topic every value arrives on, as one JSON object
     state: &'static str,
     speed: &'static str,
     motor_temperature: &'static str,
     electronics_temperature: &'static str,
     power: &'static str,
+    air_temperature: &'static str,
+    air_humidity: &'static str,
+    volume_flow: &'static str,
 }
 
-/// The four values a fan reports about itself.
+/// What a fan reports: four values about itself, and three about the air it is moving.
 ///
 /// Every one of them reads the same topic and picks its value out of the JSON object published
-/// there, so a poll costs one publish rather than four. The keys the templates use are the field
+/// there, so a poll costs one publish rather than seven. The keys the templates use are the field
 /// names `fan_sensor::Reading` serializes, which is the one place they have to agree.
 ///
 /// Built per fan rather than written out twice, because only the identifiers and the name differ
 fn create_fan_sensor_components(
     fan_name: &str,
     identifiers: SensorIdentifiers,
-) -> [(String, Component); 4] {
+) -> [(String, Component); 7] {
     [
         (
             identifiers.speed.to_string(),
@@ -183,11 +186,50 @@ fn create_fan_sensor_components(
                 unique_id: Some(identifiers.power),
             },
         ),
+        // The air rather than the fan. The first two come from the temperature/humidity sensor
+        // wired to the fan (`D02E` / `D02F`), the third from what the fan measures of the flow
+        // through it (`D033`)
+        (
+            identifiers.air_temperature.to_string(),
+            Component::Sensor {
+                name: Some(format!("{fan_name} air temperature")),
+                state_topic: Some(identifiers.state),
+                device_class: Some(DeviceClass::Temperature),
+                state_class: Some(StateClass::Measurement),
+                unit_of_measurement: Some("°C"),
+                value_template: Some("{{ value_json.air_temperature }}"),
+                unique_id: Some(identifiers.air_temperature),
+            },
+        ),
+        (
+            identifiers.air_humidity.to_string(),
+            Component::Sensor {
+                name: Some(format!("{fan_name} air humidity")),
+                state_topic: Some(identifiers.state),
+                device_class: Some(DeviceClass::Humidity),
+                state_class: Some(StateClass::Measurement),
+                unit_of_measurement: Some("%"),
+                value_template: Some("{{ value_json.air_humidity }}"),
+                unique_id: Some(identifiers.air_humidity),
+            },
+        ),
+        (
+            identifiers.volume_flow.to_string(),
+            Component::Sensor {
+                name: Some(format!("{fan_name} air flow")),
+                state_topic: Some(identifiers.state),
+                device_class: Some(DeviceClass::VolumeFlowRate),
+                state_class: Some(StateClass::Measurement),
+                unit_of_measurement: Some("m³/h"),
+                value_template: Some("{{ value_json.volume_flow }}"),
+                unique_id: Some(identifiers.volume_flow),
+            },
+        ),
     ]
 }
 
-/// Everything the fan controller announces to Home Assistant: the two fans, and the four sensors
-/// each of them reports
+/// Everything the fan controller announces to Home Assistant: the two fans, the relay, and the
+/// sensors each fan reports
 fn create_components() -> BTreeMap<String, Component> {
     let mut components = BTreeMap::from([
             // Fan 1
@@ -244,6 +286,9 @@ fn create_components() -> BTreeMap<String, Component> {
             electronics_temperature:
                 topic::fan_controller::fan_1::sensor::ELECTRONICS_TEMPERATURE,
             power: topic::fan_controller::fan_1::sensor::POWER,
+            air_temperature: topic::fan_controller::fan_1::sensor::AIR_TEMPERATURE,
+            air_humidity: topic::fan_controller::fan_1::sensor::AIR_HUMIDITY,
+            volume_flow: topic::fan_controller::fan_1::sensor::VOLUME_FLOW,
         },
     ));
 
@@ -256,6 +301,9 @@ fn create_components() -> BTreeMap<String, Component> {
             electronics_temperature:
                 topic::fan_controller::fan_2::sensor::ELECTRONICS_TEMPERATURE,
             power: topic::fan_controller::fan_2::sensor::POWER,
+            air_temperature: topic::fan_controller::fan_2::sensor::AIR_TEMPERATURE,
+            air_humidity: topic::fan_controller::fan_2::sensor::AIR_HUMIDITY,
+            volume_flow: topic::fan_controller::fan_2::sensor::VOLUME_FLOW,
         },
     ));
 

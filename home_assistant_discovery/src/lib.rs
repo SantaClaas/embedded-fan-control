@@ -73,12 +73,16 @@ pub struct Origin {
 
 /// Device classes added as needed based on https://www.home-assistant.io/integrations/sensor/#device-class
 #[derive(Serialize)]
-#[serde(rename_all = "lowercase")]
+// `snake_case` rather than `lowercase` because the multi-word classes are separated by underscores
+// in Home Assistant, and the single-word ones serialize the same either way
+#[serde(rename_all = "snake_case")]
 pub enum DeviceClass {
     Temperature,
     Humidity,
     Power,
     Energy,
+    /// A rate of volume over time, which Home Assistant accepts in `m³/h` among others
+    VolumeFlowRate,
 }
 
 /// What kind of quantity a sensor reports over time, which is what decides whether Home Assistant

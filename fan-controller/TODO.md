@@ -237,11 +237,32 @@ discovery payload and from `fan_sensor::Reading`; the run at `D027` is now a sin
 named after the power draw it actually carries. That leaves 10 components in the payload rather
 than the 12 described above.
 
-Still open in the same area: the temperature/humidity sensor inputs (`D02E`-`D031`) and the PT1000
-inputs (`D038`/`D039`) are not read, because they only report anything if sensors are physically
-wired to the fans. The motor status (`D011`) and warning (`D012`) bitfields are read as part of the
-status run and thrown away; decoding them would give Home Assistant a real diagnostic instead of
-inference from a temperature.
+**Report the air as well as the fan** — done, `fan_sensor/`, `topic/`, `build.rs`, `src/main.rs`
+
+The temperature/humidity sensor inputs were written off above as reporting nothing, on the
+assumption that no sensor was wired to the fans. Reading them with the `serial` tool showed real
+values, so the sensor 1 pair (`D02E`/`D02F`, section 3.17.3) and the volume flow in m³/h (`D033`,
+section 3.17.5) are now polled and announced, three components per fan. Sensor 1 rather than
+sensor 2 because it is the one the fan's own mass flow calculation uses.
+
+Both of the sensor's values are finer than the fan's own: the temperature is signed *tenths* of a
+degree and the humidity is a fraction of `65536` rather than of 100. They are carried as tenths in
+a `Tenths` newtype and formatted by hand, because the RP2040 has no floating point unit and a tenth
+is exactly what the sensor resolves. The awkward case is `-0.5`, whose whole part is zero and so
+loses its sign to the division; `Tenths` writes the sign separately, and a test holds it there.
+
+The run at `D027` grew from the single register it had been shrunk to back to `D027`-`D033`, so all
+three arrive without a third round trip. It spans `D02B`-`D02D`, which the manual's register table
+does not list at all — safe for the same reason the status run is, which has always spanned the
+equally unlisted `D015`. The payload went from 10 components to 16 and past the 4 kB send buffer,
+which the compile-time assertion caught; `SEND_BUFFER_SIZE` is now 8 kB against a 5.3 kB payload.
+
+Still open in the same area: the second temperature/humidity sensor (`D030`/`D031`), the vane
+anemometer speed (`D032`) and the mass flow (`D034`), none of which have been checked for whether
+they carry anything, and the PT1000 inputs (`D038`/`D039`), which have a documented sentinel for
+being unwired that the temperature/humidity pair does not. The motor status (`D011`) and warning
+(`D012`) bitfields are read as part of the status run and thrown away; decoding them would give
+Home Assistant a real diagnostic instead of inference from a temperature.
 
 ### Cheap win worth slotting in anywhere
 

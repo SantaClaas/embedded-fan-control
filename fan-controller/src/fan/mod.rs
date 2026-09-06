@@ -79,9 +79,10 @@ pub(super) mod input_register {
     pub(crate) const STATUS: modbus::register::Address =
         modbus::register::Address::new(super::sensor::STATUS_START);
 
-    /// The run holding the current power draw
-    pub(crate) const POWER: modbus::register::Address =
-        modbus::register::Address::new(super::sensor::POWER_START);
+    /// The run holding the current power draw, the air's temperature and humidity, and the flow
+    /// through the fan
+    pub(crate) const POWER_AND_AIR: modbus::register::Address =
+        modbus::register::Address::new(super::sensor::POWER_AND_AIR_START);
 }
 
 #[derive(Clone, Copy)]

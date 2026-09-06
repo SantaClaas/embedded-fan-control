@@ -21,7 +21,7 @@ pub(crate) enum SendError<T: Debug + Format, E> {
 /// How much room a packet is encoded into before it goes out. Sized for the largest one the
 /// controller sends by far, the Home Assistant discovery payload, which `main` asserts against at
 /// compile time so this cannot fall behind it unnoticed
-pub(crate) const SEND_BUFFER_SIZE: usize = 4096;
+pub(crate) const SEND_BUFFER_SIZE: usize = 8192;
 
 pub(crate) async fn send<T, TWrite: Write<Error = TWriteError>, TWriteError>(
     socket: &mut TWrite,
