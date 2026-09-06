@@ -8,21 +8,21 @@
   </defs>
   <rect width="1620" height="1600" fill="#ffffff"/>
   <rect x="60" y="150" width="220" height="1310" rx="6" fill="#f6f6f3" stroke="#3a3a3a" stroke-width="1.5"/>
-  <text x="170.0" y="174" text-anchor="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="18.8" font-weight="600" fill="#1a1a1a">Raspberry Pi Pico W</text>
+  <text x="170" y="174" text-anchor="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="18.8" font-weight="600" fill="#1a1a1a">Raspberry Pi Pico W</text>
   <rect x="560" y="250" width="180" height="370" rx="6" fill="#f6f6f3" stroke="#3a3a3a" stroke-width="1.5"/>
-  <text x="650.0" y="274" text-anchor="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="18.8" font-weight="600" fill="#1a1a1a">MAX485 module</text>
+  <text x="650" y="274" text-anchor="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="18.8" font-weight="600" fill="#1a1a1a">MAX485 module</text>
   <rect x="560" y="700" width="180" height="370" rx="6" fill="#f6f6f3" stroke="#3a3a3a" stroke-width="1.5"/>
-  <text x="650.0" y="724" text-anchor="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="18.8" font-weight="600" fill="#1a1a1a">MAX485 module</text>
+  <text x="650" y="724" text-anchor="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="18.8" font-weight="600" fill="#1a1a1a">MAX485 module</text>
   <rect x="1020" y="520" width="170" height="175" rx="6" fill="#f6f6f3" stroke="#3a3a3a" stroke-width="1.5"/>
-  <text x="1105.0" y="544" text-anchor="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="18.8" font-weight="600" fill="#1a1a1a">Fan 1 · 0x02</text>
+  <text x="1105" y="544" text-anchor="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="18.8" font-weight="600" fill="#1a1a1a">Fan 1 · 0x02</text>
   <rect x="1270" y="520" width="170" height="175" rx="6" fill="#f6f6f3" stroke="#3a3a3a" stroke-width="1.5"/>
-  <text x="1355.0" y="544" text-anchor="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="18.8" font-weight="600" fill="#1a1a1a">Fan 2 · 0x03</text>
+  <text x="1355" y="544" text-anchor="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="18.8" font-weight="600" fill="#1a1a1a">Fan 2 · 0x03</text>
   <rect x="1020" y="940" width="215" height="240" rx="6" fill="#f6f6f3" stroke="#3a3a3a" stroke-width="1.5"/>
   <text x="1127.5" y="964" text-anchor="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="18.8" font-weight="600" fill="#1a1a1a">LC-Modbus-1R-D7</text>
   <text x="1127.5" y="1202" text-anchor="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15.6" fill="#5c5c5c">address 0xFF</text>
   <rect x="1320" y="1100" width="230" height="95" rx="6" fill="#f6f6f3" stroke="#3a3a3a" stroke-width="1.5"/>
-  <text x="1435.0" y="1124" text-anchor="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="18.8" font-weight="600" fill="#1a1a1a">Its own 7–24 V supply</text>
-  <text x="1435.0" y="1143" text-anchor="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15.6" fill="#5c5c5c">never the Pico's VSYS</text>
+  <text x="1435" y="1124" text-anchor="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="18.8" font-weight="600" fill="#1a1a1a">Its own 7–24 V supply</text>
+  <text x="1435" y="1143" text-anchor="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15.6" fill="#5c5c5c">never the Pico's VSYS</text>
   <text x="272" y="219.5" text-anchor="end" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15.6" fill="#1a1a1a">36 3V3(OUT)</text>
   <text x="272" y="254.5" text-anchor="end" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15.6" fill="#1a1a1a">38 GND</text>
   <text x="272" y="351.5" text-anchor="end" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15.6" fill="#1a1a1a">6 GP4</text>
@@ -92,7 +92,7 @@
   <path d="M470 365 L560 365" fill="none" stroke="#3a3a3a" stroke-width="1.6" stroke-linejoin="round" marker-end="url(#arrow)"/>
   <circle cx="470" cy="347" r="3.4" fill="#3a3a3a"/>
   <path d="M612 318 L620 318 L620 377 L612 377" fill="none" stroke="#5c5c5c" stroke-width="1.2"/>
-  <text x="626" y="352.0" text-anchor="start" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15.6" fill="#5c5c5c">tied together</text>
+  <text x="626" y="352" text-anchor="start" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15.6" fill="#5c5c5c">tied together</text>
   <path d="M740 560 L1020 560" fill="none" stroke="#3a3a3a" stroke-width="1.6" stroke-linejoin="round"/>
   <path d="M1190 560 L1270 560" fill="none" stroke="#3a3a3a" stroke-width="1.6" stroke-linejoin="round"/>
   <path d="M740 595 L1020 595" fill="none" stroke="#3a3a3a" stroke-width="1.6" stroke-linejoin="round"/>
@@ -101,7 +101,7 @@
   <path d="M830 560 L830 562.5" fill="none" stroke="#3a3a3a" stroke-width="1.6" stroke-linejoin="round"/>
   <path d="M830 592.5 L830 595" fill="none" stroke="#3a3a3a" stroke-width="1.6" stroke-linejoin="round"/>
   <rect x="822" y="562.5" width="16" height="30" rx="2" fill="#ffffff" stroke="#3a3a3a" stroke-width="1.5"/>
-  <text x="845" y="582.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15.6" fill="#1a1a1a">120 Ω</text>
+  <text x="845" y="582" text-anchor="start" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15.6" fill="#1a1a1a">120 Ω</text>
   <circle cx="830" cy="560" r="3.4" fill="#3a3a3a"/>
   <circle cx="830" cy="595" r="3.4" fill="#3a3a3a"/>
   <path d="M1225 560 L1225 562.5" fill="none" stroke="#3a3a3a" stroke-width="1.6" stroke-linejoin="round"/>
@@ -110,8 +110,8 @@
   <text x="1225" y="621" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15.6" fill="#1a1a1a">120 Ω</text>
   <circle cx="1225" cy="560" r="3.4" fill="#3a3a3a"/>
   <circle cx="1225" cy="595" r="3.4" fill="#3a3a3a"/>
-  <text x="1105.0" y="677" text-anchor="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15.6" fill="#5c5c5c">mains: its own supply</text>
-  <text x="1355.0" y="677" text-anchor="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15.6" fill="#5c5c5c">mains: its own supply</text>
+  <text x="1105" y="677" text-anchor="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15.6" fill="#5c5c5c">mains: its own supply</text>
+  <text x="1355" y="677" text-anchor="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15.6" fill="#5c5c5c">mains: its own supply</text>
   <path d="M280 855 L560 855" fill="none" stroke="#3a3a3a" stroke-width="1.6" stroke-linejoin="round" marker-end="url(#arrow)"/>
   <path d="M560 895 L280 895" fill="none" stroke="#3a3a3a" stroke-width="1.6" stroke-linejoin="round" marker-end="url(#arrow)"/>
   <path d="M280 797 L470 797" fill="none" stroke="#3a3a3a" stroke-width="1.6" stroke-linejoin="round"/>
@@ -120,13 +120,13 @@
   <path d="M470 815 L560 815" fill="none" stroke="#3a3a3a" stroke-width="1.6" stroke-linejoin="round" marker-end="url(#arrow)"/>
   <circle cx="470" cy="797" r="3.4" fill="#3a3a3a"/>
   <path d="M612 768 L620 768 L620 827 L612 827" fill="none" stroke="#5c5c5c" stroke-width="1.2"/>
-  <text x="626" y="802.0" text-anchor="start" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15.6" fill="#5c5c5c">tied together</text>
+  <text x="626" y="802" text-anchor="start" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15.6" fill="#5c5c5c">tied together</text>
   <path d="M740 1010 L1020 1010" fill="none" stroke="#3a3a3a" stroke-width="1.6" stroke-linejoin="round"/>
   <path d="M740 1045 L1020 1045" fill="none" stroke="#3a3a3a" stroke-width="1.6" stroke-linejoin="round"/>
   <path d="M830 1010 L830 1012.5" fill="none" stroke="#3a3a3a" stroke-width="1.6" stroke-linejoin="round"/>
   <path d="M830 1042.5 L830 1045" fill="none" stroke="#3a3a3a" stroke-width="1.6" stroke-linejoin="round"/>
   <rect x="822" y="1012.5" width="16" height="30" rx="2" fill="#ffffff" stroke="#3a3a3a" stroke-width="1.5"/>
-  <text x="845" y="1032.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15.6" fill="#1a1a1a">120 Ω</text>
+  <text x="845" y="1032" text-anchor="start" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15.6" fill="#1a1a1a">120 Ω</text>
   <circle cx="830" cy="1010" r="3.4" fill="#3a3a3a"/>
   <circle cx="830" cy="1045" r="3.4" fill="#3a3a3a"/>
   <path d="M985 1010 L985 1012.5" fill="none" stroke="#3a3a3a" stroke-width="1.6" stroke-linejoin="round"/>

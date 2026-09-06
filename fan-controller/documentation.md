@@ -140,9 +140,10 @@ return, and the far device needs it as the reference its differential pair is me
 of it — the Pico's GND, both transceivers', the LED cathodes, the button, the fans' RS-485 common
 and the relay module's supply ground — is the same net.
 
-All four drawings are written by [documentation/wiring.py](documentation/wiring.py), which takes
-coordinates rather than SVG paths, so moving a wire is an edit to a number. It needs nothing but
-Python: `cd fan-controller/documentation && python3 wiring.py`, then commit what it writes.
+All four drawings are written by [wiring_diagram](../wiring_diagram), a workspace crate that takes
+coordinates rather than SVG paths, so moving a wire is an edit to a number. It has no dependencies:
+`cd wiring_diagram && cargo run`, then commit what it writes. `src/svg.rs` is the shapes, one
+function each; `src/sheets.rs` is the four sheets, and is where a wire lives.
 
 #### Raspberry Pi Pico W
 
