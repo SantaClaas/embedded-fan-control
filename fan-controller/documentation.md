@@ -120,6 +120,194 @@ pins are GP4, which arbitrates the fans' bus, and GP20, which drives a status LE
 free but left alone, because that is where a debug probe's UART bridge is conventionally wired and
 this build has no reason to take them.
 
+### Every pin, device by device
+
+The table above is the controller's side of each wire. This is the same wiring seen from every
+device on the bench, including the pins that stay empty, so a board can be checked against it
+without inferring anything. One bus at a time, because a single picture of all of it is a picture
+of a ground net with everything else hidden behind it.
+
+The fans' bus. GP4 arbitrates it, UART0 carries it, and the two fans share one pair:
+
+```text
+  Raspberry Pi Pico W         MAX485 module         Fan 1, 0x02         Fan 2, 0x03
+  ===================         =============         ===========         ===========
+
+  36  3V3(OUT) -------------> VCC
+  38  GND      -------------> GND
+  38  GND      -----------------------------------> RS-485 common ----> RS-485 common
+   6  GP4      -------+-----> DE      tied together, so one pin means
+                      |               "drive the line"; it idles low, which
+                      +-----> RE      leaves the line to the fans
+  16  GP12     -------------> DI      (the Pico transmits)
+  17  GP13     <------------- RO      (the Pico receives)
+
+                         +--- A ------------------> A ----------------> A ----+
+                        120R                                                120R
+                         +--- B ------------------> B ----------------> B ----+
+```
+
+The relay's bus. The same shape on UART1, one device on it, and its own supply:
+
+```text
+  Raspberry Pi Pico W         MAX485 module         LC-Modbus-1R-D7, 0xFF
+  ===================         =============         =====================
+
+  36  3V3(OUT) -------------> VCC
+  38  GND      -------------> GND
+  38  GND      -----------------------------------> GND ----+
+  10  GP7      -------+-----> DE      tied together,        |  its own 7-24 V supply,
+                      |               as on the other bus   |  never the Pico's VSYS
+                      +-----> RE                    VCC ----+
+  11  GP8      -------------> DI
+  12  GP9      <------------- RO
+
+                         +--- A ------------------> A ----+
+                                                        120R
+                         +--- B ------------------> B ----+
+
+                                                    contact terminals ----> the load
+                                                    opto input        ----> nothing
+```
+
+The button and the LEDs. No transceiver, and nothing shared but ground:
+
+```text
+  Raspberry Pi Pico W
+  ===================
+
+  27  GP21     ------[ 330R ]------>|-------+  LED 1, fan 1
+  26  GP20     ------[ 330R ]------>|-------+  LED 2, fan 2
+                                            |
+  24  GP18     ----------o  o---------------+  button, momentary, no external resistor
+                                            |
+  38  GND      -----------------------------+
+```
+
+`120R` is a 120 Ω resistor across A and B, one at the transceiver and one at the far end of each
+bus, with nothing in between. GND appears twice in the first two pictures because it is one net
+reached by two wires: the transceiver needs it as a supply return, and the far device needs it as
+the reference the differential pair is measured against. All of it — the Pico's GND, both
+transceivers', the LED cathodes, the button, the fans' RS-485 common and the relay module's supply
+ground — is the same net.
+
+#### Raspberry Pi Pico W
+
+All forty header pins, so an empty one is empty on purpose.
+
+| Pin | Name | In this build |
+|---|---|---|
+| 1 | GP0 | Not connected. Left free for a debug probe's UART bridge |
+| 2 | GP1 | Not connected. Same reason |
+| 3 | GND | Not connected. Any ground pin will do; 38 is the one used |
+| 4 | GP2 | Not connected |
+| 5 | GP3 | Not connected |
+| 6 | GP4 | `MODBUS_DE` → DE and RE on the fans' transceiver, tied together |
+| 7 | GP5 | Not connected |
+| 8 | GND | Not connected |
+| 9 | GP6 | Not connected |
+| 10 | GP7 | `RELAY_DE` → DE and RE on the relay's transceiver, tied together |
+| 11 | GP8 | `RELAY_TX`, UART1 TX → DI on the relay's transceiver |
+| 12 | GP9 | `RELAY_RX`, UART1 RX ← RO on the relay's transceiver |
+| 13 | GND | Not connected |
+| 14 | GP10 | Not connected |
+| 15 | GP11 | Not connected |
+| 16 | GP12 | `MODBUS_TX`, UART0 TX → DI on the fans' transceiver |
+| 17 | GP13 | `MODBUS_RX`, UART0 RX ← RO on the fans' transceiver |
+| 18 | GND | Not connected |
+| 19 | GP14 | Not connected |
+| 20 | GP15 | Not connected |
+| 21 | GP16 | Not connected |
+| 22 | GP17 | Not connected |
+| 23 | GND | Not connected |
+| 24 | GP18 | `BUTTON` → one terminal of the button, internal pull-up on |
+| 25 | GP19 | Not connected |
+| 26 | GP20 | `LED_2` → LED 2 anode through its series resistor |
+| 27 | GP21 | `LED_1` → LED 1 anode through its series resistor |
+| 28 | GND | Not connected |
+| 29 | GP22 | Not connected |
+| 30 | RUN | Not connected |
+| 31 | GP26 / ADC0 | Not connected |
+| 32 | GP27 / ADC1 | Not connected |
+| 33 | AGND | Not connected |
+| 34 | GP28 / ADC2 | Not connected |
+| 35 | ADC_VREF | Not connected |
+| 36 | 3V3(OUT) | `+3V3` → VCC on both transceivers |
+| 37 | 3V3_EN | Not connected |
+| 38 | GND | `GND` → the one ground net, everything below hangs off it |
+| 39 | VSYS | Optionally the board's supply, if it is not run from USB. Not the relay module's |
+| 40 | VBUS | Not connected |
+
+Four GPIOs never reach the header at all: GP23, GP24, GP25 and GP29 are the Pico W's own wiring to
+the CYW43439 radio, which the firmware drives through PIO0 and DMA_CH0. They are listed in
+`main.rs` because the driver asks for them, not because anything is soldered to them.
+
+The debug connector on the bottom edge is three more: SWCLK, GND and SWDIO, used only when a probe
+is attached.
+
+#### MAX485 module, both of them
+
+The same eight pins on each board, wired to a different UART.
+
+| Pin | Fans' module (GP4 / GP12 / GP13) | Relay module (GP7 / GP8 / GP9) |
+|---|---|---|
+| RO | Receiver out → GP13 | Receiver out → GP9 |
+| RE | Receiver enable, active low. Tied to DE, both to GP4 | Tied to DE, both to GP7 |
+| DE | Driver enable. Tied to RE, both to GP4 | Tied to RE, both to GP7 |
+| DI | Driver in ← GP12 | Driver in ← GP8 |
+| GND | The ground net | The ground net |
+| A | Fan 1 A, and on to fan 2 A. 120 Ω to B here | Relay module A. 120 Ω to B here |
+| B | Fan 1 B, and on to fan 2 B. 120 Ω to A here | Relay module B. 120 Ω to A here |
+| VCC | 3V3(OUT), pin 36 | 3V3(OUT), pin 36 |
+
+RE is active low and DE is active high, which is why tying them together works: one pin then means
+*driving*, and its idle low state means *listening*. GP4 and GP7 idle low for that reason.
+
+#### The fans
+
+Two identical RadiCal units, daisy chained rather than each run back to the transceiver.
+
+| Terminal | Fan 1, address 0x02 | Fan 2, address 0x03 |
+|---|---|---|
+| A | Transceiver A, and on to fan 2 A | Fan 1 A. 120 Ω to B, this is the far end of the bus |
+| B | Transceiver B, and on to fan 2 B | Fan 1 B. 120 Ω to A |
+| RS-485 common | Controller ground, and on to fan 2 | Fan 1's common |
+| Mains | Its own supply. None of it passes through this board | Its own supply |
+
+Both fans are set to 19_200 baud, 8E1, and to those two addresses, from the fans themselves rather
+than from anything the controller sends.
+
+> [!NOTE]
+> A and B are printed on the fan's own terminal block, and RS-485 is famously inconsistent about
+> which conductor is which. If a fan answers nothing at all with the settings right, swapping A and
+> B at the fan is the first thing to try. `docs/manufacturer/radical/` is the authority on the
+> terminal names and it is a private submodule, so check there rather than against this table if
+> the two disagree.
+
+#### The relay module
+
+| Terminal | Wired to |
+|---|---|
+| A | Relay transceiver A. 120 Ω to B |
+| B | Relay transceiver B. 120 Ω to A |
+| VCC | Its own 7-24 V supply, **not** the Pico. See the note further down |
+| GND | Its own supply's ground, tied to the controller ground so the bus has a reference |
+| Relay contacts | Whatever is being switched. Nothing on this side reaches the controller |
+| Opto input | Unused. The firmware reads only the coil |
+
+#### Button and LEDs
+
+| Part | Pin | Wired to |
+|---|---|---|
+| Button | Terminal 1 | GP18, pin 24 |
+| Button | Terminal 2 | GND |
+| LED 1, fan 1 | Anode | GP21, pin 27, through about 330 Ω |
+| LED 1, fan 1 | Cathode | GND |
+| LED 2, fan 2 | Anode | GP20, pin 26, through about 330 Ω |
+| LED 2, fan 2 | Cathode | GND |
+
+A four pin tactile switch is two terminals twice over: either of each diagonal pair.
+
 ### RS-485 to the fans
 
 The fans speak Modbus RTU on a two-wire bus, which is half duplex: the same pair carries the
