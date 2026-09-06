@@ -279,19 +279,34 @@ The speeds are not the same and are not meant to be: holding 78 m³/h took fan 1
 976 rpm, the difference being what their two ducts restrict. Two fans reporting an identical flow
 at different rpm is the system working, not a stuck register.
 
-**The fans overshoot their target slightly before settling.** Measured on 2026-09-06 at a two
-second cadence: commanded up from 93 to 210 m³/h they peaked at 213, 1.4 % over; commanded down
-from 210 to 141 they dipped to 138 and 135, 2 % and 4 % under. Small in both directions, recovered
-within a few seconds, and the fans' own control loop rather than anything the firmware does. It is
-visible in Home Assistant's history now that a change is sampled every two seconds, so read a
-small spike or dip right after a speed change as this rather than as a fault.
+**How badly the fans overshoot depends on the direction and the size of the change.** Measured on
+2026-09-06 across four ramps. This note was written twice before it was right; the reversals are
+worth knowing about, because the first two ramps each supported a conclusion the third destroyed.
 
-One earlier trace does not fit and is left here unexplained rather than tidied away: a deceleration
-sampled at *five* seconds read `180, 108, 79, 95, 93` — a dip to 79 against a target of 93, some
-15 % under, with the other fan reaching 74. That was a single sample at the bottom, and the
-commanded set point behind it was not captured, so whether it was a much larger commanded change
-or something else is unknown. It has not been reproduced at the finer cadence. Worth watching for
-rather than believing.
+Going *up* is uneventful. Commanded from 93 to 210 m³/h the fans peaked at 213 — 1.4 % over — and
+were done in a few seconds.
+
+Going *down* depends entirely on how far:
+
+| Commanded | Reduction | Undershoot below target |
+|---|---|---|
+| 210 → 141 | 33 % | 2 % and 4 % |
+| 180 → 93 | 48 % | 15 % and 20 % |
+| 141 → 39 | 72 % | 23 % and 18 % |
+
+The largest is not just a dip but a genuine oscillation. Asked for 39 m³/h the fans fell to 30 and
+32, climbed back past the target to 47 and 43, and were still hunting in that band forty seconds
+later when the set point changed again — so whether they would have settled at all is unknown. 39
+is 6.5 % of the range, which is likely near the bottom of what the fans can hold, and it is the
+region worth suspecting when a low speed behaves oddly.
+
+None of this is the firmware's doing; it is the fans' own control loop, now visible in Home
+Assistant because a change is sampled every two seconds. Read a dip after a large speed reduction
+as this rather than as a fault — but a *large* dip only follows a *large* reduction.
+
+That trace is also the best evidence for the length of the settling run. At the bottom the flow
+read 30 twice in succession before climbing away to 47. A rule that called two steady readings
+settled would have published 30 m³/h for a fan on its way to 39 and then to 102.
 
 `D033` is the flow *achieved* rather than the flow commanded — it converged on 78 from above as
 the fans spun down, reading 82 and 84 sixteen seconds after the change and disagreeing between the
