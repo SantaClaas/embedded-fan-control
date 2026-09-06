@@ -1,0 +1,90 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1340 790" width="1340" height="790" role="img" aria-label="The relay module's RS-485 bus, pin by pin">
+  <title>The relay module's RS-485 bus, pin by pin</title>
+  <desc>Raspberry Pi Pico W pins 36, 38, 10, 11 and 12 wired to a second MAX485 module, and that module's A and B pair to an LC-Modbus-1R-D7 relay module powered from its own 7 to 24 V supply.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#3a3a3a"/>
+    </marker>
+  </defs>
+  <rect width="1340" height="790" fill="#ffffff"/>
+  <rect x="40" y="80" width="200" height="320" rx="6" fill="#f6f6f3" stroke="#3a3a3a" stroke-width="1.5"/>
+  <text x="140" y="104" text-anchor="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15.0" font-weight="600" fill="#1a1a1a">Raspberry Pi Pico W</text>
+  <rect x="400" y="80" width="190" height="430" rx="6" fill="#f6f6f3" stroke="#3a3a3a" stroke-width="1.5"/>
+  <text x="495" y="104" text-anchor="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15.0" font-weight="600" fill="#1a1a1a">MAX485 module</text>
+  <text x="495" y="123" text-anchor="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" fill="#5c5c5c">on 3V3(OUT)</text>
+  <rect x="860" y="405" width="220" height="200" rx="6" fill="#f6f6f3" stroke="#3a3a3a" stroke-width="1.5"/>
+  <text x="970" y="429" text-anchor="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15.0" font-weight="600" fill="#1a1a1a">LC-Modbus-1R-D7</text>
+  <text x="970" y="448" text-anchor="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" fill="#5c5c5c">address 0xFF</text>
+  <rect x="380" y="640" width="230" height="95" rx="6" fill="#f6f6f3" stroke="#3a3a3a" stroke-width="1.5"/>
+  <text x="495" y="664" text-anchor="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15.0" font-weight="600" fill="#1a1a1a">Its own 7–24 V supply</text>
+  <text x="495" y="683" text-anchor="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" fill="#5c5c5c">never the Pico's VSYS</text>
+  <text x="232" y="144.5" text-anchor="end" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" fill="#1a1a1a">36 3V3(OUT)</text>
+  <text x="232" y="184.5" text-anchor="end" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" fill="#1a1a1a">38 GND</text>
+  <text x="232" y="257" text-anchor="end" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" fill="#1a1a1a">10 GP7</text>
+  <text x="232" y="324.5" text-anchor="end" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" fill="#1a1a1a">11 GP8</text>
+  <text x="232" y="364.5" text-anchor="end" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" fill="#1a1a1a">12 GP9</text>
+  <text x="408" y="144.5" text-anchor="start" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" fill="#1a1a1a">VCC</text>
+  <text x="408" y="184.5" text-anchor="start" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" fill="#1a1a1a">GND</text>
+  <text x="408" y="239.5" text-anchor="start" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" fill="#1a1a1a">DE</text>
+  <text x="408" y="274.5" text-anchor="start" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" fill="#1a1a1a">RE</text>
+  <text x="408" y="324.5" text-anchor="start" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" fill="#1a1a1a">DI</text>
+  <text x="408" y="364.5" text-anchor="start" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" fill="#1a1a1a">RO</text>
+  <text x="582" y="444.5" text-anchor="end" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" fill="#1a1a1a">A</text>
+  <text x="582" y="484.5" text-anchor="end" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" fill="#1a1a1a">B</text>
+  <text x="868" y="444.5" text-anchor="start" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" fill="#1a1a1a">A</text>
+  <text x="868" y="484.5" text-anchor="start" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" fill="#1a1a1a">B</text>
+  <text x="868" y="539.5" text-anchor="start" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" fill="#1a1a1a">GND</text>
+  <text x="868" y="579.5" text-anchor="start" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" fill="#1a1a1a">VCC</text>
+  <text x="1072" y="474.5" text-anchor="end" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" fill="#1a1a1a">contacts</text>
+  <text x="1072" y="549.5" text-anchor="end" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" fill="#1a1a1a">opto in</text>
+  <path d="M240 140 L400 140" fill="none" stroke="#3a3a3a" stroke-width="1.6" stroke-linejoin="round"/>
+  <path d="M240 180 L400 180" fill="none" stroke="#3a3a3a" stroke-width="1.6" stroke-linejoin="round"/>
+  <path d="M240 320 L400 320" fill="none" stroke="#3a3a3a" stroke-width="1.6" stroke-linejoin="round" marker-end="url(#arrow)"/>
+  <path d="M400 360 L240 360" fill="none" stroke="#3a3a3a" stroke-width="1.6" stroke-linejoin="round" marker-end="url(#arrow)"/>
+  <path d="M240 252.5 L320 252.5" fill="none" stroke="#3a3a3a" stroke-width="1.6" stroke-linejoin="round"/>
+  <path d="M320 235 L320 270" fill="none" stroke="#3a3a3a" stroke-width="1.6" stroke-linejoin="round"/>
+  <path d="M320 235 L400 235" fill="none" stroke="#3a3a3a" stroke-width="1.6" stroke-linejoin="round" marker-end="url(#arrow)"/>
+  <path d="M320 270 L400 270" fill="none" stroke="#3a3a3a" stroke-width="1.6" stroke-linejoin="round" marker-end="url(#arrow)"/>
+  <circle cx="320" cy="252.5" r="3.4" fill="#3a3a3a"/>
+  <path d="M446 223 L454 223 L454 282 L446 282" fill="none" stroke="#5c5c5c" stroke-width="1.2"/>
+  <text x="460" y="257" text-anchor="start" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" fill="#5c5c5c">tied together</text>
+  <path d="M240 180 L300 180" fill="none" stroke="#3a3a3a" stroke-width="1.6" stroke-linejoin="round"/>
+  <path d="M300 180 L300 246.5 A 6 6 0 0 0 300 258.5 L300 314 A 6 6 0 0 0 300 326 L300 354 A 6 6 0 0 0 300 366 L300 535" fill="none" stroke="#3a3a3a" stroke-width="1.6"/>
+  <path d="M300 535 L860 535" fill="none" stroke="#3a3a3a" stroke-width="1.6" stroke-linejoin="round"/>
+  <circle cx="300" cy="180" r="3.4" fill="#3a3a3a"/>
+  <path d="M300 535 L300 700 L380 700" fill="none" stroke="#3a3a3a" stroke-width="1.6" stroke-linejoin="round"/>
+  <circle cx="300" cy="535" r="3.4" fill="#3a3a3a"/>
+  <path d="M560 640 L560 575 L860 575" fill="none" stroke="#3a3a3a" stroke-width="1.6" stroke-linejoin="round"/>
+  <text x="566" y="632" text-anchor="start" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" fill="#5c5c5c">+</text>
+  <text x="386" y="694" text-anchor="start" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" fill="#5c5c5c">−</text>
+  <path d="M590 440 L860 440" fill="none" stroke="#3a3a3a" stroke-width="1.6" stroke-linejoin="round"/>
+  <path d="M590 480 L860 480" fill="none" stroke="#3a3a3a" stroke-width="1.6" stroke-linejoin="round"/>
+  <path d="M650 440 L650 445" fill="none" stroke="#3a3a3a" stroke-width="1.6" stroke-linejoin="round"/>
+  <path d="M650 475 L650 480" fill="none" stroke="#3a3a3a" stroke-width="1.6" stroke-linejoin="round"/>
+  <rect x="642" y="445" width="16" height="30" rx="2" fill="#efe3c8" stroke="#3a3a3a" stroke-width="1.5"/>
+  <rect x="642" y="449" width="16" height="3" fill="#7a4a21"/>
+  <rect x="642" y="454" width="16" height="3" fill="#c02a1f"/>
+  <rect x="642" y="459" width="16" height="3" fill="#7a4a21"/>
+  <rect x="642" y="468" width="16" height="3" fill="#c9a227"/>
+  <text x="665" y="464.5" text-anchor="start" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" fill="#1a1a1a">120 Ω</text>
+  <circle cx="650" cy="440" r="3.4" fill="#3a3a3a"/>
+  <circle cx="650" cy="480" r="3.4" fill="#3a3a3a"/>
+  <path d="M820 440 L820 445" fill="none" stroke="#3a3a3a" stroke-width="1.6" stroke-linejoin="round"/>
+  <path d="M820 475 L820 480" fill="none" stroke="#3a3a3a" stroke-width="1.6" stroke-linejoin="round"/>
+  <rect x="812" y="445" width="16" height="30" rx="2" fill="#efe3c8" stroke="#3a3a3a" stroke-width="1.5"/>
+  <rect x="812" y="449" width="16" height="3" fill="#7a4a21"/>
+  <rect x="812" y="454" width="16" height="3" fill="#c02a1f"/>
+  <rect x="812" y="459" width="16" height="3" fill="#7a4a21"/>
+  <rect x="812" y="468" width="16" height="3" fill="#c9a227"/>
+  <text x="820" y="506" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" fill="#1a1a1a">120 Ω</text>
+  <circle cx="820" cy="440" r="3.4" fill="#3a3a3a"/>
+  <circle cx="820" cy="480" r="3.4" fill="#3a3a3a"/>
+  <text x="650" y="395" text-anchor="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" fill="#5c5c5c">at the transceiver…</text>
+  <text x="820" y="395" text-anchor="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" fill="#5c5c5c">…and at the module</text>
+  <path d="M1080 470 L1140 470" fill="none" stroke="#3a3a3a" stroke-width="1.6" stroke-linejoin="round"/>
+  <text x="1150" y="474" text-anchor="start" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" fill="#5c5c5c">the load being switched</text>
+  <path d="M1080 545 L1140 545" fill="none" stroke="#3a3a3a" stroke-width="1.6" stroke-linejoin="round"/>
+  <text x="1150" y="549" text-anchor="start" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" fill="#5c5c5c">not connected</text>
+  <text x="40" y="750" text-anchor="start" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" fill="#5c5c5c">One device on this bus, at 9600 baud 8N1, which is why it is a second UART rather than two more addresses on the fans'.</text>
+  <text x="40" y="770" text-anchor="start" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" fill="#5c5c5c">The module's GND is shared with the controller so the pair has a reference; its VCC is not.</text>
+</svg>

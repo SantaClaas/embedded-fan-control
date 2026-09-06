@@ -1,0 +1,87 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1180 620" width="1180" height="620" role="img" aria-label="The fans' RS-485 bus, pin by pin">
+  <title>The fans' RS-485 bus, pin by pin</title>
+  <desc>Raspberry Pi Pico W pins 36, 38, 6, 16 and 17 wired to a MAX485 module, and the module's A and B pair daisy chained through fan 1 to fan 2, terminated at both ends.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#3a3a3a"/>
+    </marker>
+  </defs>
+  <rect width="1180" height="620" fill="#ffffff"/>
+  <rect x="40" y="80" width="200" height="320" rx="6" fill="#f6f6f3" stroke="#3a3a3a" stroke-width="1.5"/>
+  <text x="140" y="104" text-anchor="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15.0" font-weight="600" fill="#1a1a1a">Raspberry Pi Pico W</text>
+  <rect x="400" y="80" width="190" height="430" rx="6" fill="#f6f6f3" stroke="#3a3a3a" stroke-width="1.5"/>
+  <text x="495" y="104" text-anchor="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15.0" font-weight="600" fill="#1a1a1a">MAX485 module</text>
+  <text x="495" y="123" text-anchor="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" fill="#5c5c5c">on 3V3(OUT)</text>
+  <rect x="730" y="405" width="170" height="165" rx="6" fill="#f6f6f3" stroke="#3a3a3a" stroke-width="1.5"/>
+  <text x="815" y="429" text-anchor="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15.0" font-weight="600" fill="#1a1a1a">Fan 1 · address 0x02</text>
+  <rect x="970" y="405" width="170" height="165" rx="6" fill="#f6f6f3" stroke="#3a3a3a" stroke-width="1.5"/>
+  <text x="1055" y="429" text-anchor="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15.0" font-weight="600" fill="#1a1a1a">Fan 2 · address 0x03</text>
+  <text x="232" y="144.5" text-anchor="end" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" fill="#1a1a1a">36 3V3(OUT)</text>
+  <text x="232" y="184.5" text-anchor="end" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" fill="#1a1a1a">38 GND</text>
+  <text x="232" y="257" text-anchor="end" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" fill="#1a1a1a">6 GP4</text>
+  <text x="232" y="324.5" text-anchor="end" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" fill="#1a1a1a">16 GP12</text>
+  <text x="232" y="364.5" text-anchor="end" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" fill="#1a1a1a">17 GP13</text>
+  <text x="408" y="144.5" text-anchor="start" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" fill="#1a1a1a">VCC</text>
+  <text x="408" y="184.5" text-anchor="start" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" fill="#1a1a1a">GND</text>
+  <text x="408" y="239.5" text-anchor="start" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" fill="#1a1a1a">DE</text>
+  <text x="408" y="274.5" text-anchor="start" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" fill="#1a1a1a">RE</text>
+  <text x="408" y="324.5" text-anchor="start" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" fill="#1a1a1a">DI</text>
+  <text x="408" y="364.5" text-anchor="start" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" fill="#1a1a1a">RO</text>
+  <text x="582" y="444.5" text-anchor="end" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" fill="#1a1a1a">A</text>
+  <text x="582" y="484.5" text-anchor="end" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" fill="#1a1a1a">B</text>
+  <text x="738" y="444.5" text-anchor="start" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" fill="#1a1a1a">A</text>
+  <text x="738" y="484.5" text-anchor="start" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" fill="#1a1a1a">B</text>
+  <text x="738" y="539.5" text-anchor="start" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" fill="#1a1a1a">common</text>
+  <text x="892" y="444.5" text-anchor="end" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" fill="#1a1a1a">A</text>
+  <text x="892" y="484.5" text-anchor="end" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" fill="#1a1a1a">B</text>
+  <text x="892" y="539.5" text-anchor="end" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" fill="#1a1a1a">common</text>
+  <text x="978" y="444.5" text-anchor="start" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" fill="#1a1a1a">A</text>
+  <text x="978" y="484.5" text-anchor="start" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" fill="#1a1a1a">B</text>
+  <text x="978" y="539.5" text-anchor="start" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" fill="#1a1a1a">common</text>
+  <path d="M240 140 L400 140" fill="none" stroke="#3a3a3a" stroke-width="1.6" stroke-linejoin="round"/>
+  <path d="M240 180 L400 180" fill="none" stroke="#3a3a3a" stroke-width="1.6" stroke-linejoin="round"/>
+  <path d="M240 320 L400 320" fill="none" stroke="#3a3a3a" stroke-width="1.6" stroke-linejoin="round" marker-end="url(#arrow)"/>
+  <path d="M400 360 L240 360" fill="none" stroke="#3a3a3a" stroke-width="1.6" stroke-linejoin="round" marker-end="url(#arrow)"/>
+  <path d="M240 252.5 L320 252.5" fill="none" stroke="#3a3a3a" stroke-width="1.6" stroke-linejoin="round"/>
+  <path d="M320 235 L320 270" fill="none" stroke="#3a3a3a" stroke-width="1.6" stroke-linejoin="round"/>
+  <path d="M320 235 L400 235" fill="none" stroke="#3a3a3a" stroke-width="1.6" stroke-linejoin="round" marker-end="url(#arrow)"/>
+  <path d="M320 270 L400 270" fill="none" stroke="#3a3a3a" stroke-width="1.6" stroke-linejoin="round" marker-end="url(#arrow)"/>
+  <circle cx="320" cy="252.5" r="3.4" fill="#3a3a3a"/>
+  <path d="M446 223 L454 223 L454 282 L446 282" fill="none" stroke="#5c5c5c" stroke-width="1.2"/>
+  <text x="460" y="257" text-anchor="start" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" fill="#5c5c5c">tied together</text>
+  <path d="M240 180 L300 180" fill="none" stroke="#3a3a3a" stroke-width="1.6" stroke-linejoin="round"/>
+  <path d="M300 180 L300 246.5 A 6 6 0 0 0 300 258.5 L300 314 A 6 6 0 0 0 300 326 L300 354 A 6 6 0 0 0 300 366 L300 535" fill="none" stroke="#3a3a3a" stroke-width="1.6"/>
+  <path d="M300 535 L730 535" fill="none" stroke="#3a3a3a" stroke-width="1.6" stroke-linejoin="round"/>
+  <circle cx="300" cy="180" r="3.4" fill="#3a3a3a"/>
+  <path d="M900 535 L970 535" fill="none" stroke="#3a3a3a" stroke-width="1.6" stroke-linejoin="round"/>
+  <path d="M590 440 L730 440" fill="none" stroke="#3a3a3a" stroke-width="1.6" stroke-linejoin="round"/>
+  <path d="M900 440 L970 440" fill="none" stroke="#3a3a3a" stroke-width="1.6" stroke-linejoin="round"/>
+  <path d="M590 480 L730 480" fill="none" stroke="#3a3a3a" stroke-width="1.6" stroke-linejoin="round"/>
+  <path d="M900 480 L970 480" fill="none" stroke="#3a3a3a" stroke-width="1.6" stroke-linejoin="round"/>
+  <path d="M660 440 L660 445" fill="none" stroke="#3a3a3a" stroke-width="1.6" stroke-linejoin="round"/>
+  <path d="M660 475 L660 480" fill="none" stroke="#3a3a3a" stroke-width="1.6" stroke-linejoin="round"/>
+  <rect x="652" y="445" width="16" height="30" rx="2" fill="#efe3c8" stroke="#3a3a3a" stroke-width="1.5"/>
+  <rect x="652" y="449" width="16" height="3" fill="#7a4a21"/>
+  <rect x="652" y="454" width="16" height="3" fill="#c02a1f"/>
+  <rect x="652" y="459" width="16" height="3" fill="#7a4a21"/>
+  <rect x="652" y="468" width="16" height="3" fill="#c9a227"/>
+  <text x="675" y="464.5" text-anchor="start" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" fill="#1a1a1a">120 Ω</text>
+  <circle cx="660" cy="440" r="3.4" fill="#3a3a3a"/>
+  <circle cx="660" cy="480" r="3.4" fill="#3a3a3a"/>
+  <path d="M935 440 L935 445" fill="none" stroke="#3a3a3a" stroke-width="1.6" stroke-linejoin="round"/>
+  <path d="M935 475 L935 480" fill="none" stroke="#3a3a3a" stroke-width="1.6" stroke-linejoin="round"/>
+  <rect x="927" y="445" width="16" height="30" rx="2" fill="#efe3c8" stroke="#3a3a3a" stroke-width="1.5"/>
+  <rect x="927" y="449" width="16" height="3" fill="#7a4a21"/>
+  <rect x="927" y="454" width="16" height="3" fill="#c02a1f"/>
+  <rect x="927" y="459" width="16" height="3" fill="#7a4a21"/>
+  <rect x="927" y="468" width="16" height="3" fill="#c9a227"/>
+  <text x="935" y="506" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" fill="#1a1a1a">120 Ω</text>
+  <circle cx="935" cy="440" r="3.4" fill="#3a3a3a"/>
+  <circle cx="935" cy="480" r="3.4" fill="#3a3a3a"/>
+  <text x="660" y="385" text-anchor="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" fill="#5c5c5c">terminated here…</text>
+  <text x="935" y="385" text-anchor="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" fill="#5c5c5c">…and at the last fan</text>
+  <text x="815" y="554" text-anchor="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" fill="#5c5c5c">mains: its own supply</text>
+  <text x="1055" y="554" text-anchor="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" fill="#5c5c5c">mains: its own supply</text>
+  <text x="40" y="580" text-anchor="start" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" fill="#5c5c5c">Every line is a wire. Arrows show which end drives it; the pair and the supply lines have no direction.</text>
+  <text x="40" y="600" text-anchor="start" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" fill="#5c5c5c">GP4 drives DE and RE as one pin: low leaves the line to the fans, high takes it for the length of a request.</text>
+</svg>

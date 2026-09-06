@@ -74,6 +74,7 @@ Testing reality below.
 | `fan_sensor` | `no_std` | Decoding what a fan reports about itself — actual speed, both temperatures, power — from its input registers, plus the JSON payload Home Assistant reads. Owns the register addresses and the layout of the two runs that are read. Its own crate for the same reason as `set_point`; re-exported as `crate::fan::sensor`. Feature-gated `defmt`. |
 | `home_assistant_discovery` | host | Serde model of the Home Assistant MQTT discovery payload. Build-dependency only. `components` is a `BTreeMap` so the generated payload is byte-stable across builds. |
 | `debug-listener` | host | Reads the RS-485/Modbus line off a USB serial adapter to inspect fan traffic. The port path is hardcoded in `src/main.rs`. |
+| `wiring_diagram` | host | Draws the wiring diagrams in `fan-controller/documentation/`. Nothing depends on it; it runs by hand and its SVGs are checked in. No dependencies. |
 
 Note `mqtt` appears twice in the firmware: the workspace crate (`::mqtt`) holds protocol constants,
 while `fan-controller/src/mqtt/` (`crate::mqtt`) holds the packet encode/decode and client task.
@@ -248,6 +249,10 @@ cd home_assistant_discovery && cargo test
 cd fan_sensor && cargo test
 ```
 
+```bash
+cd wiring_diagram && cargo test
+```
+
 That is also the way to make firmware logic testable at all: move it into its own `no_std` crate
 and re-export it, the way `fan/mod.rs` re-exports `set_point`. Worth doing for anything with rules
 of its own; not worth it for code that only exists to drive a peripheral.
@@ -262,8 +267,11 @@ cd serial && pnpm test
 ## Reference documents
 
 - [fan-controller/documentation.md](fan-controller/documentation.md) — the LED status protocol
-  (which blink pattern means which fan speed / out-of-sync state) and the Home Assistant
-  onboarding sequence. Update it when LED behaviour changes.
+  (which blink pattern means which fan speed / out-of-sync state), the Home Assistant onboarding
+  sequence, and the wiring down to the pin. Update it when LED behaviour changes. Its wiring
+  diagrams in `fan-controller/documentation/` are SVGs written by the `wiring_diagram` crate
+  (`cd wiring_diagram && cargo run`, no dependencies) — edit the coordinates in its `sheets.rs`
+  and commit what it writes, rather than editing the SVGs.
 - [fan-controller/TODO.md](fan-controller/TODO.md) — the working TODO list for the firmware:
   every outstanding item with source line references and a suggested priority order. Keep it in
   sync when adding or resolving a `//TODO` in `fan-controller/src/`.

@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 480" width="900" height="480" role="img" aria-label="The button and the status LEDs, pin by pin">
+  <title>The button and the status LEDs, pin by pin</title>
+  <desc>Raspberry Pi Pico W pins 27, 26 and 24 to two LEDs through series resistors and to a momentary button, all returning to pin 38, GND.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#3a3a3a"/>
+    </marker>
+  </defs>
+  <rect width="900" height="480" fill="#ffffff"/>
+  <rect x="40" y="70" width="200" height="330" rx="6" fill="#f6f6f3" stroke="#3a3a3a" stroke-width="1.5"/>
+  <text x="140" y="94" text-anchor="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15.0" font-weight="600" fill="#1a1a1a">Raspberry Pi Pico W</text>
+  <text x="232" y="124.5" text-anchor="end" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" fill="#1a1a1a">27 GP21</text>
+  <text x="232" y="194.5" text-anchor="end" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" fill="#1a1a1a">26 GP20</text>
+  <text x="232" y="279.5" text-anchor="end" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" fill="#1a1a1a">24 GP18</text>
+  <text x="232" y="359.5" text-anchor="end" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" fill="#1a1a1a">38 GND</text>
+  <path d="M240 120 L700 120" fill="none" stroke="#3a3a3a" stroke-width="1.6" stroke-linejoin="round"/>
+  <rect x="381" y="112" width="38" height="16" rx="2" fill="#efe3c8" stroke="#3a3a3a" stroke-width="1.5"/>
+  <rect x="386" y="112" width="3" height="16" fill="#e07b20"/>
+  <rect x="391" y="112" width="3" height="16" fill="#e07b20"/>
+  <rect x="396" y="112" width="3" height="16" fill="#7a4a21"/>
+  <rect x="410" y="112" width="3" height="16" fill="#c9a227"/>
+  <text x="400" y="105" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" fill="#1a1a1a">330 Ω</text>
+  <path d="M531 110 L548 120 L531 130 z" fill="#f6f6f3" stroke="#3a3a3a" stroke-width="1.5" stroke-linejoin="round"/>
+  <path d="M548 109 L548 131" stroke="#3a3a3a" stroke-width="1.8"/>
+  <path d="M542 106 l7 -7 M548 102 l7 -7" stroke="#3a3a3a" stroke-width="1.2" marker-end="url(#arrow)"/>
+  <text x="540" y="150" text-anchor="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" fill="#5c5c5c">LED 1, fan 1</text>
+  <path d="M240 190 L700 190" fill="none" stroke="#3a3a3a" stroke-width="1.6" stroke-linejoin="round"/>
+  <rect x="381" y="182" width="38" height="16" rx="2" fill="#efe3c8" stroke="#3a3a3a" stroke-width="1.5"/>
+  <rect x="386" y="182" width="3" height="16" fill="#e07b20"/>
+  <rect x="391" y="182" width="3" height="16" fill="#e07b20"/>
+  <rect x="396" y="182" width="3" height="16" fill="#7a4a21"/>
+  <rect x="410" y="182" width="3" height="16" fill="#c9a227"/>
+  <text x="400" y="175" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" fill="#1a1a1a">330 Ω</text>
+  <path d="M531 180 L548 190 L531 200 z" fill="#f6f6f3" stroke="#3a3a3a" stroke-width="1.5" stroke-linejoin="round"/>
+  <path d="M548 179 L548 201" stroke="#3a3a3a" stroke-width="1.8"/>
+  <path d="M542 176 l7 -7 M548 172 l7 -7" stroke="#3a3a3a" stroke-width="1.2" marker-end="url(#arrow)"/>
+  <text x="540" y="220" text-anchor="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" fill="#5c5c5c">LED 2, fan 2</text>
+  <path d="M240 275 L455 275" fill="none" stroke="#3a3a3a" stroke-width="1.6" stroke-linejoin="round"/>
+  <path d="M495 275 L700 275" fill="none" stroke="#3a3a3a" stroke-width="1.6" stroke-linejoin="round"/>
+  <path d="M455 275 L497 253" stroke="#3a3a3a" stroke-width="1.6"/>
+  <circle cx="455" cy="275" r="3.4" fill="#ffffff" stroke="#3a3a3a" stroke-width="1.5"/>
+  <circle cx="495" cy="275" r="3.4" fill="#ffffff" stroke="#3a3a3a" stroke-width="1.5"/>
+  <text x="475" y="301" text-anchor="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" fill="#5c5c5c">button, momentary</text>
+  <path d="M240 355 L700 355" fill="none" stroke="#3a3a3a" stroke-width="1.6" stroke-linejoin="round"/>
+  <path d="M700 120 L700 355" fill="none" stroke="#3a3a3a" stroke-width="1.6" stroke-linejoin="round"/>
+  <circle cx="700" cy="120" r="3.4" fill="#3a3a3a"/>
+  <circle cx="700" cy="190" r="3.4" fill="#3a3a3a"/>
+  <circle cx="700" cy="275" r="3.4" fill="#3a3a3a"/>
+  <text x="714" y="315" text-anchor="start" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" fill="#5c5c5c">one ground net, back to pin 38</text>
+  <text x="40" y="440" text-anchor="start" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" fill="#5c5c5c">GP18 has the internal pull-up on and the firmware acts on the falling edge, so the switch needs no external resistor.</text>
+  <text x="40" y="460" text-anchor="start" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" fill="#5c5c5c">Both LED outputs are active high: the pin drives the anode, the cathode goes to ground.</text>
+</svg>

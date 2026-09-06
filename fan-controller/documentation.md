@@ -82,18 +82,13 @@ right away.
 Every pin the firmware uses is baked into the binary. There is no runtime configuration, so moving
 a wire means editing the peripheral destructuring at the top of `main.rs` and flashing again.
 
-```mermaid
-flowchart LR
-    BUTTON[Button<br/>momentary, to GND] -- GP18 --> PICO
-    PICO -- GP21 --> LED1[LED 1, fan 1]
-    PICO -- GP20 --> LED2[LED 2, fan 2]
-    PICO[Raspberry Pi Pico W] -- "GP4 to DE/RE<br/>GP12 to DI, GP13 to RO<br/>3V3 and GND" --> TRANSCEIVER[RS-485 transceiver]
-    TRANSCEIVER -- "A and B, twisted pair" --> FAN1[Fan 1, address 0x02]
-    FAN1 -- "the same pair, daisy chained" --> FAN2[Fan 2, address 0x03]
-    PICO -- "GP7 to DE/RE<br/>GP8 to DI, GP9 to RO<br/>3V3 and GND" --> TRANSCEIVER2[RS-485 transceiver, second bus]
-    TRANSCEIVER2 -- "A and B, twisted pair" --> RELAY[Relay module, address 0xFF<br/>own 7-24 V supply]
-    PROBE[Debug probe, optional] -. "SWCLK, GND, SWDIO" .-> PICO
-```
+![Everything on one sheet: the Pico W, both MAX485 modules on their own UARTs, the two fans, the relay module and its supply, the button and the LEDs, and the ground net they share](documentation/wiring-overview.svg)
+
+That is the whole thing on one sheet, down to the pin. It is a lot to take in at once, so
+[Every pin, device by device](#every-pin-device-by-device) below draws the same wiring one bus
+at a time, and the tables after it list every pin of every device, including the ones that stay
+empty. A debug probe, when one is attached, is three more wires to the connector on the bottom
+edge: SWCLK, GND and SWDIO.
 
 ### Pin assignment
 
@@ -120,6 +115,159 @@ pins are GP4, which arbitrates the fans' bus, and GP20, which drives a status LE
 free but left alone, because that is where a debug probe's UART bridge is conventionally wired and
 this build has no reason to take them.
 
+### Every pin, device by device
+
+The table above is the controller's side of each wire. This is the same wiring seen from every
+device on the bench, including the pins that stay empty, so a board can be checked against it
+without inferring anything. The sheet at the top of this section has all of it at once; these take
+it one bus at a time.
+
+The fans' bus. GP4 arbitrates it, UART0 carries it, and the two fans share one pair:
+
+![Pins 36, 38, 6, 16 and 17 to a MAX485 module, and its pair on through fan 1 to fan 2](documentation/wiring-fans.svg)
+
+The relay's bus. The same shape on UART1, one device on it, and its own supply:
+
+![Pins 36, 38, 10, 11 and 12 to a second MAX485 module, and its pair to the relay module](documentation/wiring-relay.svg)
+
+The button and the LEDs. No transceiver, and nothing shared but ground:
+
+![GP21 and GP20 through 330 Ω to the LEDs, GP18 to the button, all returning to pin 38](documentation/wiring-button-leds.svg)
+
+The resistors carry their colour code, so the drawing names the part rather than only the value:
+**orange, orange, brown, gold** for the 330 Ω LED resistors, **brown, red, brown, gold** for the
+120 Ω terminators — both 5 % parts, read from the crowded end with the gold band last. Neither is
+directional; either way round is the same resistor. The LED beside them is the part that has an
+end, anode to the pin.
+
+A dot is a junction and a hop is a crossing that is not one. Pin 38 carries two wires in the first
+two pictures because ground is one net reached twice over: the transceiver needs it as a supply
+return, and the far device needs it as the reference its differential pair is measured against. All
+of it — the Pico's GND, both transceivers', the LED cathodes, the button, the fans' RS-485 common
+and the relay module's supply ground — is the same net.
+
+All four drawings are written by [wiring_diagram](../wiring_diagram), a workspace crate that takes
+coordinates rather than SVG paths, so moving a wire is an edit to a number. It has no dependencies:
+`cd wiring_diagram && cargo run`, then commit what it writes. `src/svg.rs` is the shapes, one
+function each; `src/sheets.rs` is the four sheets, and is where a wire lives.
+
+#### Raspberry Pi Pico W
+
+All forty header pins, so an empty one is empty on purpose.
+
+| Pin | Name | In this build |
+|---|---|---|
+| 1 | GP0 | Not connected. Left free for a debug probe's UART bridge |
+| 2 | GP1 | Not connected. Same reason |
+| 3 | GND | Not connected. Any ground pin will do; 38 is the one used |
+| 4 | GP2 | Not connected |
+| 5 | GP3 | Not connected |
+| 6 | GP4 | `MODBUS_DE` → DE and RE on the fans' transceiver, tied together |
+| 7 | GP5 | Not connected |
+| 8 | GND | Not connected |
+| 9 | GP6 | Not connected |
+| 10 | GP7 | `RELAY_DE` → DE and RE on the relay's transceiver, tied together |
+| 11 | GP8 | `RELAY_TX`, UART1 TX → DI on the relay's transceiver |
+| 12 | GP9 | `RELAY_RX`, UART1 RX ← RO on the relay's transceiver |
+| 13 | GND | Not connected |
+| 14 | GP10 | Not connected |
+| 15 | GP11 | Not connected |
+| 16 | GP12 | `MODBUS_TX`, UART0 TX → DI on the fans' transceiver |
+| 17 | GP13 | `MODBUS_RX`, UART0 RX ← RO on the fans' transceiver |
+| 18 | GND | Not connected |
+| 19 | GP14 | Not connected |
+| 20 | GP15 | Not connected |
+| 21 | GP16 | Not connected |
+| 22 | GP17 | Not connected |
+| 23 | GND | Not connected |
+| 24 | GP18 | `BUTTON` → one terminal of the button, internal pull-up on |
+| 25 | GP19 | Not connected |
+| 26 | GP20 | `LED_2` → LED 2 anode through its series resistor |
+| 27 | GP21 | `LED_1` → LED 1 anode through its series resistor |
+| 28 | GND | Not connected |
+| 29 | GP22 | Not connected |
+| 30 | RUN | Not connected |
+| 31 | GP26 / ADC0 | Not connected |
+| 32 | GP27 / ADC1 | Not connected |
+| 33 | AGND | Not connected |
+| 34 | GP28 / ADC2 | Not connected |
+| 35 | ADC_VREF | Not connected |
+| 36 | 3V3(OUT) | `+3V3` → VCC on both transceivers |
+| 37 | 3V3_EN | Not connected |
+| 38 | GND | `GND` → the one ground net, everything below hangs off it |
+| 39 | VSYS | Optionally the board's supply, if it is not run from USB. Not the relay module's |
+| 40 | VBUS | Not connected |
+
+Four GPIOs never reach the header at all: GP23, GP24, GP25 and GP29 are the Pico W's own wiring to
+the CYW43439 radio, which the firmware drives through PIO0 and DMA_CH0. They are listed in
+`main.rs` because the driver asks for them, not because anything is soldered to them.
+
+The debug connector on the bottom edge is three more: SWCLK, GND and SWDIO, used only when a probe
+is attached.
+
+#### MAX485 module, both of them
+
+The same eight pins on each board, wired to a different UART.
+
+| Pin | Fans' module (GP4 / GP12 / GP13) | Relay module (GP7 / GP8 / GP9) |
+|---|---|---|
+| RO | Receiver out → GP13 | Receiver out → GP9 |
+| RE | Receiver enable, active low. Tied to DE, both to GP4 | Tied to DE, both to GP7 |
+| DE | Driver enable. Tied to RE, both to GP4 | Tied to RE, both to GP7 |
+| DI | Driver in ← GP12 | Driver in ← GP8 |
+| GND | The ground net | The ground net |
+| A | Fan 1 A, and on to fan 2 A. 120 Ω to B here | Relay module A. 120 Ω to B here |
+| B | Fan 1 B, and on to fan 2 B. 120 Ω to A here | Relay module B. 120 Ω to A here |
+| VCC | 3V3(OUT), pin 36 | 3V3(OUT), pin 36 |
+
+RE is active low and DE is active high, which is why tying them together works: one pin then means
+*driving*, and its idle low state means *listening*. GP4 and GP7 idle low for that reason.
+
+#### The fans
+
+Two identical RadiCal units, daisy chained rather than each run back to the transceiver.
+
+| Terminal | Fan 1, address 0x02 | Fan 2, address 0x03 |
+|---|---|---|
+| A | Transceiver A, and on to fan 2 A | Fan 1 A. 120 Ω to B, this is the far end of the bus |
+| B | Transceiver B, and on to fan 2 B | Fan 1 B. 120 Ω to A |
+| RS-485 common | Controller ground, and on to fan 2 | Fan 1's common |
+| Mains | Its own supply. None of it passes through this board | Its own supply |
+
+Both fans are set to 19_200 baud, 8E1, and to those two addresses, from the fans themselves rather
+than from anything the controller sends.
+
+> [!NOTE]
+> A and B are printed on the fan's own terminal block, and RS-485 is famously inconsistent about
+> which conductor is which. If a fan answers nothing at all with the settings right, swapping A and
+> B at the fan is the first thing to try. `docs/manufacturer/radical/` is the authority on the
+> terminal names and it is a private submodule, so check there rather than against this table if
+> the two disagree.
+
+#### The relay module
+
+| Terminal | Wired to |
+|---|---|
+| A | Relay transceiver A. 120 Ω to B |
+| B | Relay transceiver B. 120 Ω to A |
+| VCC | Its own 7-24 V supply, **not** the Pico. See the note further down |
+| GND | Its own supply's ground, tied to the controller ground so the bus has a reference |
+| Relay contacts | Whatever is being switched. Nothing on this side reaches the controller |
+| Opto input | Unused. The firmware reads only the coil |
+
+#### Button and LEDs
+
+| Part | Pin | Wired to |
+|---|---|---|
+| Button | Terminal 1 | GP18, pin 24 |
+| Button | Terminal 2 | GND |
+| LED 1, fan 1 | Anode | GP21, pin 27, through about 330 Ω |
+| LED 1, fan 1 | Cathode | GND |
+| LED 2, fan 2 | Anode | GP20, pin 26, through about 330 Ω |
+| LED 2, fan 2 | Cathode | GND |
+
+A four pin tactile switch is two terminals twice over: either of each diagonal pair.
+
 ### RS-485 to the fans
 
 The fans speak Modbus RTU on a two-wire bus, which is half duplex: the same pair carries the
@@ -128,9 +276,12 @@ idles low, which leaves the transceiver receiving and the fans owning the line, 
 for the few hundred microseconds a request takes.
 
 > [!IMPORTANT]
-> Use a transceiver rated for 3.3 V, such as a MAX3485 or an SN65HVD72. A real MAX485 is a 5 V
-> part and its RO output would then swing to 5 V into GP13, which is not 5 V tolerant. Many of the
-> cheap blue breakout boards sold as "MAX485 modules" are 5 V only.
+> This build uses the cheap blue MAX485 breakout modules, powered from 3V3(OUT) along with
+> everything else on that rail. That is below the 4.75 V the MAX485 datasheet asks for, and it is
+> deliberate: run at 5 V, the module's RO output swings to 5 V into GP13, which is not 5 V
+> tolerant. Powering the transceiver from the same 3.3 V the Pico's pins work at keeps the logic
+> levels inside what GP13 can take, at the price of running the part under its rated supply. A 5 V
+> transceiver would need a divider or a level shifter on RO instead.
 
 - Wire it as a bus, not a star: one pair from the transceiver to fan 1, and on from fan 1 to fan 2.
 - Terminate both ends with 120 Ω across A and B, one at the transceiver and one at the last fan,
@@ -157,9 +308,9 @@ one of those at a time. Its baud rate *is* settable, so the two could be made to
 but parity cannot, which settles it. `docs/relay.md` records where that was established on the
 bench.
 
-Everything the fans' bus needs, this one needs too: a 3.3 V transceiver, DE and RE tied together to
-GP7, 120 Ω across A and B at each end, and a third conductor tying the module's RS-485 common back
-to controller ground.
+Everything the fans' bus needs, this one needs too: a second MAX485 module on 3V3(OUT), DE and RE
+tied together to GP7, 120 Ω across A and B at each end, and a third conductor tying the module's
+RS-485 common back to controller ground.
 
 Three things are specific to this module:
 
@@ -217,6 +368,7 @@ The GPIO column above is compiled in. The rest is ordinary practice and worth kn
 
 - The resistor values, 330 Ω for the LEDs and 120 Ω for termination, are the usual starting points
   and were not measured for this build.
-- Powering the transceiver from 3V3(OUT) assumes a 3.3 V part, as above.
+- Powering the MAX485 modules from 3V3(OUT) runs them below their rated supply, as above. A part
+  specified for 3.3 V would be the correct choice here; these are what this build has.
 - No isolation is shown. For a long run through the house an isolated transceiver is the more
   conservative build.
