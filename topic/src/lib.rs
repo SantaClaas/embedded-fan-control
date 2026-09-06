@@ -132,4 +132,48 @@ pub mod fan_controller {
             pub const POWER: &str = formatcp!("{UNIQUE_ID}/sensors/power");
         }
     }
+
+    /// The first of the two RS-485 temperature and humidity sensors, which share the relay's bus.
+    ///
+    /// It measures the air rather than itself, which is what makes it different from the fans'
+    /// temperatures: those say how hot a motor is running, these say what the house is like. Both
+    /// values arrive as one JSON object on a single topic, the same shape a fan's reading takes
+    pub mod temperature_sensor_1 {
+        use super::OBJECT_ID;
+        use const_format::formatcp;
+
+        pub const UNIQUE_ID: &str = formatcp!("{OBJECT_ID}/temperature-sensor-1");
+
+        pub mod sensor {
+            use super::UNIQUE_ID;
+            use const_format::formatcp;
+
+            pub const STATE: &str = formatcp!("{UNIQUE_ID}/sensors/state");
+
+            /// The identifiers Home Assistant tells the two sensors apart by. Not topics, but
+            /// composed from the same identifier and having to stay unique alongside it, so they
+            /// belong next to it rather than in the build script
+            pub const TEMPERATURE: &str = formatcp!("{UNIQUE_ID}/sensors/temperature");
+            pub const HUMIDITY: &str = formatcp!("{UNIQUE_ID}/sensors/humidity");
+        }
+    }
+
+    /// The second of the two RS-485 temperature and humidity sensors. See
+    /// [`temperature_sensor_1`]
+    pub mod temperature_sensor_2 {
+        use super::OBJECT_ID;
+        use const_format::formatcp;
+
+        pub const UNIQUE_ID: &str = formatcp!("{OBJECT_ID}/temperature-sensor-2");
+
+        pub mod sensor {
+            use super::UNIQUE_ID;
+            use const_format::formatcp;
+
+            pub const STATE: &str = formatcp!("{UNIQUE_ID}/sensors/state");
+
+            pub const TEMPERATURE: &str = formatcp!("{UNIQUE_ID}/sensors/temperature");
+            pub const HUMIDITY: &str = formatcp!("{UNIQUE_ID}/sensors/humidity");
+        }
+    }
 }

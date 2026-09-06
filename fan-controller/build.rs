@@ -186,8 +186,54 @@ fn create_fan_sensor_components(
     ]
 }
 
-/// Everything the fan controller announces to Home Assistant: the two fans, and the four sensors
-/// each of them reports
+/// Which identifiers one temperature and humidity sensor is announced under. Composed from that
+/// sensor's identifier in the `topic` crate, so the two sensors differ only in what is passed here
+struct ClimateIdentifiers {
+    /// The topic both values arrive on, as one JSON object
+    state: &'static str,
+    temperature: &'static str,
+    humidity: &'static str,
+}
+
+/// The two values one of the RS-485 sensors measures.
+///
+/// Both read the same topic and pick their value out of the JSON object published there, the way a
+/// fan's sensors do. The keys the templates use are the field names `temperature_sensor::Reading`
+/// serializes, which is the one place they have to agree
+fn create_climate_sensor_components(
+    sensor_name: &str,
+    identifiers: ClimateIdentifiers,
+) -> [(String, Component); 2] {
+    [
+        (
+            identifiers.temperature.to_string(),
+            Component::Sensor {
+                name: Some(format!("{sensor_name} temperature")),
+                state_topic: Some(identifiers.state),
+                device_class: Some(DeviceClass::Temperature),
+                state_class: Some(StateClass::Measurement),
+                unit_of_measurement: Some("°C"),
+                value_template: Some("{{ value_json.temperature }}"),
+                unique_id: Some(identifiers.temperature),
+            },
+        ),
+        (
+            identifiers.humidity.to_string(),
+            Component::Sensor {
+                name: Some(format!("{sensor_name} humidity")),
+                state_topic: Some(identifiers.state),
+                device_class: Some(DeviceClass::Humidity),
+                state_class: Some(StateClass::Measurement),
+                unit_of_measurement: Some("%"),
+                value_template: Some("{{ value_json.humidity }}"),
+                unique_id: Some(identifiers.humidity),
+            },
+        ),
+    ]
+}
+
+/// Everything the fan controller announces to Home Assistant: the two fans, the four sensors each
+/// of them reports, the relay's contact, and what the two air sensors measure
 fn create_components() -> BTreeMap<String, Component> {
     let mut components = BTreeMap::from([
             // Fan 1
@@ -259,6 +305,24 @@ fn create_components() -> BTreeMap<String, Component> {
         },
     ));
 
+    components.extend(create_climate_sensor_components(
+        "Temperature sensor 1",
+        ClimateIdentifiers {
+            state: topic::fan_controller::temperature_sensor_1::sensor::STATE,
+            temperature: topic::fan_controller::temperature_sensor_1::sensor::TEMPERATURE,
+            humidity: topic::fan_controller::temperature_sensor_1::sensor::HUMIDITY,
+        },
+    ));
+
+    components.extend(create_climate_sensor_components(
+        "Temperature sensor 2",
+        ClimateIdentifiers {
+            state: topic::fan_controller::temperature_sensor_2::sensor::STATE,
+            temperature: topic::fan_controller::temperature_sensor_2::sensor::TEMPERATURE,
+            humidity: topic::fan_controller::temperature_sensor_2::sensor::HUMIDITY,
+        },
+    ));
+
     components
 }
 
@@ -290,6 +354,9 @@ fn set_discovery_payload(git_hash: &str) {
     };
 
     let payload = serde_json::to_string(&payload).unwrap();
+    // The send buffer this has to fit is sized from this number, so it is printed where the
+    // version is rather than only being discovered when the compile time assertion in `main` fails
+    println!("Discovery payload is {} bytes", payload.len());
 
     println!("cargo:rustc-env=FAN_CONTROLLER_DISCOVERY_PAYLOAD={payload}",);
 }

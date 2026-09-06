@@ -20,8 +20,14 @@ pub(crate) enum SendError<T: Debug + Format, E> {
 
 /// How much room a packet is encoded into before it goes out. Sized for the largest one the
 /// controller sends by far, the Home Assistant discovery payload, which `main` asserts against at
-/// compile time so this cannot fall behind it unnoticed
-pub(crate) const SEND_BUFFER_SIZE: usize = 4096;
+/// compile time so this cannot fall behind it unnoticed.
+///
+/// That payload is 4 835 bytes with the two fans, their eight sensors, the relay and the two air
+/// sensors announced — `build.rs` prints the figure on every build — and the four components the
+/// air sensors added are what took it past the 4 096 this used to be. Raising it costs the MQTT
+/// task the difference on its stack, which comes out of the executor's arena, so it is raised to
+/// what the payload needs and a little rather than to a round number well beyond it
+pub(crate) const SEND_BUFFER_SIZE: usize = 6144;
 
 pub(crate) async fn send<T, TWrite: Write<Error = TWriteError>, TWriteError>(
     socket: &mut TWrite,

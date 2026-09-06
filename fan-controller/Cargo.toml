@@ -49,6 +49,9 @@ rand = { version = "0.8.5", default-features = false }
 reqwless = { version = "0.12.1", features = ["defmt"] }
 set_point = { version = "0.1.0", path = "../set_point", features = ["defmt"] }
 static_cell = "2"
+temperature_sensor = { version = "0.1.0", path = "../temperature_sensor", features = [
+    "defmt",
+] }
 topic = { version = "0.1.0", path = "../topic" }
 
 [profile.release]

@@ -226,13 +226,16 @@ const DISCARD_TIMEOUT: Duration = Duration::from_millis(5);
 /// forever
 const MAX_STRAY_BYTES: usize = 80;
 
-/// Which device an address belongs to, for the log. The fans and the relay module are on separate
-/// buses and could not collide even if they shared a number, but one name for one address is
-/// simpler to read back than two tables that have to be matched against a UART
+/// Which device an address belongs to, for the log. The fans are on one bus and the relay and the
+/// two temperature and humidity sensors on the other, so they could not collide even if they
+/// shared a number, but one name for one address is simpler to read back than two tables that have
+/// to be matched against a UART
 fn device_identifier(device_address: u8) -> &'static str {
     match device_address {
         2 => "[Fan 1]",
         3 => "[Fan 2]",
+        4 => "[Temperature 1]",
+        5 => "[Temperature 2]",
         0xFF => "[Relay]",
         _other => "Unknown (oops)",
     }
@@ -618,7 +621,7 @@ impl<'a, UART: uart::Instance, PIN: Pin> Client<'a, UART, PIN> {
         }
 
         info!(
-            "{} Fan answered the read with {:?}: {:?}",
+            "{} Device answered the read with {:?}: {:?}",
             device_identifier, registers, response
         );
 

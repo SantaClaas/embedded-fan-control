@@ -6,6 +6,7 @@ members = [
     "home_assistant_discovery",
     "mqtt",
     "set_point",
+    "temperature_sensor",
     "topic",
 ]
 resolver = "3"

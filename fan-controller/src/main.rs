@@ -34,6 +34,7 @@ use crate::fan::set_point::{ParseSetPointError, SetPoint};
 use crate::mqtt::packet::ping_request::PingRequest;
 use crate::mqtt::packet::publish;
 use crate::task::{MqttBrokerConfiguration, Publish, set_up_network_stack};
+use crate::temperature_sensor::TemperatureSensor;
 
 mod configuration;
 mod debounce;
@@ -43,12 +44,14 @@ mod mqtt;
 mod relay;
 mod reset_cause;
 mod task;
+mod temperature_sensor;
 
 bind_interrupts!(struct Irqs {
     PIO0_IRQ_0 => PioInterruptHandler<PIO0>;
     UART0_IRQ  => BufferedInterruptHandler<UART0>;
-    // The relay module's bus. Its own UART rather than an address on the fans': it answers 8N1 and
-    // only 8N1, and the fans run 8E1
+    // The second bus, carrying the relay module and the two temperature and humidity sensors. Its
+    // own UART rather than addresses on the fans': all three answer 8N1 and only 8N1, and the fans
+    // run 8E1
     UART1_IRQ  => BufferedInterruptHandler<UART1>;
 });
 
@@ -154,13 +157,16 @@ async fn input_routine(
 type ModbusMutex = Mutex<CriticalSectionRawMutex, modbus::Client<'static, UART0, PIN_4>>;
 type ModbusOnceLock = OnceLock<ModbusMutex>;
 
-/// The relay module's bus, which is owned outright rather than shared.
+/// The second bus, which the relay module and the two temperature and humidity sensors share.
 ///
-/// The fans' client is behind a mutex and a once lock because four tasks reach for it — two that
-/// set a speed and two that poll sensors — and behind the once lock so those tasks can await its
-/// initialization rather than race it. Nothing of the sort applies here: one task talks to this
-/// bus, so it holds the client itself and there is no lock for anything to wait on
-type RelayClient = modbus::Client<'static, UART1, PIN_7>;
+/// It used to be owned outright by [`relay_routine`], because the relay was the only device on it.
+/// The sensors answer 9600 8N1, which is the relay's framing and not the fans', so they had
+/// nowhere else to go on a chip with two UARTs — and a bus with three devices and three tasks on
+/// it needs the same mutex the fans' bus has. The once lock is for the same reason it is there:
+/// the client cannot be built in a `static`, so the tasks await its initialization rather than
+/// race it
+type SecondBusMutex = Mutex<CriticalSectionRawMutex, modbus::Client<'static, UART1, PIN_7>>;
+type SecondBusOnceLock = OnceLock<SecondBusMutex>;
 
 /// The state Home Assistant last asked the contact to be in. Only the latest matters, the same way
 /// only the latest set point does, so it is a signal rather than a channel
@@ -598,6 +604,13 @@ enum OutgoingPublish {
     /// Where the relay's contact is, published only once the module has confirmed the write. The
     /// same rule the fans follow: what is reported is what the device did, not what it was asked
     UpdateRelayState(SetStateCommandValue),
+    /// Both values one of the temperature and humidity sensors reports, as the single JSON object
+    /// each of its two Home Assistant sensors reads. Owned rather than borrowed for the same
+    /// reason a fan's reading is: it is built during a poll and outlives it in the channel
+    UpdateTemperatureSensors {
+        sensor: TemperatureSensor,
+        payload: heapless::String<{ temperature_sensor::sensor::JSON_CAPACITY }>,
+    },
 }
 
 impl Publish for OutgoingPublish {
@@ -628,6 +641,14 @@ impl Publish for OutgoingPublish {
                 topic::fan_controller::fan_2::sensor::STATE
             }
             OutgoingPublish::UpdateRelayState(_) => topic::fan_controller::relay::state::STATE,
+            OutgoingPublish::UpdateTemperatureSensors {
+                sensor: TemperatureSensor::One,
+                ..
+            } => topic::fan_controller::temperature_sensor_1::sensor::STATE,
+            OutgoingPublish::UpdateTemperatureSensors {
+                sensor: TemperatureSensor::Two,
+                ..
+            } => topic::fan_controller::temperature_sensor_2::sensor::STATE,
         }
     }
 
@@ -648,6 +669,7 @@ impl Publish for OutgoingPublish {
                 SetStateCommandValue::On => b"ON",
                 SetStateCommandValue::Off => b"OFF",
             },
+            OutgoingPublish::UpdateTemperatureSensors { sensor: _, payload } => payload.as_bytes(),
         }
     }
 
@@ -899,7 +921,7 @@ async fn read_set_point(
 /// `None` when it cannot be reached, which is honest about not knowing rather than assuming the
 /// contact is open. Nothing is published then, so Home Assistant shows the switch as unknown
 /// instead of showing a guess
-async fn read_relay_state(client: &mut RelayClient) -> Option<bool> {
+async fn read_relay_state(bus: &'static SecondBusMutex) -> Option<bool> {
     let function = modbus::function::ReadCoils::<{ relay::coil::COUNT }>::new(
         relay::address::RELAY,
         relay::coil::RELAY,
@@ -907,7 +929,9 @@ async fn read_relay_state(client: &mut RelayClient) -> Option<bool> {
 
     let mut attempt = 1;
     loop {
-        match client.read_coils(&function).await {
+        // Locked per attempt rather than around the loop, so a sensor poll can have the bus during
+        // the back-off instead of waiting out every attempt of a module that is not answering
+        match bus.lock().await.read_coils(&function).await {
             Ok(coils) => return Some(coils & relay::coil::RELAY_BIT != 0),
             Err(error) if attempt >= MAX_ATTEMPTS => {
                 error!(
@@ -928,20 +952,23 @@ async fn read_relay_state(client: &mut RelayClient) -> Option<bool> {
     }
 }
 
-/// Drives the relay module on its own bus, and reports where its contact actually ended up.
+/// Drives the relay module on the second bus, and reports where its contact actually ended up.
 ///
-/// It holds the client rather than sharing it, because nothing else is on this UART. That also
-/// makes the retry simpler than the fans': there is no lock to release between attempts, and no
-/// second device whose transaction is being held up
+/// It shares that bus with the two temperature and humidity sensors, so it takes the lock for one
+/// transaction at a time and lets go of it between attempts — a module that has stopped answering
+/// costs a timeout per attempt, and holding the bus through a run of them would stall the polls
+/// behind it for no gain
 #[embassy_executor::task]
 async fn relay_routine(
-    mut client: RelayClient,
+    bus: &'static SecondBusOnceLock,
     requested_state: &'static RelayStateSignal,
     mqtt_out: channel::Sender<'static, CriticalSectionRawMutex, OutgoingPublish, CHANNEL_SIZE>,
 ) {
+    let bus = bus.get().await;
+
     // The module holds its contact while the controller resets, so where it is now is the state to
     // start from — the same reason the fans' speeds are read back rather than assumed
-    let mut current_state = read_relay_state(&mut client).await;
+    let mut current_state = read_relay_state(bus).await;
     if let Some(is_closed) = current_state {
         info!("{} Contact is closed: {}", RELAY_IDENTIFIER, is_closed);
         mqtt_out.send(OutgoingPublish::UpdateRelayState(is_closed.into())).await;
@@ -967,7 +994,9 @@ async fn relay_routine(
 
         let mut attempt = 1;
         loop {
-            match client.write_single_coil(&function).await {
+            // Held only for the transaction, like the read above: a coil write is one exchange,
+            // and nothing about it needs the bus across the back-off between two of them
+            match bus.lock().await.write_single_coil(&function).await {
                 Ok(()) => break,
                 Err(error) if attempt >= MAX_ATTEMPTS => {
                     error!(
@@ -1249,6 +1278,85 @@ async fn sensor_routine(
     }
 }
 
+/// How often each temperature and humidity sensor is asked what it measures. One poll is a single
+/// modbus transaction of two registers, which at 9600 baud is about 20 ms of bus time, so two
+/// sensors are well under a tenth of a percent of the second bus. The same interval the fans are
+/// polled at, for the same reason: the air in a house does not change faster than that, and a
+/// change that does matter is visible in Home Assistant while it happens
+const TEMPERATURE_POLL_INTERVAL: Duration = Duration::from_secs(30);
+
+/// How long to leave the second bus alone before the first poll. The relay reads its contact back
+/// on boot — with retries, and a timeout each if the module is silent — and that read is what
+/// decides whether Home Assistant is shown a switch at all. What the air is like can wait ten
+/// seconds for it, the same way it waits for the fans' set point read on the other bus
+const TEMPERATURE_POLL_STARTUP_DELAY: Duration = Duration::from_secs(10);
+
+/// Polls one temperature and humidity sensor and publishes what it measures to Home Assistant.
+///
+/// Nothing on the device acts on these values yet, so a failed poll is logged and dropped rather
+/// than retried: the next one is along in [`TEMPERATURE_POLL_INTERVAL`] carrying fresher values
+/// than a retry would, and a sensor that has stopped answering does not hold the second bus
+/// through a run of timeouts while a relay command waits behind it. The relay's power-up greeting
+/// spoils whatever exchange it collides with, which is one more fault that resolves itself by the
+/// next poll rather than needing to be handled here — see `docs/relay.md`
+#[embassy_executor::task(pool_size = 2)]
+async fn temperature_sensor_routine(
+    sensor: TemperatureSensor,
+    sensor_address: modbus::device::Address,
+    bus: &'static SecondBusOnceLock,
+    mqtt_out: channel::Sender<'static, CriticalSectionRawMutex, OutgoingPublish, CHANNEL_SIZE>,
+) {
+    let sensor_identifier = match sensor {
+        TemperatureSensor::One => "[Temperature 1]",
+        TemperatureSensor::Two => "[Temperature 2]",
+    };
+
+    let bus = bus.get().await;
+    Timer::after(TEMPERATURE_POLL_STARTUP_DELAY).await;
+
+    // The same two registers every time, so the frame and its checksum are built once rather than
+    // on every poll
+    let request = modbus::function::ReadInputRegisters::<
+        { temperature_sensor::sensor::MEASUREMENTS_LENGTH },
+    >::new(
+        sensor_address,
+        temperature_sensor::input_register::MEASUREMENTS,
+    );
+
+    loop {
+        // Both values come out of one transaction, so unlike a fan's poll there is nothing here
+        // that has to be held together under one lock
+        let result = bus.lock().await.read_input_registers(&request).await;
+
+        match result {
+            Ok(measurements) => {
+                let reading = temperature_sensor::sensor::decode(&measurements);
+                info!("{} Read {:?}", sensor_identifier, reading);
+
+                let publish = OutgoingPublish::UpdateTemperatureSensors {
+                    sensor,
+                    payload: reading.to_json(),
+                };
+
+                // Dropped rather than waited on, like a fan's reading: only the latest is worth
+                // anything, and the next one is along in TEMPERATURE_POLL_INTERVAL
+                if let Err(channel::TrySendError::Full(_publish)) = mqtt_out.try_send(publish) {
+                    error!(
+                        "{} MQTT out channel is full, dropping this reading",
+                        sensor_identifier
+                    );
+                }
+            }
+            Err(error) => warn!(
+                "{} Failed to read what the sensor measures: {:?}",
+                sensor_identifier, error
+            ),
+        }
+
+        Timer::after(TEMPERATURE_POLL_INTERVAL).await;
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 enum Blink {
     Off,
@@ -1472,8 +1580,9 @@ async fn main(spawner: Spawner) {
     // Just initialize it
     _ = FANS.get_or_init(|| client.into());
 
-    // The relay's bus. Its buffers are its own: two devices on two UARTs cannot share one, and the
-    // longest frame either direction carries here is the eight byte coil write and its echo
+    // The second bus, carrying the relay module and the two temperature and humidity sensors. Its
+    // buffers are its own: two UARTs cannot share one, and the longest frame either direction
+    // carries here is the eight byte coil write and its echo
     static RELAY_TX_BUFFER: StaticCell<[u8; 16]> = StaticCell::new();
     let relay_tx_buffer = &mut RELAY_TX_BUFFER.init([0; 16])[..];
     /// Larger than any answer the module sends, because what arrives is not always an answer: it
@@ -1482,7 +1591,9 @@ async fn main(spawner: Spawner) {
     static RELAY_RX_BUFFER: StaticCell<[u8; 64]> = StaticCell::new();
     let relay_rx_buffer = &mut RELAY_RX_BUFFER.init([0; 64])[..];
 
-    let relay_client: RelayClient = modbus::client::Client::new(
+    // One client for the whole bus, opened with the relay's line settings — which are the
+    // sensors' too, and are checked against them at compile time in `temperature_sensor`
+    let second_bus_client = modbus::client::Client::new(
         uart1,
         pin_8,
         pin_9,
@@ -1492,6 +1603,10 @@ async fn main(spawner: Spawner) {
         relay_rx_buffer,
         relay::get_configuration(),
     );
+
+    static SECOND_BUS: SecondBusOnceLock = SecondBusOnceLock::new();
+    // Just initialize it
+    _ = SECOND_BUS.get_or_init(|| second_bus_client.into());
 
     /// Channel for messages incoming from the MQTT broker to this fan controller
     static IN: Channel<
@@ -1585,9 +1700,22 @@ async fn main(spawner: Spawner) {
     )));
 
     unwrap!(spawner.spawn(relay_routine(
-        relay_client,
+        &SECOND_BUS,
         &RELAY_STATE,
         OUT.sender()
+    )));
+
+    unwrap!(spawner.spawn(temperature_sensor_routine(
+        TemperatureSensor::One,
+        temperature_sensor::address::SENSOR_1,
+        &SECOND_BUS,
+        OUT.sender(),
+    )));
+    unwrap!(spawner.spawn(temperature_sensor_routine(
+        TemperatureSensor::Two,
+        temperature_sensor::address::SENSOR_2,
+        &SECOND_BUS,
+        OUT.sender(),
     )));
 
     let display_fan_one_sender = FAN_ONE_DISPLAY_STATE.sender();
