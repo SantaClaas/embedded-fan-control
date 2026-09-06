@@ -1148,9 +1148,16 @@ const SENSOR_POLL_INTERVAL: Duration = Duration::from_secs(30);
 /// The fans do not step to a speed, they travel to it, and how long that takes depends on how far
 /// they are going — so there is no one delay that is right for both a nudge and a change across
 /// the range. Rather than pick one, this reads quickly and lets `fan::sensor::Settling` say when
-/// the flow has stopped moving; see there for the tolerance, the run it needs, and the cap that
-/// stops a fan which never holds still from keeping this cadence forever
-const SENSOR_SETTLE_POLL_INTERVAL: Duration = Duration::from_secs(5);
+/// the flow has stopped moving.
+///
+/// This is only how finely the ramp is sampled: what counts as settled is a duration, and
+/// `Settling::at_interval` derives its counts from this, so changing it changes the resolution and
+/// nothing else. One poll is two reads, 68 bytes, which at 19_200 baud 8E1 is 39 ms of line time
+/// per fan — so even both fans at this cadence leave the bus idle about 96 % of the time. A second
+/// is the floor worth going to: below that the publishes cost more than the detail is worth
+const SENSOR_SETTLE_POLL_MILLISECONDS: u32 = 2_000;
+const SENSOR_SETTLE_POLL_INTERVAL: Duration =
+    Duration::from_millis(SENSOR_SETTLE_POLL_MILLISECONDS as u64);
 
 /// How long to leave the bus alone before the first poll, so the set point both fan control
 /// routines read on boot — with retries, and a timeout each if a fan is silent — is done first.
@@ -1296,7 +1303,7 @@ async fn sensor_routine(
                         "{} Fan has not held a steady flow after {:?} readings, back to the \
                          interval anyway",
                         fan_identifier,
-                        fan::sensor::Settling::MAX_READINGS
+                        state.readings_taken()
                     );
                     false
                 }
@@ -1321,7 +1328,7 @@ async fn sensor_routine(
                      the interval",
                     fan_identifier, set_point
                 );
-                settling = Some(fan::sensor::Settling::new());
+                settling = Some(fan::sensor::Settling::at_interval(SENSOR_SETTLE_POLL_MILLISECONDS));
             }
         }
     }
