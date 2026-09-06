@@ -268,6 +268,20 @@ That took three flashes longer than it should have, because `panic-probe` had no
 real panic only executed an undefined instruction, so it was indistinguishable from a hard fault
 and the executor's task arena spent a while as the prime suspect. `print-defmt` is on now.
 
+**The fans are in constant-volume control, which is why they run at different speeds.** Measured
+on 2026-09-06 by changing the set point from Home Assistant and watching the sensor topics: at
+13760 both fans reported exactly 129 m³/h, at 8320 both settled on exactly 78 — which is
+`set point / 64000 · 600`, so the *Bezugswert Volumenstrom* (`D1ED`, section 2.48) is 600 m³/h.
+The speeds are not the same and are not meant to be: holding 78 m³/h took fan 1 1318 rpm and fan 2
+976 rpm, the difference being what their two ducts restrict. Two fans reporting an identical flow
+at different rpm is the system working, not a stuck register.
+
+`D033` is the flow *achieved* rather than the flow commanded — it converged on 78 from above as
+the fans spun down, reading 82 and 84 sixteen seconds after the change and disagreeing between the
+fans while they were still ramping. That is what makes it worth having: at steady state it should
+sit on the target, so a persistent shortfall, or a slow climb in the rpm needed to hold the target,
+is a blocked duct or a loading filter saying so.
+
 Still open in the same area: the second temperature/humidity sensor (`D030`/`D031`), the vane
 anemometer speed (`D032`) and the mass flow (`D034`), none of which have been checked for whether
 they carry anything, and the PT1000 inputs (`D038`/`D039`), which have a documented sentinel for
