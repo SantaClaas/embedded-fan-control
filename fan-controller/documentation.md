@@ -129,67 +129,24 @@ of a ground net with everything else hidden behind it.
 
 The fans' bus. GP4 arbitrates it, UART0 carries it, and the two fans share one pair:
 
-```text
-  Raspberry Pi Pico W         MAX485 module         Fan 1, 0x02         Fan 2, 0x03
-  ===================         =============         ===========         ===========
-
-  36  3V3(OUT) -------------> VCC
-  38  GND      -------------> GND
-  38  GND      -----------------------------------> RS-485 common ----> RS-485 common
-   6  GP4      -------+-----> DE      tied together, so one pin means
-                      |               "drive the line"; it idles low, which
-                      +-----> RE      leaves the line to the fans
-  16  GP12     -------------> DI      (the Pico transmits)
-  17  GP13     <------------- RO      (the Pico receives)
-
-                         +--- A ------------------> A ----------------> A ----+
-                        120R                                                120R
-                         +--- B ------------------> B ----------------> B ----+
-```
+![Pins 36, 38, 6, 16 and 17 to a MAX485 module, and its pair on through fan 1 to fan 2](documentation/wiring-fans.svg)
 
 The relay's bus. The same shape on UART1, one device on it, and its own supply:
 
-```text
-  Raspberry Pi Pico W         MAX485 module         LC-Modbus-1R-D7, 0xFF
-  ===================         =============         =====================
-
-  36  3V3(OUT) -------------> VCC
-  38  GND      -------------> GND
-  38  GND      -----------------------------------> GND ----+
-  10  GP7      -------+-----> DE      tied together,        |  its own 7-24 V supply,
-                      |               as on the other bus   |  never the Pico's VSYS
-                      +-----> RE                    VCC ----+
-  11  GP8      -------------> DI
-  12  GP9      <------------- RO
-
-                         +--- A ------------------> A ----+
-                                                        120R
-                         +--- B ------------------> B ----+
-
-                                                    contact terminals ----> the load
-                                                    opto input        ----> nothing
-```
+![Pins 36, 38, 10, 11 and 12 to a second MAX485 module, and its pair to the relay module](documentation/wiring-relay.svg)
 
 The button and the LEDs. No transceiver, and nothing shared but ground:
 
-```text
-  Raspberry Pi Pico W
-  ===================
+![GP21 and GP20 through 330 Ω to the LEDs, GP18 to the button, all returning to pin 38](documentation/wiring-button-leds.svg)
 
-  27  GP21     ------[ 330R ]------>|-------+  LED 1, fan 1
-  26  GP20     ------[ 330R ]------>|-------+  LED 2, fan 2
-                                            |
-  24  GP18     ----------o  o---------------+  button, momentary, no external resistor
-                                            |
-  38  GND      -----------------------------+
-```
+A dot is a junction and a hop is a crossing that is not one. Pin 38 carries two wires in the first
+two pictures because ground is one net reached twice over: the transceiver needs it as a supply
+return, and the far device needs it as the reference its differential pair is measured against. All
+of it — the Pico's GND, both transceivers', the LED cathodes, the button, the fans' RS-485 common
+and the relay module's supply ground — is the same net.
 
-`120R` is a 120 Ω resistor across A and B, one at the transceiver and one at the far end of each
-bus, with nothing in between. GND appears twice in the first two pictures because it is one net
-reached by two wires: the transceiver needs it as a supply return, and the far device needs it as
-the reference the differential pair is measured against. All of it — the Pico's GND, both
-transceivers', the LED cathodes, the button, the fans' RS-485 common and the relay module's supply
-ground — is the same net.
+The three files are in [documentation](documentation), and being SVG they are text: a wire, a
+label or a pin can be moved by editing them.
 
 #### Raspberry Pi Pico W
 
