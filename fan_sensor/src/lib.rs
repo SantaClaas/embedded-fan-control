@@ -276,6 +276,99 @@ fn relative_humidity(raw: u16) -> Tenths {
     Tenths((u32::from(raw) * 1_000 / 65_536) as i16)
 }
 
+/// Watching a fan arrive at a new speed.
+///
+/// The fans do not step to a commanded speed, they travel to it, and how long that takes depends on
+/// how far they are going — a nudge arrives in seconds where a change from one end of the range to
+/// the other does not. So the poll that follows a speed change does not wait a fixed delay and hope:
+/// it reads quickly and watches the flow until it stops moving.
+///
+/// The flow is the signal rather than the speed because it is reported in whole m³/h, so it is
+/// naturally quieter than an rpm that wanders while the fan holds station — and it is the value
+/// worth getting right.
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Settling {
+    /// The flow the last successful reading carried, to compare the next one against
+    previous: Option<u16>,
+    /// How many consecutive readings have been within [`Settling::TOLERANCE`] of the one before
+    steady: u8,
+    /// How many readings this has taken, successful or not, against [`Settling::MAX_READINGS`]
+    taken: u8,
+}
+
+/// What one reading says about whether the fan has arrived
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Progress {
+    /// Still on its way. Keep reading quickly
+    Moving,
+    /// Arrived. The reading just taken is the one worth keeping
+    Settled,
+    /// It has been given long enough and the flow is still not holding still. Stop reading quickly
+    /// anyway — see [`Settling::MAX_READINGS`]
+    GaveUp,
+}
+
+impl Settling {
+    /// How close two consecutive readings have to be to count as the same flow.
+    ///
+    /// Not equality: the flow wanders a whole unit while the fan is holding station — 78, 78, 79
+    /// was measured at rest — so waiting for two identical readings can wait forever
+    pub const TOLERANCE: u16 = 1;
+
+    /// How many consecutive readings within [`Self::TOLERANCE`] mean the fan has arrived. Three
+    /// comparisons, so four readings at the earliest
+    pub const REQUIRED: u8 = 3;
+
+    /// The most readings to take before giving up and going back to the ordinary interval.
+    ///
+    /// This is the important one. A fan that has stopped answering fails a poll by *timing out*,
+    /// and it holds the modbus mutex while it does — so without a cap, one silent fan would time
+    /// out at the settling cadence indefinitely with every speed change queued behind it. That is
+    /// the failure this whole routine was written to avoid, so the fast cadence has to be bounded
+    /// whether or not anything ever settles
+    pub const MAX_READINGS: u8 = 24;
+
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Takes one reading's flow, or `None` when that poll failed, and says whether to keep going.
+    ///
+    /// A failed poll says nothing about the flow, so it cannot count towards being steady — but it
+    /// does count towards [`Self::MAX_READINGS`], because the cap is there to bound exactly that
+    pub fn observe(&mut self, volume_flow: Option<u16>) -> Progress {
+        self.taken = self.taken.saturating_add(1);
+
+        match volume_flow {
+            Some(flow) => {
+                match self.previous {
+                    // Nothing to compare the first reading against
+                    Some(previous) if flow.abs_diff(previous) <= Self::TOLERANCE => {
+                        self.steady = self.steady.saturating_add(1);
+                    }
+                    Some(_) => self.steady = 0,
+                    None => {}
+                }
+
+                self.previous = Some(flow);
+            }
+            // The last known flow is kept to compare the next successful reading against, but the
+            // run of steady ones is broken: what happened in between is unknown
+            None => self.steady = 0,
+        }
+
+        if self.steady >= Self::REQUIRED {
+            Progress::Settled
+        } else if self.taken >= Self::MAX_READINGS {
+            Progress::GaveUp
+        } else {
+            Progress::Moving
+        }
+    }
+}
+
 /// Enough for every field at its longest, including the minus signs and a `null` speed. Proven by
 /// `json_fits_the_worst_case`
 pub const JSON_CAPACITY: usize = 384;
@@ -486,6 +579,107 @@ mod tests {
 
         assert_eq!(reading.motor_status, MotorStatus(0b0000_0000_1001_0000));
         assert_eq!(reading.warning, Warning(0b0000_0000_0001_0000));
+    }
+
+    /// Feeds a run of flows and returns what each one said, so a whole ramp reads as one line
+    fn observe_all(flows: impl IntoIterator<Item = Option<u16>>) -> heapless::Vec<Progress, 32> {
+        let mut settling = Settling::new();
+        flows
+            .into_iter()
+            .map(|flow| settling.observe(flow))
+            .collect()
+    }
+
+    /// The shape actually measured on 2026-09-06: commanded 78 m³/h, still reading 82 and 84
+    /// sixteen seconds in, settled by forty-six. Three steady readings end it, and it takes four
+    /// readings to get three comparisons
+    #[test]
+    fn a_ramp_settles_once_the_flow_stops_moving() {
+        let progress = observe_all([180, 120, 95, 84, 80, 78, 78, 79, 78].map(Some));
+
+        assert_eq!(
+            progress.as_slice(),
+            [
+                // Nothing to compare the first against
+                Progress::Moving,
+                // Every step down is wider than the tolerance, including the last one: 80 to 78 is
+                // two, so arriving at the target is not by itself evidence of having stopped
+                Progress::Moving,
+                Progress::Moving,
+                Progress::Moving,
+                Progress::Moving,
+                Progress::Moving,
+                // 78, 79, 78: three consecutive comparisons within the tolerance
+                Progress::Moving,
+                Progress::Moving,
+                Progress::Settled,
+            ]
+        );
+    }
+
+    /// Nine readings at the firmware's settling cadence is roughly the forty seconds that ramp took
+    /// on the bench, which is the sanity check that the tolerance and the required run are not so
+    /// strict that the cap is reached first
+    #[test]
+    fn a_measured_ramp_settles_well_inside_the_cap() {
+        let progress = observe_all([180, 120, 95, 84, 80, 78, 78, 79, 78].map(Some));
+
+        assert_eq!(*progress.last().unwrap(), Progress::Settled);
+        assert!(progress.len() < usize::from(Settling::MAX_READINGS));
+    }
+
+    /// The flow wanders a unit while the fan holds station, so equality would never arrive. That
+    /// is the whole reason there is a tolerance
+    #[test]
+    fn a_wandering_flow_still_counts_as_settled() {
+        let progress = observe_all([78, 79, 78, 79].map(Some));
+
+        assert_eq!(*progress.last().unwrap(), Progress::Settled);
+    }
+
+    /// A fan that never holds still must not hold the fast cadence forever
+    #[test]
+    fn a_flow_that_never_settles_gives_up() {
+        // Alternating far enough apart that no two consecutive readings are ever within tolerance
+        let flows = (0..Settling::MAX_READINGS).map(|reading| Some(u16::from(reading % 2) * 50));
+        let progress = observe_all(flows);
+
+        assert_eq!(progress.len(), usize::from(Settling::MAX_READINGS));
+        assert!(
+            progress[..progress.len() - 1]
+                .iter()
+                .all(|step| *step == Progress::Moving)
+        );
+        assert_eq!(*progress.last().unwrap(), Progress::GaveUp);
+    }
+
+    /// The cap exists for the silent fan above all: a failed poll is a timeout holding the modbus
+    /// mutex, so failures have to count towards it even though they say nothing about the flow
+    #[test]
+    fn failed_polls_count_towards_giving_up() {
+        let progress = observe_all(core::iter::repeat_n(None, Settling::MAX_READINGS.into()));
+
+        assert_eq!(*progress.last().unwrap(), Progress::GaveUp);
+    }
+
+    /// A failed poll in the middle breaks the run rather than being skipped over: what the flow did
+    /// while nothing was heard is unknown, so the readings either side of it are not consecutive
+    #[test]
+    fn a_failed_poll_breaks_the_run_of_steady_readings() {
+        let progress = observe_all([Some(78), Some(78), Some(78), None, Some(78), Some(78)]);
+
+        assert_eq!(
+            progress.as_slice(),
+            [
+                Progress::Moving,
+                Progress::Moving,
+                // Two steady comparisons, one short
+                Progress::Moving,
+                Progress::Moving,
+                Progress::Moving,
+                Progress::Moving,
+            ]
+        );
     }
 
     /// Both temperatures are signed, which the raw register does not say

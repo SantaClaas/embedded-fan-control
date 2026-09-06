@@ -1143,17 +1143,14 @@ async fn fan_control_routine(
 /// up is visible in Home Assistant while it happens
 const SENSOR_POLL_INTERVAL: Duration = Duration::from_secs(30);
 
-/// How long after a confirmed speed change to take the second reading.
+/// How often to read a fan that is on its way to a newly commanded speed.
 ///
-/// The fans do not step to a new speed, they travel to it, and what they report of the air while
-/// travelling is real but on its way somewhere: measured on 2026-09-06, a change commanding
-/// 78 m³/h still read 82 and 84 sixteen seconds later and had settled by forty-six. So the poll
-/// fired the moment the change is confirmed is deliberately an early one — it is what the user
-/// asked to see move — and this is the follow-up that catches where it ended up.
-///
-/// The number is a guess bounded by those two samples rather than a measurement of the ramp, which
-/// is why the ordinary interval poll behind it still matters: that one is settled for certain
-const SENSOR_POLL_SETTLE_DELAY: Duration = Duration::from_secs(20);
+/// The fans do not step to a speed, they travel to it, and how long that takes depends on how far
+/// they are going — so there is no one delay that is right for both a nudge and a change across
+/// the range. Rather than pick one, this reads quickly and lets `fan::sensor::Settling` say when
+/// the flow has stopped moving; see there for the tolerance, the run it needs, and the cap that
+/// stops a fan which never holds still from keeping this cadence forever
+const SENSOR_SETTLE_POLL_INTERVAL: Duration = Duration::from_secs(5);
 
 /// How long to leave the bus alone before the first poll, so the set point both fan control
 /// routines read on boot — with retries, and a timeout each if a fan is silent — is done first.
@@ -1168,9 +1165,14 @@ const SENSOR_POLL_STARTUP_DELAY: Duration = Duration::from_secs(10);
 /// through a run of timeouts while a speed change waits behind it.
 ///
 /// Between intervals it also watches the fan's *confirmed* set point, so a speed change is
-/// followed by a reading rather than by up to [`SENSOR_POLL_INTERVAL`] of stale numbers. The
+/// followed by readings rather than by up to [`SENSOR_POLL_INTERVAL`] of stale numbers. The
 /// confirmed one rather than the requested one, because by then the fan has answered the write and
-/// this poll cannot be queueing behind it for the modbus mutex
+/// this poll cannot be queueing behind it for the modbus mutex.
+///
+/// A change is followed at [`SENSOR_SETTLE_POLL_INTERVAL`] until the flow stops moving, which is
+/// `fan::sensor::Settling`'s decision rather than this routine's — a tolerance and a run length are
+/// exactly the kind of rule that looks obviously right and is not, and nothing in this crate can be
+/// tested
 #[embassy_executor::task(pool_size = 2)]
 async fn sensor_routine(
     fan: Fan,
@@ -1191,7 +1193,8 @@ async fn sensor_routine(
     // into a rate at all. It only changes when the fan is reconfigured, so it is read once and
     // then kept, and retried on the next poll for as long as it is not known
     let mut maximum_speed: Option<u16> = None;
-    let mut next_poll = NextPoll::AfterInterval;
+    // Present while a confirmed speed change is being followed, absent at the ordinary cadence
+    let mut settling: Option<fan::sensor::Settling> = None;
 
     loop {
         if maximum_speed.is_none() {
@@ -1253,6 +1256,10 @@ async fn sensor_routine(
         };
         drop(client);
 
+        // Taken before the reading is turned into a payload, because the settling watcher below
+        // needs it whether or not the publish gets anywhere
+        let volume_flow = reading.map(|reading| reading.volume_flow);
+
         if let Some(reading) = reading {
             info!("{} Read {:?}", fan_identifier, reading);
 
@@ -1271,40 +1278,53 @@ async fn sensor_routine(
             }
         }
 
-        next_poll = match next_poll {
-            // The reading just published is the one taken the moment the speed change was
-            // confirmed, so the fan was still on its way to the new speed. Wait for it to arrive
-            // and take one more, then go back to the interval
-            NextPoll::AfterSettling => {
-                Timer::after(SENSOR_POLL_SETTLE_DELAY).await;
-                NextPoll::AfterInterval
-            }
-            // Whichever comes first: the interval, or the fan confirming a new speed. A change
-            // during the settling wait or during a poll is not lost — the watch keeps the latest
-            // value until this receiver has seen it, so `changed()` returns straight away
-            NextPoll::AfterInterval => {
-                match select(Timer::after(SENSOR_POLL_INTERVAL), display_state.changed()).await {
-                    Either::First(()) => NextPoll::AfterInterval,
-                    Either::Second(set_point) => {
-                        info!(
-                            "{} Fan confirmed {:?}, reading it rather than waiting out the interval",
-                            fan_identifier, set_point
-                        );
-                        NextPoll::AfterSettling
-                    }
+        // Only meaningful while following a speed change, and a failed poll deliberately still
+        // counts as a turn there — see `Settling::MAX_READINGS`
+        let keep_reading_quickly = match settling.as_mut() {
+            None => false,
+            Some(state) => match state.observe(volume_flow) {
+                fan::sensor::Progress::Moving => true,
+                fan::sensor::Progress::Settled => {
+                    info!(
+                        "{} Fan settled at {:?} m³/h, back to the interval",
+                        fan_identifier, volume_flow
+                    );
+                    false
                 }
-            }
+                fan::sensor::Progress::GaveUp => {
+                    warn!(
+                        "{} Fan has not held a steady flow after {:?} readings, back to the \
+                         interval anyway",
+                        fan_identifier,
+                        fan::sensor::Settling::MAX_READINGS
+                    );
+                    false
+                }
+            },
         };
-    }
-}
 
-/// What [`sensor_routine`] is waiting for before its next reading
-enum NextPoll {
-    /// The ordinary cadence, interrupted by the fan confirming a new speed
-    AfterInterval,
-    /// The follow-up to a speed change, once the fan has had [`SENSOR_POLL_SETTLE_DELAY`] to get
-    /// where it was sent
-    AfterSettling,
+        if keep_reading_quickly {
+            Timer::after(SENSOR_SETTLE_POLL_INTERVAL).await;
+            continue;
+        }
+
+        settling = None;
+
+        // Whichever comes first: the interval, or the fan confirming a new speed. A change during
+        // a poll is not lost — the watch keeps the latest value until this receiver has seen it,
+        // so `changed()` returns straight away
+        match select(Timer::after(SENSOR_POLL_INTERVAL), display_state.changed()).await {
+            Either::First(()) => {}
+            Either::Second(set_point) => {
+                info!(
+                    "{} Fan confirmed {:?}, following it to the new speed rather than waiting out \
+                     the interval",
+                    fan_identifier, set_point
+                );
+                settling = Some(fan::sensor::Settling::new());
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
