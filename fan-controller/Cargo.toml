@@ -43,7 +43,9 @@ fan_sensor = { version = "0.1.0", path = "../fan_sensor", features = ["defmt"] }
 heapless = "0.8.0"
 mqtt = { version = "0.1.0", path = "../mqtt", features = ["defmt"] }
 nb = "1.1.0"
-panic-probe = "0.3.2"
+# `print-defmt` so a panic says what it was. Without it `panic-probe` only executes an undefined
+# instruction, and a full task arena — which panics — is indistinguishable from a hard fault
+panic-probe = { version = "0.3.2", features = ["print-defmt"] }
 portable-atomic = { version = "1.7", features = ["critical-section"] }
 rand = { version = "0.8.5", default-features = false }
 reqwless = { version = "0.12.1", features = ["defmt"] }

@@ -40,6 +40,17 @@ pub struct UnknownConnectErrorReasonCode(u8);
 pub(crate) trait TryEncode {
     type Error;
     fn try_encode(&self, buffer: &mut [u8], offset: &mut usize) -> Result<(), Self::Error>;
+
+    /// The tail of the packet, written to the socket straight from wherever it already lives
+    /// rather than copied into the encode buffer first.
+    ///
+    /// Only a publish has one. Its payload is a slice the caller is already holding — for the
+    /// Home Assistant discovery payload, several kilobytes of it in flash — and buffering that
+    /// would mean a send buffer large enough for the largest thing the controller ever publishes,
+    /// which is what it used to mean and what the payload kept outgrowing
+    fn trailing_payload(&self) -> &[u8] {
+        &[]
+    }
 }
 
 impl<T: crate::task::Publish> TryEncode for T {
@@ -65,12 +76,15 @@ impl<T: crate::task::Publish> TryEncode for T {
         let length_length = variable_byte_integer::encode(remaining_length, buffer, offset)
             .map_err(publish::EncodeError::VariableByteIntegerError)?;
 
-        let required_length = size_of_val(&Self::TYPE) + length_length + remaining_length;
+        // Only the header is encoded here; the payload goes to the socket straight from where it
+        // already lives, so the buffer has to hold the fixed header, the length, and the variable
+        // header rather than the whole packet
+        let header_length = size_of_val(&Self::TYPE) + length_length + variable_header_length;
 
-        if required_length > buffer.len() - *offset {
+        if variable_header_length > buffer.len() - *offset {
             return Err(publish::EncodeError::BufferTooSmall {
-                required: required_length,
-                available: buffer.len() - *offset,
+                required: header_length,
+                available: buffer.len(),
             });
         }
 
@@ -91,16 +105,15 @@ impl<T: crate::task::Publish> TryEncode for T {
         buffer[*offset] = 0;
         *offset += 1;
 
-        // Payload
-        // No need to set length as it will be calculated
-        for byte in payload {
-            buffer[*offset] = *byte;
-            *offset += 1;
-        }
-
-        assert_eq!(required_length, buffer[..*offset].len());
+        // The payload is deliberately not copied in. `send` writes it to the socket after this
+        // buffer, which is what keeps the discovery payload from setting the buffer's size
+        debug_assert_eq!(header_length, *offset);
 
         Ok(())
+    }
+
+    fn trailing_payload(&self) -> &[u8] {
+        self.payload()
     }
 }
 

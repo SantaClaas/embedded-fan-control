@@ -559,20 +559,24 @@ impl From<SetPoint> for UpdateSpeedPayload {
 /// baked into the binary. Published verbatim on boot
 const DISCOVERY_PAYLOAD: &[u8] = env!("FAN_CONTROLLER_DISCOVERY_PAYLOAD").as_bytes();
 
-/// What a publish packet adds around its payload: the fixed header, the remaining length as a
+/// What a publish packet puts in front of its payload: the fixed header, the remaining length as a
 /// variable byte integer at its longest, the topic name and the two bytes of its length, and the
-/// property length
-const PUBLISH_OVERHEAD: usize = 1 + 4 + 2 + topic::fan_controller::DISCOVERY.len() + 1;
+/// property length. The discovery topic is the longest the controller publishes to, so this is the
+/// largest publish header it encodes
+const PUBLISH_HEADER: usize = 1 + 4 + 2 + topic::fan_controller::DISCOVERY.len() + 1;
 
-/// The discovery payload is several times the size of anything else the controller publishes, and
-/// it is encoded into a buffer of a fixed size before it goes out. A payload that does not fit is
-/// refused by the encoder and logged, which would leave a device that runs perfectly well and is
-/// never discovered by Home Assistant. Failing the build instead is the cheaper way to find out,
-/// because the payload grows every time a component is added
+/// Only the header goes through the send buffer — `mqtt::task::send` writes a publish's payload to
+/// the socket straight from where it already lives, which for the discovery payload is flash. So
+/// the payload can grow with every component added without the buffer having to grow with it, and
+/// what is left to check is that the header still fits.
+///
+/// A packet that does not fit is refused by the encoder and only logged, which would leave a
+/// device that runs perfectly well and is never discovered by Home Assistant. Failing the build
+/// instead is the cheaper way to find out
 // `core::assert` because `defmt::*` is glob imported and its `assert` is not const
 const _: () = core::assert!(
-    DISCOVERY_PAYLOAD.len() + PUBLISH_OVERHEAD <= mqtt::task::SEND_BUFFER_SIZE,
-    "the Home Assistant discovery payload no longer fits the MQTT send buffer"
+    PUBLISH_HEADER <= mqtt::task::SEND_BUFFER_SIZE,
+    "the Home Assistant discovery publish header no longer fits the MQTT send buffer"
 );
 
 enum OutgoingPublish {

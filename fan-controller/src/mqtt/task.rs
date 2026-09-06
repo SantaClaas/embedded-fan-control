@@ -18,10 +18,16 @@ pub(crate) enum SendError<T: Debug + Format, E> {
     Flush(E),
 }
 
-/// How much room a packet is encoded into before it goes out. Sized for the largest one the
-/// controller sends by far, the Home Assistant discovery payload, which `main` asserts against at
-/// compile time so this cannot fall behind it unnoticed
-pub(crate) const SEND_BUFFER_SIZE: usize = 8192;
+/// How much room a packet is encoded into before it goes out.
+///
+/// A publish's payload is no longer part of that — it goes to the socket straight from where it
+/// already lives, so this only has to hold the largest *header*, plus the two packets that are
+/// encoded whole, `Connect` and `Subscribe`. Those are a few hundred bytes between them.
+///
+/// It is a buffer inside the MQTT task's future, which lives in the executor's fixed task arena.
+/// At 8 kB, sized for the discovery payload back when the payload was copied through it, the
+/// firmware hard faulted before it ever reached the broker
+pub(crate) const SEND_BUFFER_SIZE: usize = 1024;
 
 pub(crate) async fn send<T, TWrite: Write<Error = TWriteError>, TWriteError>(
     socket: &mut TWrite,
@@ -44,6 +50,17 @@ where
         .write_all(&send_buffer[..offset])
         .await
         .map_err(SendError::Write)?;
+
+    // A publish's payload follows its header rather than being copied into the buffer with it.
+    // TCP is a stream, so the broker cannot tell the two writes apart
+    let trailing_payload = packet.trailing_payload();
+    if !trailing_payload.is_empty() {
+        socket
+            .write_all(trailing_payload)
+            .await
+            .map_err(SendError::Write)?;
+    }
+
     socket.flush().await.map_err(SendError::Flush)?;
     Ok(())
 }
