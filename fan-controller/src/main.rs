@@ -1310,26 +1310,34 @@ async fn sensor_routine(
             },
         };
 
-        if keep_reading_quickly {
-            Timer::after(SENSOR_SETTLE_POLL_INTERVAL).await;
-            continue;
-        }
+        let wait = if keep_reading_quickly {
+            SENSOR_SETTLE_POLL_INTERVAL
+        } else {
+            settling = None;
+            SENSOR_POLL_INTERVAL
+        };
 
-        settling = None;
+        // Whichever comes first, at either cadence: the wait, or the fan confirming a new speed.
+        // Watching for one *during* a settling run matters as much as between them — a speed
+        // changed twice in a row is the case where the readings are worth the most, and it is also
+        // the one where a run that kept counting from the first change would run out of readings
+        // partway up the second ramp.
+        //
+        // A change during a poll is not lost either: the watch keeps the latest value until this
+        // receiver has seen it, so `changed()` returns straight away
+        if let Either::Second(set_point) =
+            select(Timer::after(wait), display_state.changed()).await
+        {
+            info!(
+                "{} Fan confirmed {:?}, following it to the new speed rather than waiting out the \
+                 interval",
+                fan_identifier, set_point
+            );
 
-        // Whichever comes first: the interval, or the fan confirming a new speed. A change during
-        // a poll is not lost — the watch keeps the latest value until this receiver has seen it,
-        // so `changed()` returns straight away
-        match select(Timer::after(SENSOR_POLL_INTERVAL), display_state.changed()).await {
-            Either::First(()) => {}
-            Either::Second(set_point) => {
-                info!(
-                    "{} Fan confirmed {:?}, following it to the new speed rather than waiting out \
-                     the interval",
-                    fan_identifier, set_point
-                );
-                settling = Some(fan::sensor::Settling::at_interval(SENSOR_SETTLE_POLL_MILLISECONDS));
-            }
+            // A fresh watcher rather than whichever one was in flight. The fan is on its way
+            // somewhere else now, so neither the run of steady readings behind it nor its count
+            // towards giving up describes what it is doing any more
+            settling = Some(fan::sensor::Settling::at_interval(SENSOR_SETTLE_POLL_MILLISECONDS));
         }
     }
 }
