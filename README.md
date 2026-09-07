@@ -13,6 +13,24 @@ There is currently an unstable [per-package-target](https://doc.rust-lang.org/ca
 cargo feature in the works [on GitHub](https://github.com/rust-lang/cargo/issues/9406), but it does not support the
 runner specified which is also required to run on a connected RP2040 pico.
 
+# Reset the controller when you unplug the probe
+
+`probe-rs run` and `probe-rs attach` put the RTT channel into blocking mode so no log lines are
+lost. If the host then goes away while the firmware is running — the laptop sleeps, the battery
+dies, the USB adapter drops out — nobody drains that buffer. With `DEFMT_LOG=debug` it fills in
+milliseconds, and the next log call blocks *inside a critical section*, stopping every task. The
+chip stays powered and answers SWD, so it looks alive; it just does nothing. No MQTT, no Modbus, no
+reaction to Home Assistant. This is documented behaviour of `defmt-rtt`, not a fault here.
+
+The firmware's own default is non-blocking, and that default is restored on reset, so:
+
+```bash
+probe-rs reset --chip RP2040
+```
+
+after detaching leaves the controller able to run on its own. A power cycle does the same. It cost
+a night of ventilation control on 2026-09-06 to find this out.
+
 # Updating the Raspberry Pi Pico W as probe
 If probe-rs gives a warning that the probe firmware is too old use these links
 https://www.raspberrypi.com/documentation/microcontrollers/debug-probe.html#updating-the-firmware-on-the-debug-probe

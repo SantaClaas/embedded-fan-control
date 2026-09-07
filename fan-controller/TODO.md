@@ -62,7 +62,18 @@ first flash.
 Still open in the same area: `src/modbus/client.rs:329`, why the flush must be blocking to avoid
 `WouldBlock`.
 
-**2. The MQTT client never reconnects** — done, `src/task.rs`
+**2. The MQTT client never reconnects** — done, `src/task.rs`, and then done again on 2026-09-07
+
+The reconnect loop below was right and still deadlocked one line outside itself, so it went a whole
+night without reconnecting. `TcpSocket::abort` closes the socket while leaving its remote endpoint
+set, which is the exact state `flush` waits on, and nothing wakes a send waker on a closed socket —
+so the unbounded `socket.flush().await` after the abort never returned. The log said "Lost
+connection ... Reconnecting" and then nothing at all, while the fans polled on into a channel
+nobody drained. The flush is now bounded; see `configuration::MQTT_SOCKET_RESET_TIMEOUT`.
+
+Worth remembering as the shape of the bug rather than the bug: the loop was tested, and the thing
+that broke it was the cleanup *before* the loop got its turn.
+
 
 `mqtt_routine` (`src/main.rs`) called `mqtt_with_connect` exactly once, and the session inside it
 had no way to end cleanly: `listen` and `keep_alive` returned on a read error, a timeout or a
