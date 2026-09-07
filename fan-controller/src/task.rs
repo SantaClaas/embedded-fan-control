@@ -834,11 +834,22 @@ pub(super) async fn mqtt_with_connect<
             );
         }
 
-        // Send a reset and wait for it to go out so the broker does not keep a half open
-        // connection around, then release the socket before waiting
+        // Send a reset and give it a moment to go out so the broker does not keep a half open
+        // connection around, then release the socket before waiting.
+        //
+        // The timeout is not caution, it is the whole point. `abort` closes the socket while
+        // leaving its remote endpoint set, which is the one state `flush` waits on, and a closed
+        // socket never wakes a send waker again — so an unbounded flush here does not return. A
+        // single lost connection then stops this task for good: no reconnect, no publishes, and
+        // the fans polling into a channel nobody drains. That is what a reset broker connection
+        // turned into overnight on 2026-09-06
         socket.abort();
-        if let Err(error) = socket.flush().await {
-            warn!("[MQTT/main] Error closing the TCP connection: {:?}", error);
+        match with_timeout(configuration::MQTT_SOCKET_RESET_TIMEOUT, socket.flush()).await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => warn!("[MQTT/main] Error closing the TCP connection: {:?}", error),
+            Err(TimeoutError) => warn!(
+                "[MQTT/main] The TCP connection did not finish closing, dropping it anyway"
+            ),
         }
         drop(socket);
 

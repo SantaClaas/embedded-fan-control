@@ -73,6 +73,16 @@ pub(crate) const MQTT_RECONNECT_BACKOFF_MAX: Duration = Duration::from_secs(60);
 /// The timeout to wait for a response from the fans before cancelling waiting for a response.
 pub(crate) const FAN_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// How long to give the reset of a dead TCP connection before dropping the socket regardless.
+///
+/// Sending it is worth a moment so the broker does not keep a half open connection around, but it
+/// must never be able to stop the reconnect. `TcpSocket::abort` puts the socket straight into
+/// `Closed` with its remote endpoint still set, which is exactly the state `flush` waits on — and
+/// nothing wakes a send waker on a closed socket, so the flush never returns. See
+/// `embassy-net-0.4.0/src/tcp.rs`. A reset that can go out goes out in milliseconds, so this only
+/// ever elapses when there was nothing to wait for
+pub(crate) const MQTT_SOCKET_RESET_TIMEOUT: Duration = Duration::from_secs(1);
+
 pub(crate) const MQTT_BROKER: MqttBrokerConfiguration<'_> = MqttBrokerConfiguration {
     address: MQTT_BROKER_ADDRESS,
     credentials: MQTT_BROKER_CREDENTIALS,
