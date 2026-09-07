@@ -656,8 +656,26 @@ impl Publish for OutgoingPublish {
         }
     }
 
+    /// Retained means the broker keeps the message and hands it to whoever subscribes next, which
+    /// only two of these want.
+    ///
+    /// The discovery payload is published once, on boot. Without the retain flag Home Assistant
+    /// only ever sees it if it happens to be listening at that moment — so an HA restart, an
+    /// update or a power cut leaves the fans undiscovered until somebody power cycles the
+    /// controller. Retained, the broker replays it the moment HA subscribes and the device comes
+    /// back on its own.
+    ///
+    /// The cost is that the broker now holds this payload until something replaces it, so changing
+    /// the topics or the components leaves the old announcement behind. Clearing it means
+    /// publishing an empty retained message to `topic::fan_controller::DISCOVERY`.
+    ///
+    /// Nothing else here wants it: a speed or a sensor reading published on every change is better
+    /// re-read than remembered, and a stale one is worse than none
     fn is_retained(&self) -> bool {
-        matches!(self, OutgoingPublish::ResetCause(_))
+        matches!(
+            self,
+            OutgoingPublish::ResetCause(_) | OutgoingPublish::Discovery
+        )
     }
 }
 
